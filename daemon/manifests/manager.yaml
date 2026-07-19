@@ -1,0 +1,17 @@
+# Snapfall agent manifest — Manager (PRD §4.1, FR-ORG-003)
+role: manager
+model:
+  provider: ollama          # local-first (PRD principle 1)
+  name: llama3.1            # decide at Day-0 call; any local chat model works for demo
+memory_namespace: org/manager
+filesystem_scope: []        # manager reads task metadata only; no workspace file access
+command_allowlist: []       # no shell, ever
+network_allowlist: []       # no direct egress
+budget_usdc: "0"            # cannot spend (hard restriction)
+can_sign_payments: false
+can_request_advance: false
+escalates_to: human
+responsibilities:
+  - classify incoming requests; draft job scope + quote (human confirms per FR-EVT-005)
+  - decompose job into typed tasks with deps/budgets (FR-TSK-001)
+  - monitor deadlines; bounded retries; escalate (FR-TSK-006)

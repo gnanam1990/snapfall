@@ -1,0 +1,13 @@
+role: delivery
+model: { provider: ollama, name: llama3.1 }
+memory_namespace: job/{job_id}/delivery
+filesystem_scope: ["workspace/{job_id}/**"]
+command_allowlist: []
+network_allowlist: []
+budget_usdc: "0.10"
+can_sign_payments: false
+can_request_advance: false
+escalates_to: manager
+responsibilities:
+  - synthesize findings into final report; run quality checklist (FR-DEL-002)
+  - compute content hash; never releases customer funds

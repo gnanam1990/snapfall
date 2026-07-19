@@ -1,0 +1,14 @@
+role: research
+model: { provider: ollama, name: llama3.1 }
+memory_namespace: job/{job_id}/research
+filesystem_scope: ["workspace/{job_id}/**"]
+command_allowlist: []
+network_allowlist:          # egress proxy enforces (FR-ACT-004); extend per job policy
+  - "our-paid-demo-api.local"
+budget_usdc: "1.00"         # per-job default; policy engine enforces (FR-PAY-003)
+can_sign_payments: false    # submits PaymentIntents only (FR-PAY-001)
+can_request_advance: false
+escalates_to: manager
+responsibilities:
+  - gather approved public data; invoke paid x402 services via PaymentIntent
+  - produce structured findings artifacts (FR-TSK-003)

@@ -1,0 +1,13 @@
+role: finance            # UI + policy surface; authorization is DETERMINISTIC CODE, not this model (FR-PAY / §4.1)
+model: { provider: ollama, name: llama3.1 }
+memory_namespace: org/finance
+filesystem_scope: []
+command_allowlist: []
+network_allowlist: []
+budget_usdc: "0"
+can_sign_payments: false   # signing lives in Treasury service only
+can_request_advance: false # advances are human-authorized only (FR-FLT-001)
+escalates_to: human
+responsibilities:
+  - explain spend requests + policy decisions in plain language
+  - surface advance status, repayment obligations, receipts

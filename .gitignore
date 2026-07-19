@@ -1,0 +1,21 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# node / bun
+node_modules/
+dist/
+build/
+.next/
+bun.lockb
+
+# foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lib/
+
+# os / editor
+.DS_Store
+*.log
