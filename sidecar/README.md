@@ -67,11 +67,15 @@ deterministic systems authorize" boundary expressed as a type.
    (`ARC_USDC_ADDRESS` env). The EIP-712 domain's `verifyingContract` must be the real
    token or signatures will not verify against the real USDC.
 
-## Reusing `packages/circle-tools` — read before you plan around it
+## `packages/circle-tools` is REFERENCE ONLY — read before you plan around it
 
-PRD §14.3 / [R12] says to reuse `circlefin/agent-stack-starter-kits` `packages/circle-tools`
-(Apache-2.0) as the sidecar base. I cloned and read it. **It does not fit as a drop-in base
-for this project**, for three reasons:
+**Settled.** `circle-tools` is REFERENCE ONLY — source of the x402 wire format (Gateway
+options identified by `extra.name`); our sidecar implements Arc-testnet-native wrappers
+directly. PRD §14.3 / [R12] have been updated to match.
+
+An earlier reading of the PRD said to reuse `circlefin/agent-stack-starter-kits`
+`packages/circle-tools` (Apache-2.0) as the sidecar base. I cloned and read it. **It cannot
+serve as the base for this project**, for three reasons:
 
 1. **No Arc.** `src/chains.ts` defines `type Chain = 'BASE' | 'POLYGON'` — a closed TypeScript
    union, with hardcoded RPCs `mainnet.base.org` and `polygon-rpc.com`. Adding Arc means
@@ -85,9 +89,10 @@ documents the 402 wire format confirmed against its `services.ts:readAccepts`, i
 non-obvious detail that Gateway-batched options are identified by `extra.name ===
 'GatewayWalletBatched'` rather than the top-level `scheme` field.
 
-**Decision needed at standup:** treat circle-tools as reference (current course, loop already
-green), or fork it and add an Arc chain entry. Recommend the former — we are already past the
-milestone it was meant to accelerate.
+**Decided:** reference only. Forking it to add an Arc chain entry was considered and rejected —
+we are already past the milestone it was meant to accelerate, and the loop is green. The
+missing Arc chain entry is worth raising as Circle DX feedback (deck slide 8) rather than
+carrying as a fork.
 
 ## Reference
 

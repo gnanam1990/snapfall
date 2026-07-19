@@ -34,12 +34,19 @@ scripts/     demo seed/reset scripts
 Verified 19 Jul 2026 against docs.arc.io. Items marked _unverified_ still need a human with
 a funded wallet — do not treat them as done.
 
+**Before debugging a "broken" testnet, check [status.arc.io](https://status.arc.io).** A
+degraded RPC looks exactly like a bad config from inside a failing script; the status page
+settles it in seconds. Resolve token/system addresses from the docs.arc.io contract-addresses
+reference page rather than pasting values between environments — testnet and mainnet differ.
+
 | Item | Value | Source |
 | --- | --- | --- |
 | Arc testnet RPC | `https://rpc.testnet.arc.network` | docs.arc.io/arc/references/connect-to-arc |
 | Chain ID | `5042002` | same |
 | Explorer | `https://testnet.arcscan.app` | same |
 | Faucet | `https://faucet.circle.com` | same |
+| **Network status** | `https://status.arc.io` | **check here BEFORE assuming testnet is broken** |
+| Contract addresses | docs.arc.io — contract-addresses reference page | canonical USDC/system addresses per network |
 | Native gas token | USDC, **18 decimals** | same |
 | Faucet rate limits | _unverified_ — needs a real claim | — |
 | USYC on testnet | _unverified_ (FR-FLT-009 mock fallback is pre-authorized) | — |

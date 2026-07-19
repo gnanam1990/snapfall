@@ -39,6 +39,24 @@ Flags: `--db` (default `snapfall.db`), `--manifests`, `--beats`, `--heartbeat-ms
 Not yet: orchestrator/task DAG, action broker, sandbox, policy engine, treasury signer, memory
 service, egress proxy, chain indexer. Those are the rest of workstream B.
 
+## Chain indexer — read before writing it
+
+Follow **docs.arc.io/arc/tutorials/monitor-contract-events** for the subscription/polling
+pattern; do not invent one.
+
+**Arc block timestamps are non-decreasing, not strictly increasing** — consecutive blocks may
+carry the *same* timestamp. Two consequences for the indexer:
+
+- **Never order events by timestamp alone.** Order by `(blockNumber, logIndex)`, which is
+  total; a timestamp sort is not stable across same-timestamp blocks and will silently
+  reshuffle events within a block.
+- **Never use `timestamp > lastSeen` as a cursor.** A strict comparison drops every event in a
+  block sharing the previous block's timestamp. The resume cursor must be `(blockNumber,
+  logIndex)`, and any timestamp window must be inclusive at both ends.
+
+The same rule already governs the contracts (see the deadline/window logic there) — the
+indexer must agree with them, or replay after a restart will not reproduce the same ordering.
+
 ## Layout
 
 ```

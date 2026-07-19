@@ -848,7 +848,7 @@ Recommendation: Gnanasekaran = Member C (its code load is lightest in the final 
 **Everyone (tonight):** register on all platforms · runtime-language call (30 min, decide, lock) · create GitHub org `snapfall` + X handle + domain · fix daily 15-min standup time · **AI-context setup: `bun add -g @circle-fin/cli` → `circle skill install --tool claude-code` (Circle Agent Skills into each member's Claude Code) + Arc MCP server per docs.arc.io/ai/mcp; feed developers.circle.com/llms.txt + docs.arc.io/llms.txt as standing context** [R12].
 **A:** Foundry scaffold with OZ; three contract skeletons compiling with events/signatures matching §7 exactly; deploy script; addresses committed; state-transition unit tests started.
 **B:** Go module scaffold; SQLite schema for events/jobs/tasks; supervisor with one dummy worker; manifest loader for four roles; typed bus + outbox table.
-**C (critical path):** Circle dev account + Gateway testnet setup; clone `circlefin/arc-nanopayments` **and `circlefin/agent-stack-starter-kits` — reuse its Apache-2.0 `packages/circle-tools` (framework-agnostic wallet/balance/service-discovery/x402 wrappers) as the sidecar base instead of writing wrappers from scratch** [R12]; stand up our paid demo API returning 402; complete one full buyer flow (402 → sign → retry → 200 + data) with our wallet; screen-record it immediately (insurance + deck asset). Then Next.js scaffold, Overview + Job pages stubbed.
+**C (critical path):** Circle dev account + Gateway testnet setup; clone `circlefin/arc-nanopayments` **and `circlefin/agent-stack-starter-kits` — `packages/circle-tools` is REFERENCE ONLY: source of the x402 wire format (Gateway options identified by `extra.name`); our sidecar implements Arc-testnet-native wrappers directly** [R12]; stand up our paid demo API returning 402; complete one full buyer flow (402 → sign → retry → 200 + data) with our wallet; screen-record it immediately (insurance + deck asset). Then Next.js scaffold, Overview + Job pages stubbed.
 **If C's x402 loop is not working by Tue 21 night → all three swarm it Wed 22. Nothing else matters until money moves.**
 
 ## 14.4 Operating rules
@@ -915,7 +915,7 @@ Recommendation: Gnanasekaran = Member C (its code load is lightest in the final 
 
 ## 15.3 Deck outline (≤10 slides)
 
-1 Thesis · 2 The two gaps (spending + working capital) · 3 Product: the workforce · 4 Float Protocol + advance-rate function · 5 Architecture & trust boundaries · 6 Why Arc specifically (sub-second snap, USDC gas economics, USYC, privacy roadmap) · 7 Circle tool map · 8 **Circle DX feedback** (what worked / friction found — judges explicitly value this) · 9 Traction path: real SaaS, 6-month roadmap, "hire more employees" extensibility · 10 Team + ask.
+1 Thesis · 2 The two gaps (spending + working capital) · 3 Product: the workforce · 4 Float Protocol + advance-rate function · 5 Architecture & trust boundaries · 6 Why Arc specifically (sub-second snap, USDC gas economics, USYC, privacy roadmap) · 7 Circle tool map · 8 **Circle DX feedback** (what worked / friction found — judges explicitly value this; lead with the concrete one: `packages/circle-tools` is reference-only for us — a closed `Chain` union of BASE|POLYGON with hardcoded mainnet RPCs and a CLI-session dependency meant we implemented Arc-testnet-native wrappers directly, and adding an Arc chain entry would make the kit genuinely reusable) · 9 Traction path: real SaaS, 6-month roadmap, "hire more employees" extensibility · 10 Team + ask.
 
 ## 15.4 Submission checklist (Encode platform)
 
@@ -1141,7 +1141,7 @@ rules:
 **[R9]** Circle press release — Agent Stack launch (Circle CLI, Agent Wallets, Agent Marketplace, Nanopayments, Circle Skills), 11 May 2026.
 **[R10]** Circle Q1 2026 earnings coverage — x402 ~$24M settled over 30 days, ~99.8% USDC; USDC circulation ~$77B (May 2026).
 **[R11]** Chainlink — "Onchain Factoring: Transforming Trade Finance"; trillion-scale trade-finance gap; traditional advances 70–90% of invoice value (Feb 2026).
-**[R12]** circlefin/agent-stack-starter-kits — kits for LangChain/Claude Agent SDK/Mastra/OpenAI/Vercel/Google ADK; shared `packages/circle-tools`; Circle CLI + Agent Skills install flow (github.com, accessed 19 Jul 2026).
+**[R12]** circlefin/agent-stack-starter-kits — kits for LangChain/Claude Agent SDK/Mastra/OpenAI/Vercel/Google ADK; shared `packages/circle-tools`; Circle CLI + Agent Skills install flow (github.com, accessed 19 Jul 2026). **Verified on read: `circle-tools` is REFERENCE ONLY — source of the x402 wire format (Gateway options identified by `extra.name`); our sidecar implements Arc-testnet-native wrappers directly.** It cannot serve as the sidecar base: `src/chains.ts` declares a closed `type Chain = 'BASE' | 'POLYGON'` with hardcoded mainnet RPCs (no Arc), and it shells out to the `circle` CLI requiring an authenticated session.
 **[R13]** Circle App Kits — Bridge/Swap/Send/Unified Balance SDK; Arc_Testnet supported (docs.arc.io/app-kit, accessed 19 Jul 2026).
 **[R14]** Circle changelog — "Credit API launched for Settlement Advance" (developers.circle.com, Apr 2026).
 
