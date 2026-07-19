@@ -11,11 +11,21 @@ with the daemon, so there is no third language in the stack.
 ```bash
 cd daemon
 
-go test ./...                                   # 33 tests
-go run ./cmd/snapfall --validate                # FR-ORG-006 manifest check, no daemon
-go run ./cmd/snapfall --beats 5 --heartbeat-ms 200   # bounded run, exits cleanly
-go run ./cmd/snapfall                           # runs until Ctrl-C
+# 33 tests
+go test ./...
+
+# FR-ORG-006 manifest check, no daemon
+go run ./cmd/snapfall --validate
+
+# bounded run, exits cleanly
+go run ./cmd/snapfall --beats 5 --heartbeat-ms 200
+
+# runs until Ctrl-C
+go run ./cmd/snapfall
 ```
+
+> Comments go on their own line on purpose. Interactive zsh has `interactive_comments`
+> off, so a trailing `# note` is passed to the command as arguments rather than ignored.
 
 Flags: `--db` (default `snapfall.db`), `--manifests`, `--beats`, `--heartbeat-ms`, `--validate`, `-v`.
 
@@ -80,10 +90,16 @@ Verify restart recovery by hand:
 
 ```bash
 cd daemon
-rm -f /tmp/sf.db*
-go run ./cmd/snapfall --db /tmp/sf.db --beats 2 --heartbeat-ms 100   # existing_events=0, total=4
-go run ./cmd/snapfall --db /tmp/sf.db --beats 2 --heartbeat-ms 100   # existing_events=4, total=8
-sqlite3 /tmp/sf.db "SELECT COUNT(*) FROM outbox WHERE published=0;"  # 0
+rm -f /tmp/sf.db /tmp/sf.db-wal /tmp/sf.db-shm
+
+# first run: existing_events=0, events_total=4
+go run ./cmd/snapfall --db /tmp/sf.db --beats 2 --heartbeat-ms 100
+
+# restart: existing_events=4, events_total=8
+go run ./cmd/snapfall --db /tmp/sf.db --beats 2 --heartbeat-ms 100
+
+# backlog must be 0 — every event was published before shutdown
+sqlite3 /tmp/sf.db "SELECT COUNT(*) FROM outbox WHERE published=0;"
 ```
 
 ## Supervision
