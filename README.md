@@ -8,7 +8,6 @@ Arc "Programmable Money" Hackathon (Encode x Circle) · Tracks: Agentic Economy 
 
 ## Source of truth
 - [`docs/PRD.md`](docs/PRD.md) — Snapfall PRD/SRS v4.1 FINAL. Read §14 (Delivery Plan) first.
-- [`docs/okx-asp.md`](docs/okx-asp.md) — OKX side-quest (strictly slack-time; see Appendix D of PRD).
 
 ## Layout
 ```

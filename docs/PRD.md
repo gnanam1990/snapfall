@@ -41,7 +41,7 @@
 | 2.0 | 19 Jul 2026 | Unified baseline: Float receivables financing integrated end-to-end |
 | 3.0 (draft) | 19 Jul 2026 | FloatWorks/Aruvi condensed execution edition |
 | **4.0 FINAL** | 19 Jul 2026 | **Snapfall**: final name; full requirement depth restored; execution engine (ownership, calendar, ABI freeze) integrated; all review patches applied |
-| **4.1 FINAL** | 19 Jul 2026 | Doc-research patches: circle-tools starter kit, Circle CLI + Agent Skills for AI IDEs, App Kit bridge for CCTP, EVM-differences pre-deploy check, Settlement Advance differentiation, Gas Station option, refs R12–R14; Appendix D (OKX ASP side-quest) |
+| **4.1 FINAL** | 19 Jul 2026 | Doc-research patches: circle-tools starter kit, Circle CLI + Agent Skills for AI IDEs, App Kit bridge for CCTP, EVM-differences pre-deploy check, Settlement Advance differentiation, Gas Station option, refs R12–R14 |
 
 ---
 
@@ -1108,23 +1108,6 @@ rules:
 | Delivery | Artifact name, content hash, checklist, acceptance timestamp |
 | Onchain | JobVault, FloatPool addresses, waterfall tx(s), AuditAnchor tx/root |
 | Privacy | Statement: full contents local; onchain holds only minimal financial data and hashes |
-
-
-# Appendix D — OKX ASP Side-Quest (strictly slack-time)
-
-**What:** package Snapfall's Research→Delivery pipeline as **"Snapfall Research Copilot"**, an A2MCP pay-per-call ASP on OKX.AI, for the OKX.AI Genesis Hackathon ($100K pool, USDT prizes; HackQuest form deadline Jul 27 23:59 UTC — re-verify, earlier OKX pages said Jul 17). Full detail lives in `docs/okx-asp.md` (separate PRD).
-
-**Why it's cheap:** OKX A2MCP paid endpoints require **x402 compliance — the same pattern as C's week-1 paid demo API**. Listing review turnaround is **24 hours**, and the Agent ID is usable even pre-approval. Registration is prompt-driven through a coding agent — OKX's supported list includes **OpenClaw** (our own tool; use it and say so in the X post).
-
-**Registration prompts (run inside OpenClaw/Claude Code):**
-1. `npx skills add okx/onchainos-skills --yes -g` → new session
-2. "Log in to Agentic Wallet on Onchain OS with my email"
-3. "Help me register an A2MCP ASP on OKX.AI using OKX Agent Identity from Onchain OS" (name, description, service list, pricing)
-4. "Help me list my ASP on OKX.AI using Onchain OS" → 24h review; Agent ID immediately
-
-**HackQuest submission form fields:** project (create on HackQuest first) · prize tracks multi-select (tick Finance Copilot + Software Utility + Revenue Rocket + Social Buzz) · ASP Name · **Agent ID** · description (300 chars) · X handle · X post link (#OKXAI, ≤90s demo) · Telegram handle.
-
-**Hard rules:** (1) only in slack time of a member whose Snapfall workstream is green; (2) go/no-go gate — proceed only if the x402 seller flow works AND the workforce kernel produces a report on a stub job AND the deadline still reads Jul 27; (3) a red Snapfall demo spine stops all OKX work instantly. The Arc accelerator outranks any OKX prize.
 
 ---
 
