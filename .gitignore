@@ -19,3 +19,7 @@ contracts/broadcast/
 # os / editor
 .DS_Store
 *.log
+
+# sidecar
+sidecar/node_modules/
+sidecar/package-lock.json

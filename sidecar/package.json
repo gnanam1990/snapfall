@@ -1,0 +1,22 @@
+{
+  "name": "@snapfall/sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Snapfall x402 payment sidecar + paid demo API (PRD §6.2 owner C)",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "seller": "tsx src/seller.ts",
+    "buyer": "tsx src/buyer.ts",
+    "demo:loop": "tsx src/demo-loop.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
