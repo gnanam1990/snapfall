@@ -21,7 +21,7 @@ scripts/     demo seed/reset scripts
 ```
 
 ## Day-0 checklist (tonight)
-- [ ] Runtime language call (Go vs Node) — 30 min, decide, LOCK
+- [x] Runtime language call (Go vs Node) — **Go, LOCKED 19 Jul** per ADR-001 / PRD §6.2
 - [ ] Standup time fixed (15 min daily)
 - [ ] Everyone: `bun add -g @circle-fin/cli && circle skill install --tool claude-code` + Arc MCP (docs.arc.io/ai/mcp)
 - [ ] A: `cd contracts && forge install OpenZeppelin/openzeppelin-contracts && forge build`
