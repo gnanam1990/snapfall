@@ -14,7 +14,7 @@ bun.lockb
 contracts/out/
 contracts/cache/
 contracts/broadcast/
-contracts/lib/
+# contracts/lib/ is intentionally tracked — forge deps are git submodules
 
 # os / editor
 .DS_Store
