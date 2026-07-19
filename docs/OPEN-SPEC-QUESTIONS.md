@@ -9,6 +9,7 @@ Raise at standup. **Anything marked ABI-AFFECTING must be resolved before the Fr
 | [SPEC-02](#spec-02) | Medium | JobVault.recordExpense semantics | Implemented conservatively, needs ruling |
 | [SPEC-03](#spec-03) | Low | createJob authorization | Implemented, needs ruling |
 | [SPEC-04](#spec-04) | Medium — **ABI-AFFECTING** | JobVault↔FloatPool wiring | Open |
+| [SPEC-05](#spec-05) | Low | Manifest schema: PRD §8.2 vs. the files on disk | Implemented against the files |
 
 ---
 
@@ -124,3 +125,50 @@ Needs `setFloatPool(IFloatPool)` / `setJobVault(IJobVaultView)`, admin-only, one
 *additions*, which the freeze note in `JobVault.sol` permits ("additions ok") — but they add ABI
 surface, so they should land before Jul 24 rather than after. Not implemented: outside the Jul 19
 task list, and it should be a deliberate call rather than a drive-by.
+
+---
+
+## SPEC-05
+
+### The manifest schema in PRD §8.2 is not the schema on disk
+
+PRD §8.2 "Example agent manifest" shows a nested schema:
+
+```yaml
+id: market-researcher
+role: Market Researcher
+manager: business-manager
+permissions:
+  filesystem: { read: [...], write: [...] }
+  commands: [...]
+  network: { allow: [...] }
+finance:
+  job_limit_usdc: 3.00
+  transaction_limit_usdc: 0.10
+  approval_above_usdc: 0.10
+  categories: [...]
+escalation:
+  on_policy_denial: business-manager
+  on_sensitive_egress: human-owner
+```
+
+`daemon/manifests/*.yaml` use a flatter, different one — no `id`, no `manager`, a single
+`budget_usdc` instead of three finance limits, flat `filesystem_scope` /
+`command_allowlist` / `network_allowlist`, and a single `escalates_to`.
+
+**Implemented against the files on disk**, since those are what the daemon must load today
+and they cover FR-ORG-003's required fields.
+
+Two things the §8.2 schema has that the files do not, both of which the policy engine will
+want and neither of which is currently expressible:
+
+- **Separate transaction vs. job limits.** FR-PAY-003 requires enforcing "job budget, agent/task
+  limit, per-transaction limit" as distinct checks. The files carry one `budget_usdc`, so the
+  0.10 USDC auto-approval threshold in the demo (§15.2) has nowhere to live in the manifest.
+- **Category allowlists.** FR-PAY-003 and Appendix A.1 both key limits by category
+  (`business-data`, `model-inference`); the files have no categories field.
+
+Neither blocks Day 1, but B should extend the manifest schema before the policy engine lands,
+or the thresholds will end up hardcoded. This is local API surface, not contract ABI, so it is
+not bound by the Jul 24 freeze — but FR-ORG-005 (manifest import/export) is easier to honour if
+the schema settles early.

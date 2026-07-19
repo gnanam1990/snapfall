@@ -23,3 +23,9 @@ contracts/broadcast/
 # sidecar
 sidecar/node_modules/
 sidecar/package-lock.json
+
+# daemon (Go)
+daemon/snapfall.db
+daemon/snapfall.db-wal
+daemon/snapfall.db-shm
+daemon/snapfalld
