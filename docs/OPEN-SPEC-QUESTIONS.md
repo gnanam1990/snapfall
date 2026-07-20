@@ -5,17 +5,30 @@ Raise at standup. **Anything marked ABI-AFFECTING must be resolved before the Fr
 
 | ID | Severity | Area | Status |
 | --- | --- | --- | --- |
-| [SPEC-01](#spec-01) | **Blocker** | FloatPool advance sizing | Open — blocks `requestAdvance` + AT-11 |
+| [SPEC-01](#spec-01) | **Blocker** | FloatPool advance sizing | ✅ **RESOLVED 19 Jul** — budget term removed; `advance = rate × customerPayment` |
 | [SPEC-02](#spec-02) | Medium | JobVault.recordExpense semantics | Implemented conservatively, needs ruling |
 | [SPEC-03](#spec-03) | Low | createJob authorization | Implemented, needs ruling |
-| [SPEC-04](#spec-04) | Medium — **ABI-AFFECTING** | JobVault↔FloatPool wiring | Open |
+| [SPEC-04](#spec-04) | Medium — **ABI-AFFECTING** | JobVault↔FloatPool wiring | ✅ **RESOLVED 19 Jul** — one-shot `wireFloatPool` / `wireJobVault` |
 | [SPEC-05](#spec-05) | Low | Manifest schema: PRD §8.2 vs. the files on disk | Implemented against the files |
+| [SPEC-06](#spec-06) | **Blocker** | Demo pool seed breaks the exposure cap | Open — the advance reverts at the 0:40 beat |
+| [SPEC-07](#spec-07) | Low | Refund restitution vs. recorded expenses | Implemented as full restitution |
 
 ---
 
 ## SPEC-01
 
-### The demo's headline number contradicts the advance formula
+> ### ✅ RESOLVED — 19 Jul 2026
+> **Ruling: option (b).** `maxOperatingBudget` is removed from the advance formula entirely.
+> `advance = advanceRate(org) × customerPayment`. The operating budget remains solely the
+> SC-JV-003 spend bound. SC-FP-002 and FR-FLT-002 updated in the PRD; `requestAdvance`
+> implemented; the 6.00 budget no longer caps the 12.50 advance
+> (`test_requestAdvance_ignoresMaxOperatingBudget`).
+>
+> Solvency no longer relies on the budget term — it holds by construction, since the worst
+> case is 85% × 1.02 = 86.7% of an already-escrowed payment. Asserted by
+> `testFuzz_advance_neverExceedsEscrow` and `testFuzz_settlement_escrowAlwaysCoversPool`.
+
+### Original finding: the demo's headline number contradicts the advance formula
 
 **Severity: blocker.** This is the 0:40–1:00 beat of the video — the "snap."
 
@@ -112,7 +125,14 @@ hostile creator cannot redirect anyone's money — the blast radius is job-ID sq
 
 ## SPEC-04
 
-### `JobVault.floatPool` has no setter — **ABI-AFFECTING**
+> ### ✅ RESOLVED — 19 Jul 2026
+> **Ruling: implemented as specified.** `JobVault.wireFloatPool(address)` and
+> `FloatPool.wireJobVault(address)` — admin-only, one-shot, revert `AlreadyWired`, emit
+> `Wired(address)`. `repayAdvance` / `writeOff` carry an `onlyJobVault` modifier that also
+> rejects an unwired pool with `NotWired` (SC-FP-010). `Deploy.s.sol` wires both directions
+> and logs every address. Covered by `test/Wiring.t.sol` (11 tests).
+
+### Original finding: `JobVault.floatPool` has no setter — **ABI-AFFECTING**
 
 `JobVault` declares `IFloatPool public floatPool` with the comment "set once by admin," but no
 function sets it. `script/Deploy.s.sol`'s stated deploy order ends with "wire addresses," which
@@ -172,3 +192,58 @@ Neither blocks Day 1, but B should extend the manifest schema before the policy 
 or the thresholds will end up hardcoded. This is local API surface, not contract ABI, so it is
 not bound by the Jul 24 freeze — but FR-ORG-005 (manifest import/export) is easier to honour if
 the schema settles early.
+
+---
+
+## SPEC-06
+
+### The demo pool seed cannot support the demo advance — **blocker**
+
+Found while implementing the SC-FP-006 caps.
+
+PRD §15.2 sets **"Pool seed (demo LPs) | 100.00 testnet USDC"**. SC-FP-006 caps per-org
+exposure at **10% of TVL**. The demo's advance is **12.50 USDC**:
+
+```
+12.50 / 100.00 = 12.5%  >  10%  ->  requestAdvance reverts CapExceeded
+```
+
+**The advance reverts at the 0:40 "snap" beat** — the single most important moment in the
+video. This is the same class of error as SPEC-01: a seed number that contradicts a contract
+rule, not a contract bug.
+
+For a 12.50 advance to stay inside the cap, TVL must be **≥ 125.00 USDC**.
+
+| | Change | Cost |
+| --- | --- | --- |
+| **(a)** | Raise the demo pool seed to ≥ 125.00 (suggest **150.00** for headroom) | One number in §15.2 + the seed script |
+| **(b)** | Raise `ORG_EXPOSURE_CAP_BPS` above 1250 | Weakens SC-FP-006 and the rate-gaming answer in §15.5 |
+
+**Recommendation: (a), seeded at 150.00.** It costs one number, keeps the cap story intact for
+judge Q&A ("per-org exposure cap" is part of the anti-gaming answer), and leaves room for the
+second-job P2 beat at the improved 55% rate (13.75, which needs TVL ≥ 137.50).
+
+The contracts already enforce the cap as specified. Both sides of the boundary are pinned by
+tests: `test_exposureCap_rejectsDemoSeedOf100` and `test_exposureCap_admitsExactlyTenPercent`.
+The test suite seeds **150.00**. **§15.2 has NOT been edited** — the demo seed is the
+architect's number to change.
+
+---
+
+## SPEC-07
+
+### Does a refund deduct recorded expenses?
+
+SC-JV-006 constrains refund/cancel by "state, deadline, spent amount". The spent-amount half
+is ambiguous once SPEC-02 ruled that `recordExpense` is accounting-only.
+
+**Implemented: restitution is the FULL `customerPayment`.** `onchainExpenses` never left
+escrow (SPEC-02), so deducting it would strand exactly that much USDC in the contract with no
+party able to claim it — there is no specified recipient for a retained expense on a refund.
+
+The alternative reading — pay `customerPayment - onchainExpenses` to the customer and release
+`onchainExpenses` to the operator as compensation for work performed — is defensible but
+invents an operator payout the PRD never describes. Not implemented on that basis.
+
+In the demo this is moot: `recordExpense` is never called on the vault, since agent purchases
+are paid via x402 from the advance sitting in the treasury. Pinned by `test_refund_conservesValue`.

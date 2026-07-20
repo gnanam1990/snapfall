@@ -390,7 +390,7 @@ P0 = mandatory for MVP; P1 = if time permits; P2 = post-MVP. Every P0 requiremen
 | **ID** | **Pri** | **Requirement** |
 | --- | --- | --- |
 | FR-FLT-001 | P0 | Treasury can request an advance against a job whose JobVault state is Funded, upon human authorization. |
-| FR-FLT-002 | P0 | Advance = min(maxOperatingBudget, advanceRate(org) × customerPayment), computed on-chain (SC-FP-002). |
+| FR-FLT-002 | P0 | Advance = advanceRate(org) × customerPayment, computed on-chain (SC-FP-002). The operating budget does not cap the advance. *(Ruling 19 Jul 2026.)* |
 | FR-FLT-003 | P0 | Advance funds transfer only to the org treasury signer address, never to an agent wallet. |
 | FR-FLT-004 | P0 | Dashboard shows per job: principal, fee owed, repayment status; per org: current rate and its derivation. |
 | FR-FLT-005 | P0 | The waterfall executes in the JobVault contract, not off-chain; local ledger reconciles to on-chain events to the cent. |
@@ -520,7 +520,7 @@ function advanceRate(address org) public view returns (uint16 bps);
 | **ID** | **Requirement** |
 | --- | --- |
 | SC-FP-001 | Advances issued only against jobs whose JobVault state is Funded, verified by reading JobVault — never trusting the caller. |
-| SC-FP-002 | advance = min(maxOperatingBudget, advanceRate(org) × customerPayment). |
+| SC-FP-002 | **advance = advanceRate(org) × customerPayment.** No budget term. `maxOperatingBudget` is the SC-JV-003 *spend* bound and has no bearing on borrowing capacity. Solvency holds by construction: the most a job can owe back is CAP_BPS + fee on that principal = 85% × 1.02 = **86.7%** of an already-escrowed payment, so the waterfall can never come up short. *(Ruling 19 Jul 2026, supersedes the prior `min(maxOperatingBudget, …)` formulation — see docs/OPEN-SPEC-QUESTIONS.md SPEC-01.)* |
 | SC-FP-003 | Exactly one advance per job; state recorded before transfer (CEI); duplicates revert. |
 | SC-FP-004 | Funds transfer only to the registered org treasury address, never agent wallets. |
 | SC-FP-005 | Fees accrue to the pool; 20% of fees accrue to a first-loss reserve. |
