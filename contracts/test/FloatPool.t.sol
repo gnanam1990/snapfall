@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {FloatPool} from "../src/FloatPool.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {FloatPoolHarness} from "./mocks/FloatPoolHarness.sol";
 
 // Test law (PRD §7.4) — required cases. Checked items are covered in THIS file.
 //  [x] advanceRate: base 50%, +5%/accepted, −15%/writeOff, clamps at 30%/85%
@@ -13,19 +14,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 //  [ ] write-off waterfall ordering: bond → reserve → LP shares, events per stage
 //  [ ] exposure cap (10% TVL) + utilization cap (80%) enforced
 //  [ ] reentrancy assumptions; fuzz: share/amount accounting invariants
-
-/// @dev Test-only harness. `acceptedJobs` / `writtenOffJobs` are written in production
-///      solely by repayAdvance/writeOff (still TODO(A)), so the rate function cannot be
-///      exercised without seeding history. Setters live HERE, never on FloatPool —
-///      the ABI freezes Fri Jul 24 and test scaffolding must not leak into it.
-contract FloatPoolHarness is FloatPool {
-    constructor(IERC20 _usdc) FloatPool(_usdc) {}
-
-    function setHistory(address org, uint32 accepted, uint32 writtenOff) external {
-        acceptedJobs[org] = accepted;
-        writtenOffJobs[org] = writtenOff;
-    }
-}
 
 contract FloatPoolRateTest is Test {
     FloatPoolHarness internal pool;

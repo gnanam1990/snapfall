@@ -43,9 +43,13 @@ contract FloatPool is ReentrancyGuard {
     mapping(address => uint32) public acceptedJobs;        // org → count
     mapping(address => uint32) public writtenOffJobs;      // org → count
     mapping(address => uint256) public orgOutstanding;     // org → drawn principal
-    uint256 public totalAssets;        // deposited − net outflows (define precisely in tests)
+    uint256 public totalAssets;        // LP-owned capital: idle LP cash + totalOutstanding
     uint256 public totalOutstanding;   // sum of open principals
-    uint256 public reserve;            // first-loss buffer
+    uint256 public reserve;            // first-loss buffer (SC-FP-005); NOT part of totalAssets
+
+    // ── Added Jul 19 (pre-freeze): LP share accounting ──
+    mapping(address => uint256) public sharesOf;
+    uint256 public totalShares;
 
     // ── Events (ABI FREEZE Fri Jul 24) ──
     event Deposited(address indexed lp, uint256 assets, uint256 shares);
@@ -114,14 +118,116 @@ contract FloatPool is ReentrancyGuard {
         return SafeCast.toUint16(r);
     }
 
-    // ── ERC-4626-ish LP side (P0 contract, UI is P1) ──
-    function deposit(uint256 assets, address receiver) external returns (uint256 shares) { /* TODO(A) */ }
-    function withdraw(uint256 assets, address receiver, address owner) external returns (uint256 shares) { /* TODO(A) */ }
+    // ─────────────────────────────────────────────────────────────────────
+    // ERC-4626-ish LP side (P0 contract, UI is P1)
+    //
+    // Accounting model, stated once so the invariants below are checkable:
+    //   totalAssets      = LP-owned capital = idle LP cash + totalOutstanding. EXCLUDES reserve.
+    //   totalOutstanding = principal currently lent out.
+    //   reserve          = first-loss buffer, funded from the fee cut (SC-FP-005). Not LP capital.
+    //   usdc.balanceOf(pool) = idle LP cash + reserve.
+    // Issuing an advance moves capital from cash to receivable; totalAssets is unchanged.
+    // ─────────────────────────────────────────────────────────────────────
 
-    /// SC-FP-001..004: org treasury only; verify vault says Funded (read, never trust caller);
-    /// one advance per job; amount = min(maxOperatingBudget, rate × customerPayment);
-    /// transfer ONLY to registered org treasury; checks-effects-interactions.
-    function requestAdvance(bytes32 jobId) external returns (uint256 amount) { /* TODO(A) */ }
+    /// @notice LP deposits USDC and receives proportional shares.
+    function deposit(uint256 assets, address receiver) external nonReentrant returns (uint256 shares) {
+        if (assets == 0) revert ZeroAmount();
+        if (receiver == address(0)) revert ZeroAddress();
+
+        // First depositor sets the 1:1 exchange rate; afterwards shares track LP capital.
+        shares = totalShares == 0 ? assets : (assets * totalShares) / totalAssets;
+        if (shares == 0) revert ZeroAmount();
+
+        totalShares += shares;                                      // effects
+        sharesOf[receiver] += shares;
+        totalAssets += assets;
+        emit Deposited(receiver, assets, shares);
+
+        usdc.safeTransferFrom(msg.sender, address(this), assets);   // interaction
+    }
+
+    /// @notice LP redeems shares for USDC. Only capital that is not lent out may leave.
+    function withdraw(uint256 assets, address receiver, address owner) external nonReentrant returns (uint256 shares) {
+        if (assets == 0) revert ZeroAmount();
+        if (receiver == address(0)) revert ZeroAddress();
+        // No allowance system in the MVP: an LP withdraws their own position only.
+        if (owner != msg.sender) revert NotAuthorized();
+
+        // Round up, so rounding dust is charged to the withdrawer rather than the pool.
+        shares = (assets * totalShares + totalAssets - 1) / totalAssets;
+        if (shares > sharesOf[owner]) revert InsufficientLiquidity();
+
+        // Outstanding principal is deployed and cannot be redeemed until it is repaid.
+        uint256 idle = totalAssets - totalOutstanding;
+        if (assets > idle) revert InsufficientLiquidity();
+
+        totalShares -= shares;                                      // effects
+        sharesOf[owner] -= shares;
+        totalAssets -= assets;
+        emit Withdrawn(owner, assets, shares);
+
+        usdc.safeTransfer(receiver, assets);                        // interaction
+    }
+
+    /// @notice Draw a receivables-secured advance against a Funded job (SC-FP-001..006).
+    ///
+    /// SPEC-01 RULING (19 Jul 2026): `advance = advanceRate(org) × customerPayment`.
+    /// The `min(maxOperatingBudget, ...)` term is GONE. maxOperatingBudget is the SC-JV-003
+    /// spend bound and has nothing to do with borrowing capacity.
+    ///
+    /// Solvency holds by construction, not by a cap: the most a job can ever owe back is
+    /// CAP_BPS + fee on that principal = 85% × 1.02 = 86.7% of customerPayment, and the full
+    /// customerPayment is already escrowed in the JobVault. The waterfall therefore cannot
+    /// come up short. `testFuzz_advance_neverExceedsEscrow` asserts this over the whole
+    /// rate range and random org histories.
+    function requestAdvance(bytes32 jobId) external nonReentrant returns (uint256 amount) {
+        if (address(jobVault) == address(0)) revert NotWired();
+
+        // SC-FP-001: read the vault's own view of the job. The caller is never trusted for
+        // status, economics, or identity — all three come from the vault.
+        if (jobVault.jobStatus(jobId) != IJobVaultView.JobStatus.Funded) revert JobNotFunded();
+
+        (address org, uint256 customerPayment, ) = jobVault.jobEconomics(jobId);
+
+        // SC-FP-004: only the treasury registered for THIS job may draw against it.
+        if (msg.sender != org) revert NotTreasury();
+
+        // SC-FP-003: exactly one advance per job.
+        if (advances[jobId].status != AdvanceStatus.None) revert DuplicateAdvance();
+
+        uint16 rateBps = advanceRate(org);
+        uint256 principal = (customerPayment * uint256(rateBps)) / 10_000;
+        if (principal == 0) revert ZeroAmount();
+        uint256 fee = (principal * uint256(FEE_BPS)) / 10_000;
+
+        // Liquidity: only idle LP cash can be lent.
+        if (principal > totalAssets - totalOutstanding) revert InsufficientLiquidity();
+
+        // ── effects, before any transfer (CEI) ──
+        advances[jobId] = Advance({
+            jobId: jobId,
+            operatorOrg: org,
+            principal: principal,
+            fee: fee,
+            openedAt: uint64(block.timestamp),
+            status: AdvanceStatus.Issued
+        });
+        orgOutstanding[org] += principal;
+        totalOutstanding += principal;
+
+        // SC-FP-006: caps are checked against the post-issuance position, so an advance that
+        // would breach either one never lands.
+        if (orgOutstanding[org] * 10_000 > uint256(ORG_EXPOSURE_CAP_BPS) * totalAssets) revert CapExceeded();
+        if (totalOutstanding * 10_000 > uint256(UTILIZATION_CAP_BPS) * totalAssets) revert CapExceeded();
+
+        emit AdvanceIssued(jobId, org, principal, fee, rateBps);
+
+        // SC-FP-004: pay the registered treasury read from the vault — never an address
+        // supplied by the caller, and never an agent wallet.
+        usdc.safeTransfer(org, principal);                          // interaction
+
+        return principal;
+    }
 
     /// SC-FP-010: JobVault only. Split fee → reserve cut (SC-FP-005).
     function repayAdvance(bytes32 jobId, uint256 amount) external onlyJobVault { /* TODO(A) */ }

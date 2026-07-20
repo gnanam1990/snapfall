@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JobVault} from "../src/JobVault.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
 
 // Test law (PRD §7.4) — JobVault scope as of Jul 19.
 //  [x] happy path: createJob / fund / startWork / recordExpense / submitDelivery
@@ -12,47 +13,6 @@ import {JobVault} from "../src/JobVault.sol";
 //  [x] illegal state transitions (SC-JV-002 amount immutable once work starts)
 //  [ ] duplicate acceptance, waterfall ordering, write-off ordering, expired refund
 //      -> blocked on acceptDelivery/refund/cancel, still TODO(A)
-
-/// @dev 6-decimal USDC stand-in. Arc's native USDC exposes 18dp for gas/native transfers
-///      and 6dp for ERC-20 ops on the same balance (docs.arc.io evm-differences); the vault
-///      only ever touches the ERC-20 surface, so 6dp is the correct thing to model here.
-contract MockUSDC is IERC20 {
-    string public constant name = "Mock USD Coin";
-    string public constant symbol = "USDC";
-    uint8 public constant decimals = 6;
-
-    uint256 public totalSupply;
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
-
-    function mint(address to, uint256 amount) external {
-        balanceOf[to] += amount;
-        totalSupply += amount;
-        emit Transfer(address(0), to, amount);
-    }
-
-    function transfer(address to, uint256 amount) external returns (bool) {
-        balanceOf[msg.sender] -= amount;
-        balanceOf[to] += amount;
-        emit Transfer(msg.sender, to, amount);
-        return true;
-    }
-
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        emit Approval(msg.sender, spender, amount);
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        uint256 allowed = allowance[from][msg.sender];
-        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - amount;
-        balanceOf[from] -= amount;
-        balanceOf[to] += amount;
-        emit Transfer(from, to, amount);
-        return true;
-    }
-}
 
 contract JobVaultTest is Test {
     JobVault internal vault;
