@@ -229,11 +229,83 @@ contract FloatPool is ReentrancyGuard {
         return principal;
     }
 
-    /// SC-FP-010: JobVault only. Split fee → reserve cut (SC-FP-005).
-    function repayAdvance(bytes32 jobId, uint256 amount) external onlyJobVault { /* TODO(A) */ }
+    /// @notice Repay an open advance in full. JobVault only (SC-FP-010).
+    ///
+    /// Called from inside JobVault.acceptDelivery, which approves this contract for exactly
+    /// `amount` first — the pool pulls rather than being pushed to, so the accounting and the
+    /// token movement cannot diverge. Partial repayment is rejected: the waterfall repays the
+    /// pool in full before the operator sees anything, so anything else is a bug upstream.
+    function repayAdvance(bytes32 jobId, uint256 amount) external onlyJobVault nonReentrant {
+        Advance storage a = advances[jobId];
+        if (a.status != AdvanceStatus.Issued) revert NoOpenAdvance();
 
-    /// SC-FP-008 loss waterfall: bond → reserve → socialized to LP shares, events per stage.
-    function writeOff(bytes32 jobId) external onlyJobVault { /* TODO(A) */ }
+        uint256 principal = a.principal;
+        uint256 fee = a.fee;
+        if (amount != principal + fee) revert WrongRepayment();
+
+        address org = a.operatorOrg;
+
+        // SC-FP-005: 20% of the fee accrues to the first-loss reserve; the rest is LP yield.
+        uint256 toReserve = (fee * uint256(RESERVE_CUT_BPS)) / 10_000;
+
+        // ── effects ──
+        a.status = AdvanceStatus.Repaid;
+        orgOutstanding[org] -= principal;
+        totalOutstanding -= principal;
+        reserve += toReserve;
+        totalAssets += (fee - toReserve);
+
+        // SC-FP-009: a repaid advance is a delivered job, which is what raises the org's rate.
+        // This is the on-chain half of the flywheel (AT-13).
+        acceptedJobs[org] += 1;
+
+        emit AdvanceRepaid(jobId, principal, fee, toReserve);
+        emit RateChanged(org, advanceRate(org));
+
+        // ── interaction ──
+        usdc.safeTransferFrom(msg.sender, address(this), amount);
+    }
+
+    /// @notice Absorb a defaulted advance through the SC-FP-008 loss waterfall. JobVault only.
+    ///
+    /// Order is bond -> reserve -> LP shares, with an event per stage so the Float page can
+    /// show exactly who absorbed what. The bond stage is a no-op until the P1 operator bond
+    /// (SC-FP-011) lands; it emits with amount 0 rather than being skipped, so the staged
+    /// ordering is observable from day one and the event sequence never changes shape.
+    function writeOff(bytes32 jobId) external onlyJobVault nonReentrant {
+        Advance storage a = advances[jobId];
+        if (a.status != AdvanceStatus.Issued) revert NoOpenAdvance();
+
+        address org = a.operatorOrg;
+        uint256 loss = a.principal; // the fee was never earned; only principal is at risk
+
+        // ── effects ──
+        a.status = AdvanceStatus.WrittenOff;
+        orgOutstanding[org] -= loss;
+        totalOutstanding -= loss;
+        writtenOffJobs[org] += 1;
+
+        // Stage 1 — operator performance bond (SC-FP-011, P1). Not yet implemented.
+        uint256 bondSlashed = 0;
+        emit BondSlashed(jobId, bondSlashed);
+
+        uint256 remaining = loss - bondSlashed;
+
+        // Stage 2 — first-loss reserve.
+        uint256 reserveUsed = remaining < reserve ? remaining : reserve;
+        reserve -= reserveUsed;
+        remaining -= reserveUsed;
+        emit ReserveDrawn(jobId, reserveUsed);
+
+        // Stage 3 — whatever is left is socialized across LP shares. Share COUNT is unchanged;
+        // each share is simply worth less, which is how an ERC-4626-style vault takes a loss.
+        uint256 socialized = remaining;
+        totalAssets -= socialized;
+        emit LossSocialized(jobId, socialized);
+
+        emit AdvanceWrittenOff(jobId, bondSlashed, reserveUsed, socialized);
+        emit RateChanged(org, advanceRate(org));
+    }
 
     function openAdvanceOf(bytes32 jobId) external view returns (uint256 principal, uint256 fee, bool open) {
         Advance storage a = advances[jobId];

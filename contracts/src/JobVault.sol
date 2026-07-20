@@ -185,14 +185,114 @@ contract JobVault is ReentrancyGuard {
         emit DeliverySubmitted(jobId, deliveryHash);
     }
 
-    /// SC-JV-005 + SC-JV-009: acceptance executes the waterfall atomically.
-    /// Order: (1) query FloatPool.openAdvanceOf(jobId); (2) transfer principal+fee to pool via repayAdvance;
-    /// (3) transfer remainder to operator; (4) emit JobSettled. Checks-effects-interactions throughout.
-    function acceptDelivery(bytes32 jobId) external { /* TODO(A): customer only; Delivered→Accepted */ }
+    /// @notice Customer accepts the deliverable, executing the settlement waterfall.
+    ///
+    /// SC-JV-005 + SC-JV-009 — "the fall". One transaction, strict seniority:
+    ///   1. read the open advance from FloatPool
+    ///   2. repay principal + fee to the pool FIRST
+    ///   3. release the remainder to the operator
+    ///   4. emit JobSettled
+    ///
+    /// The ordering is not a convention here, it is the control flow: the operator transfer
+    /// is written after the pool repayment and both happen inside this call, so no off-chain
+    /// sequencing can put the operator ahead of the pool (ADR-010). Solvency is guaranteed
+    /// upstream — an advance can never exceed 86.7% of the escrowed payment (SPEC-01), so
+    /// `customerPayment - owed` cannot underflow.
+    function acceptDelivery(bytes32 jobId) external nonReentrant {
+        Job storage j = jobs[jobId];
+        if (j.customer == address(0)) revert UnknownJob();
+        if (msg.sender != j.customer) revert NotAuthorized();        // SC-JV-005
+        if (j.status != JobStatus.Delivered) revert InvalidStatus(); // SC-JV-004: hash exists by construction
+        if (address(floatPool) == address(0)) revert NotWired();
 
-    // ── SC-JV-006 + SC-JV-010: refund/cancel constrained by state/deadline/spend; notify pool writeOff ──
-    function refund(bytes32 jobId) external { /* TODO(A) */ }
-    function cancel(bytes32 jobId) external { /* TODO(A) */ }
+        uint256 payment = j.customerPayment;
+        address operator = j.operator;
+
+        j.status = JobStatus.Accepted;                               // effect, before any transfer
+
+        (uint256 principal, uint256 fee, bool open) = floatPool.openAdvanceOf(jobId);
+
+        uint256 advanceRepaid = 0;
+        if (open) {
+            advanceRepaid = principal + fee;
+
+            // Approve exactly what is owed and let the pool pull it, so the pool's accounting
+            // and the token movement commit together inside repayAdvance.
+            usdc.forceApprove(address(floatPool), advanceRepaid);
+            floatPool.repayAdvance(jobId, advanceRepaid);            // ── pool paid FIRST ──
+        }
+
+        uint256 operatorNet = payment - advanceRepaid;
+        emit JobSettled(jobId, advanceRepaid, operatorNet);          // SC-JV-009
+
+        if (operatorNet > 0) {
+            usdc.safeTransfer(operator, operatorNet);                // ── operator paid LAST ──
+        }
+    }
+
+    /// @notice Return the escrow to the customer and write off any open advance.
+    ///
+    /// SC-JV-006 + SC-JV-010 — the customer is made whole FIRST, then the pool is told to
+    /// absorb the loss through its own waterfall (SC-FP-008). The customer's restitution is
+    /// never reduced by the pool's loss: the receivable was the pool's risk, not theirs.
+    ///
+    /// Callable by the operator or admin at any time (a voluntary refund), or by the customer
+    /// once the deadline has passed (FR-JOB-007's timeout path).
+    ///
+    /// Restitution is the FULL customerPayment. `onchainExpenses` does not reduce it because
+    /// recordExpense never moves escrow (SPEC-02) — deducting it would strand those funds in
+    /// the contract with no one able to claim them. See SPEC-07.
+    function refund(bytes32 jobId) external nonReentrant {
+        Job storage j = jobs[jobId];
+        if (j.customer == address(0)) revert UnknownJob();
+        if (address(floatPool) == address(0)) revert NotWired();
+
+        bool privileged = msg.sender == j.operator || msg.sender == admin;
+        // A deadline IS a wall-clock comparison; there is no timestamp-free formulation.
+        // Validator drift is seconds against a multi-day deadline, and Arc's timestamps are
+        // non-decreasing with 1s granularity (docs.arc.io evm-differences), so `>=` is correct
+        // and the manipulation window is economically meaningless here.
+        // forge-lint: disable-next-line(block-timestamp)
+        bool customerAfterDeadline = msg.sender == j.customer && block.timestamp >= j.deadline;
+        if (!privileged && !customerAfterDeadline) revert NotAuthorized();
+
+        // Funded through Delivered can be unwound; Accepted has already settled and the
+        // terminal states are immutable.
+        if (
+            j.status != JobStatus.Funded && j.status != JobStatus.InProgress
+                && j.status != JobStatus.Delivered
+        ) revert InvalidStatus();
+
+        uint256 restitution = j.customerPayment;
+        address customer = j.customer;
+
+        j.status = JobStatus.Refunded;                               // effect
+        emit JobRefunded(jobId, restitution);
+
+        usdc.safeTransfer(customer, restitution);                    // customer made whole FIRST
+
+        // SC-JV-010: only after restitution does the pool absorb the loss.
+        (, , bool open) = floatPool.openAdvanceOf(jobId);
+        if (open) {
+            floatPool.writeOff(jobId);
+        }
+    }
+
+    /// @notice Cancel a job that was never funded.
+    ///
+    /// SC-JV-006 — there is no escrow to return and no advance can exist, because SC-FP-001
+    /// only issues against a Funded job. A funded job is unwound with refund() instead.
+    function cancel(bytes32 jobId) external {
+        Job storage j = jobs[jobId];
+        if (j.customer == address(0)) revert UnknownJob();
+        if (msg.sender != j.customer && msg.sender != j.operator && msg.sender != admin) {
+            revert NotAuthorized();
+        }
+        if (j.status != JobStatus.Created) revert InvalidStatus();
+
+        j.status = JobStatus.Cancelled;
+        emit JobCancelled(jobId);
+    }
 
     // Views for FloatPool verification (SC-FP-001 reads vault state, never trusts caller)
     function jobStatus(bytes32 jobId) external view returns (JobStatus) { return jobs[jobId].status; }

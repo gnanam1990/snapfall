@@ -298,10 +298,10 @@ contract AdvanceTest is Test {
     function test_utilizationCap_stopsGlobalLendingAtEightyPercent() public {
         // 10 orgs × 10% each would be 100% utilization; the global cap must bite at 80%.
         uint256 issued;
-        for (uint256 i = 1; i <= 10; i++) {
-            address org = address(uint160(0x1000 + i));
+        for (uint160 i = 1; i <= 10; i++) {
+            address org = address(0x1000 + i);
             bytes32 job = keccak256(abi.encode("job", i));
-            address cust = address(uint160(0x2000 + i));
+            address cust = address(0x2000 + i);
 
             usdc.mint(cust, 30_000_000);
             vm.prank(cust);

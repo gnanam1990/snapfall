@@ -8,12 +8,15 @@ import {FloatPoolHarness} from "./mocks/FloatPoolHarness.sol";
 
 // Test law (PRD §7.4) — required cases. Checked items are covered in THIS file.
 //  [x] advanceRate: base 50%, +5%/accepted, −15%/writeOff, clamps at 30%/85%
-//  [ ] requestAdvance: reverts unless vault says Funded; duplicate reverts; amount = min(budget, rate×payment)
-//  [ ] advance transfers ONLY to registered treasury
-//  [ ] waterfall ordering: pool repaid (principal+fee) BEFORE operator transfer, same tx
-//  [ ] write-off waterfall ordering: bond → reserve → LP shares, events per stage
-//  [ ] exposure cap (10% TVL) + utilization cap (80%) enforced
-//  [ ] reentrancy assumptions; fuzz: share/amount accounting invariants
+//  [x] requestAdvance: reverts unless vault says Funded; duplicate reverts;
+//      amount = rate x payment (SPEC-01: the budget term was removed) -> Advance.t.sol
+//  [x] advance transfers ONLY to registered treasury -> Advance.t.sol
+//  [x] waterfall ordering: pool repaid (principal+fee) BEFORE operator, same tx -> Waterfall.t.sol
+//  [x] write-off waterfall ordering: bond -> reserve -> LP shares, event per stage -> Waterfall.t.sol
+//  [x] exposure cap (10% TVL) + utilization cap (80%) enforced -> Advance.t.sol
+//  [x] fuzz: solvency (principal+fee <= escrow) and settlement conservation
+//  [ ] reentrancy: guards in place (nonReentrant on every value-moving path); an explicit
+//      malicious-token reentrancy fixture is still worth adding
 
 contract FloatPoolRateTest is Test {
     FloatPoolHarness internal pool;
