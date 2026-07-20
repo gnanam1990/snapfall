@@ -52,8 +52,24 @@ contract JobVault is ReentrancyGuard {
     error ZeroAddress();
     error ZeroAmount();
     error ZeroHash();
+    error AlreadyWired();
+    error NotWired();
+
+    /// SPEC-04 — emitted once, when the FloatPool address is bound.
+    event Wired(address indexed floatPool);
 
     constructor(IERC20 _usdc) { usdc = _usdc; admin = msg.sender; }
+
+    /// SPEC-04 — set-once wiring, admin only. The waterfall (SC-JV-009) cannot execute
+    /// without it, and rebinding mid-flight would let an admin redirect repayments, so
+    /// this is deliberately one-shot rather than a settable address.
+    function wireFloatPool(address pool) external {
+        if (msg.sender != admin) revert NotAuthorized();
+        if (address(floatPool) != address(0)) revert AlreadyWired();
+        if (pool == address(0)) revert ZeroAddress();
+        floatPool = IFloatPool(pool);
+        emit Wired(pool);
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // Creation

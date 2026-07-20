@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IERC20, IJobVaultView} from "./interfaces.sol";
-// TODO(A): after forge install, add OZ ERC4626 (or hand-rolled shares), SafeERC20, ReentrancyGuard, AccessControl (SC-FP-012)
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {IJobVaultView} from "./interfaces.sol";
 
 /// @title FloatPool — receivables-secured advances against escrowed jobs (PRD §7.2, SC-FP-001..012)
 /// @notice ERC-4626-style USDC vault. Advance rate is a PURE on-chain function of delivery history:
 ///         rate = clamp(base + growth*accepted − penalty*writeOffs, floor, cap). No oracle. (SC-FP-009)
-contract FloatPool {
+contract FloatPool is ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     enum AdvanceStatus { None, Issued, Repaid, WrittenOff }
 
     struct Advance {
@@ -49,23 +54,64 @@ contract FloatPool {
     event AdvanceRepaid(bytes32 indexed jobId, uint256 principal, uint256 fee, uint256 toReserve);
     event AdvanceWrittenOff(bytes32 indexed jobId, uint256 bondSlashed, uint256 reserveUsed, uint256 socialized); // SC-FP-008 stages
     event RateChanged(address indexed org, uint16 newRateBps);
+    // ── Added Jul 19 (pre-freeze) ──
+    event Wired(address indexed jobVault);                          // SPEC-04
+    event BondSlashed(bytes32 indexed jobId, uint256 amount);       // SC-FP-008 stage 1
+    event ReserveDrawn(bytes32 indexed jobId, uint256 amount);      // SC-FP-008 stage 2
+    event LossSocialized(bytes32 indexed jobId, uint256 amount);    // SC-FP-008 stage 3
 
     error NotJobVault();
     error JobNotFunded();
     error DuplicateAdvance();
     error CapExceeded();
     error NotTreasury();
+    // ── Added Jul 19 (pre-freeze) ──
+    error NotAuthorized();
+    error ZeroAddress();
+    error AlreadyWired();
+    error NotWired();
+    error NoOpenAdvance();
+    error WrongRepayment();
+    error ZeroAmount();
+    error InsufficientLiquidity();
 
     constructor(IERC20 _usdc) { usdc = _usdc; admin = msg.sender; }
 
+    /// SPEC-04 — set-once wiring. SC-FP-010 depends on this being set: repayAdvance and
+    /// writeOff are callable only by the registered JobVault, and "registered" means here.
+    function wireJobVault(address vault) external {
+        if (msg.sender != admin) revert NotAuthorized();
+        if (address(jobVault) != address(0)) revert AlreadyWired();
+        if (vault == address(0)) revert ZeroAddress();
+        jobVault = IJobVaultView(vault);
+        emit Wired(vault);
+    }
+
+    /// SC-FP-010 — repay/writeOff are JobVault-only. An unwired pool rejects both,
+    /// so a half-deployed system fails loudly instead of silently accepting calls.
+    modifier onlyJobVault() {
+        if (address(jobVault) == address(0)) revert NotWired();
+        if (msg.sender != address(jobVault)) revert NotJobVault();
+        _;
+    }
+
     /// SC-FP-009 — trustless underwriting. Pure function of contract-visible history.
+    ///
+    /// Computed entirely in uint256: the penalty is compared against the base rather than
+    /// subtracted from it, so the "more write-offs than credit" case saturates at the floor
+    /// instead of going negative. The result is clamped into [FLOOR, CAP] before the cast,
+    /// so the uint16 narrowing is provably lossless — CAP_BPS (8500) fits uint16 with room.
     function advanceRate(address org) public view returns (uint16 bps) {
-        int256 r = int256(uint256(BASE_BPS))
-            + int256(uint256(GROWTH_BPS)) * int256(uint256(acceptedJobs[org]))
-            - int256(uint256(PENALTY_BPS)) * int256(uint256(writtenOffJobs[org]));
-        if (r < int256(uint256(FLOOR_BPS))) return FLOOR_BPS;
-        if (r > int256(uint256(CAP_BPS)))   return CAP_BPS;
-        return uint16(uint256(r));
+        uint256 base = uint256(BASE_BPS) + uint256(GROWTH_BPS) * uint256(acceptedJobs[org]);
+        uint256 penalty = uint256(PENALTY_BPS) * uint256(writtenOffJobs[org]);
+
+        uint256 r = penalty >= base ? uint256(FLOOR_BPS) : base - penalty;
+        if (r < uint256(FLOOR_BPS)) r = uint256(FLOOR_BPS);
+        if (r > uint256(CAP_BPS)) r = uint256(CAP_BPS);
+
+        // SafeCast reverts rather than truncating, so the narrowing is checked at runtime
+        // as well as being provable from the clamp above. No lint suppression needed.
+        return SafeCast.toUint16(r);
     }
 
     // ── ERC-4626-ish LP side (P0 contract, UI is P1) ──
@@ -78,10 +124,10 @@ contract FloatPool {
     function requestAdvance(bytes32 jobId) external returns (uint256 amount) { /* TODO(A) */ }
 
     /// SC-FP-010: JobVault only. Split fee → reserve cut (SC-FP-005).
-    function repayAdvance(bytes32 jobId, uint256 amount) external { /* TODO(A) */ }
+    function repayAdvance(bytes32 jobId, uint256 amount) external onlyJobVault { /* TODO(A) */ }
 
     /// SC-FP-008 loss waterfall: bond → reserve → socialized to LP shares, events per stage.
-    function writeOff(bytes32 jobId) external { /* TODO(A) */ }
+    function writeOff(bytes32 jobId) external onlyJobVault { /* TODO(A) */ }
 
     function openAdvanceOf(bytes32 jobId) external view returns (uint256 principal, uint256 fee, bool open) {
         Advance storage a = advances[jobId];

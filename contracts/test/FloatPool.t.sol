@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {FloatPool} from "../src/FloatPool.sol";
-import {IERC20} from "../src/interfaces.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 // Test law (PRD §7.4) — required cases. Checked items are covered in THIS file.
 //  [x] advanceRate: base 50%, +5%/accepted, −15%/writeOff, clamps at 30%/85%
@@ -104,12 +104,12 @@ contract FloatPoolRateTest is Test {
         assertEq(pool.advanceRate(ORG), 3000, "2 write-offs would be 20% -> clamped to floor");
     }
 
-    /// The arithmetic goes deeply negative before clamping. advanceRate() computes in
-    /// int256 precisely so this cannot underflow — if someone "simplifies" it to uint256
-    /// this test is the tripwire.
-    function test_advanceRate_survivesDeeplyNegativeIntermediate() public {
+    /// The penalty far exceeds the base here. advanceRate() compares penalty against base
+    /// instead of subtracting, so this saturates at the floor rather than underflowing a
+    /// uint256 — if someone "simplifies" it to a plain subtraction, this test is the tripwire.
+    function test_advanceRate_survivesPenaltyExceedingBase() public {
         pool.setHistory(ORG, 0, 1000);
-        assertEq(pool.advanceRate(ORG), 3000, "-145000 bps intermediate must clamp, not revert");
+        assertEq(pool.advanceRate(ORG), 3000, "penalty >> base must clamp, not revert");
 
         pool.setHistory(ORG, 0, type(uint32).max);
         assertEq(pool.advanceRate(ORG), 3000, "max write-offs must clamp, not revert");
@@ -199,15 +199,14 @@ contract FloatPoolRateTest is Test {
     function testFuzz_advanceRate_matchesSpecFormula(uint32 accepted, uint32 writtenOff) public {
         pool.setHistory(ORG, accepted, writtenOff);
 
-        int256 raw = int256(uint256(pool.BASE_BPS()))
-            + int256(uint256(pool.GROWTH_BPS())) * int256(uint256(accepted))
-            - int256(uint256(pool.PENALTY_BPS())) * int256(uint256(writtenOff));
+        uint256 base = uint256(pool.BASE_BPS()) + uint256(pool.GROWTH_BPS()) * uint256(accepted);
+        uint256 penalty = uint256(pool.PENALTY_BPS()) * uint256(writtenOff);
 
-        int256 expected = raw;
-        if (expected < int256(uint256(pool.FLOOR_BPS()))) expected = int256(uint256(pool.FLOOR_BPS()));
-        if (expected > int256(uint256(pool.CAP_BPS()))) expected = int256(uint256(pool.CAP_BPS()));
+        uint256 expected = penalty >= base ? uint256(pool.FLOOR_BPS()) : base - penalty;
+        if (expected < uint256(pool.FLOOR_BPS())) expected = uint256(pool.FLOOR_BPS());
+        if (expected > uint256(pool.CAP_BPS())) expected = uint256(pool.CAP_BPS());
 
-        assertEq(uint256(pool.advanceRate(ORG)), uint256(expected), "diverged from SC-FP-009");
+        assertEq(uint256(pool.advanceRate(ORG)), expected, "diverged from SC-FP-009");
     }
 
     // ─────────────────────────────────────────────────────────────────────
