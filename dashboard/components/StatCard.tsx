@@ -1,11 +1,53 @@
-import type { ReactNode } from 'react';
+'use client';
 
-export default function StatCard({ label, value, sub }: { label: string; value: ReactNode; sub?: string }) {
+import type { LucideIcon } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { fadeUp } from '@/lib/motion';
+import Card from './Card';
+
+export default function StatCard({
+  label,
+  value,
+  sub,
+  icon: Icon,
+  tint = 'var(--color-accent)',
+  index = 0,
+}: {
+  label: string;
+  value: React.ReactNode;
+  sub?: string;
+  icon: LucideIcon;
+  tint?: string;
+  index?: number;
+}) {
   return (
-    <div className="card">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value">{value}</div>
-      {sub ? <div className="stat-sub">{sub}</div> : null}
-    </div>
+    <motion.div variants={fadeUp} custom={index} initial="hidden" animate="visible">
+      <Card>
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="text-[12.5px] font-medium" style={{ color: 'var(--color-muted)' }}>
+              {label}
+            </div>
+            <div
+              className="mt-1.5 text-[26px]"
+              style={{ fontFamily: 'var(--font-heading), sans-serif', letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}
+            >
+              {value}
+            </div>
+            {sub ? (
+              <div className="mt-1 text-xs" style={{ color: 'var(--color-faint)' }}>
+                {sub}
+              </div>
+            ) : null}
+          </div>
+          <span
+            className="flex h-10 w-10 flex-none items-center justify-center rounded-xl"
+            style={{ background: `color-mix(in srgb, ${tint} 12%, white)`, color: tint }}
+          >
+            <Icon size={19} />
+          </span>
+        </div>
+      </Card>
+    </motion.div>
   );
 }

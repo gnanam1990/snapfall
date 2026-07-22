@@ -1,15 +1,20 @@
+import { FileCheck } from 'lucide-react';
+import PageHeader from '@/components/PageHeader';
+import Card from '@/components/Card';
+
 export default function AuditPage() {
   return (
     <>
-      <div className="topbar">
-        <div>
-          <h1 className="page-title">Audit</h1>
-          <p className="page-sub">The receipt: revenue, advance, fee, expenses, margin, hashes, explorer links.</p>
-        </div>
-      </div>
-      <div className="card">
-        <p className="stat-sub">The receipt view is comprehensible without reading raw transactions (FR-UI-005).</p>
-      </div>
+      <PageHeader
+        title="Audit"
+        sub="The receipt: revenue, advance, fee, expenses, margin, hashes, explorer links."
+      />
+      <Card className="flex items-center gap-3">
+        <FileCheck size={18} style={{ color: 'var(--pos)' }} />
+        <p className="m-0 text-sm" style={{ color: 'var(--color-muted)' }}>
+          The receipt view is comprehensible without reading raw transactions (FR-UI-005).
+        </p>
+      </Card>
     </>
   );
 }

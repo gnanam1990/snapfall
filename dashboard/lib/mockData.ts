@@ -30,13 +30,13 @@ const ADVANCE_OPEN: OpenAdvance = {
 };
 
 export const snapshot: OverviewSnapshot = {
-  treasuryUsdc: '0', // the $0 start — the first 10 seconds of the pitch
+  treasuryUsdc: '0', // the $0 start · the first 10 seconds of the pitch
   pool: POOL_BASE,
   activeJobs: [
     {
       jobId: 'job_104',
       customer: 'Acme Labs',
-      title: 'Competitor analysis — 3 AI coding products',
+      title: 'Competitor analysis · 3 AI coding products',
       state: 'Funded',
       priceUsdc: '25000000',
     },
@@ -56,7 +56,7 @@ export const snapshot: OverviewSnapshot = {
       ts: new Date().toISOString(),
       category: 'Job',
       type: 'job.funded',
-      summary: 'Acme Labs funded job_104 — 25.00 USDC escrowed',
+      summary: 'Acme Labs funded job_104 · 25.00 USDC escrowed',
       amountUsdc: '25000000',
       jobId: 'job_104',
       explorerUrl: `${EXPLORER}/0xfund`,
@@ -77,7 +77,7 @@ export const timeline: TimelineStep[] = [
     event: {
       category: 'Float',
       type: 'advance.issued',
-      summary: 'The snap — 12.50 USDC advanced to a 0-balance treasury at 50%',
+      summary: 'The snap · 12.50 USDC advanced to a 0-balance treasury at 50%',
       amountUsdc: '12500000',
       jobId: 'job_104',
       explorerUrl: `${EXPLORER}/0xadvance`,
@@ -90,7 +90,7 @@ export const timeline: TimelineStep[] = [
     event: {
       category: 'Finance',
       type: 'payment.delivered',
-      summary: 'x402 purchase: company profile — 0.04 USDC (policy auto-approved)',
+      summary: 'x402 purchase: company profile · 0.04 USDC (policy auto-approved)',
       amountUsdc: '40000',
       jobId: 'job_104',
     },
@@ -102,7 +102,7 @@ export const timeline: TimelineStep[] = [
     event: {
       category: 'Approval',
       type: 'approval.rejected',
-      summary: 'Owner rejected premium dataset — 4.00 USDC, over threshold',
+      summary: 'Owner rejected premium dataset · 4.00 USDC, over threshold',
       jobId: 'job_104',
     },
     treasuryUsdc: '12460000',
@@ -113,7 +113,7 @@ export const timeline: TimelineStep[] = [
     event: {
       category: 'Finance',
       type: 'payment.delivered',
-      summary: 'x402 purchase: benchmark summary — 0.06 USDC (the cheaper alternative)',
+      summary: 'x402 purchase: benchmark summary · 0.06 USDC (the cheaper alternative)',
       amountUsdc: '60000',
       jobId: 'job_104',
     },
@@ -125,7 +125,7 @@ export const timeline: TimelineStep[] = [
     event: {
       category: 'Job',
       type: 'job.accepted',
-      summary: 'Watch the Snapfall — pool repaid 12.75 first, operator 12.25',
+      summary: 'Watch the Snapfall · pool repaid 12.75 first, operator 12.25',
       amountUsdc: '12750000',
       jobId: 'job_104',
       explorerUrl: `${EXPLORER}/0xwaterfall`,
@@ -138,7 +138,7 @@ export const timeline: TimelineStep[] = [
     event: {
       category: 'Float',
       type: 'rate.updated',
-      summary: 'Advance rate 50% → 55% — the business earned cheaper capital',
+      summary: 'Advance rate 50% → 55% · the business earned cheaper capital',
       jobId: 'job_104',
     },
     treasuryUsdc: '24650000',
@@ -149,7 +149,7 @@ export const timeline: TimelineStep[] = [
     event: {
       category: 'Intake',
       type: 'job.draft.created',
-      summary: 'Next cycle — treasury reset to 0.00, rate now starts at 55%',
+      summary: 'Next cycle · treasury reset to 0.00, rate now starts at 55%',
     },
     treasuryUsdc: '0',
     pool: { tvlUsdc: '150200000', utilizationBps: 0, feesAccruedUsdc: '250000', reserveUsdc: '50000', orgRateBps: 5500 },

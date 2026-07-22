@@ -1,14 +1,26 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
+import { Zap, Waves, Landmark, Gauge, Coins, BellRing } from 'lucide-react';
 import type { OverviewSnapshot, PoolStats, OpenAdvance, FinancialEvent, StreamMessage } from '@/lib/types';
 import { formatUsdc, formatBps } from '@/lib/format';
+import { fadeUp } from '@/lib/motion';
 import MoneyGraph from '@/components/MoneyGraph';
 import StatCard from '@/components/StatCard';
+import Card, { CardTitle } from '@/components/Card';
 import EventFeed from '@/components/EventFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
 import ActiveJobs from '@/components/ActiveJobs';
+
+const inlineIcon: React.CSSProperties = {
+  display: 'inline',
+  verticalAlign: 'middle',
+  position: 'relative',
+  top: -2,
+  margin: '0 4px',
+};
 
 export default function OverviewPage() {
   const [snap, setSnap] = useState<OverviewSnapshot | null>(null);
@@ -31,72 +43,102 @@ export default function OverviewPage() {
         setTreasury(msg.treasuryUsdc);
         setPool(msg.pool);
         setAdvances(msg.openAdvances);
-        setEvents((prev) => [msg.event, ...prev].slice(0, 14));
+        setEvents((prev) => [msg.event, ...prev].slice(0, 12));
       }
     };
     es.onerror = () => es.close();
     return () => es.close();
   }, []);
 
-  if (!snap || !pool) {
-    return (
-      <>
-        <div className="topbar">
-          <h1 className="page-title">Overview</h1>
-        </div>
-        <div className="loading">Connecting to the daemon event stream…</div>
-      </>
-    );
-  }
-
   return (
     <>
-      <div className="topbar">
-        <div>
-          <h1 className="page-title">Overview</h1>
-          <p className="page-sub">One founder, a workforce that finances itself.</p>
-        </div>
-        <span className="badge-live">live · updates in &lt;2s</span>
+      {/* hero: the brand line in the template's inline-icon heading treatment */}
+      <div className="pb-7 pt-4 text-left sm:pt-7">
+        <motion.h1
+          variants={fadeUp}
+          custom={0}
+          initial="hidden"
+          animate="visible"
+          className="m-0"
+          style={{ fontSize: 'clamp(1.65rem, 4.2vw, 2.7rem)', lineHeight: 1.05, letterSpacing: '-0.01em' }}
+        >
+          <span className="whitespace-nowrap">
+            Capital in a snap
+            <Zap size={26} style={{ ...inlineIcon, color: 'var(--color-accent)' }} />
+          </span>
+          <br />
+          settlement in a waterfall
+          <Waves size={26} style={{ ...inlineIcon, marginLeft: 6, color: 'var(--sky)' }} />
+        </motion.h1>
+        <motion.p
+          variants={fadeUp}
+          custom={1}
+          initial="hidden"
+          animate="visible"
+          className="mb-0 mt-3 max-w-[560px]"
+          style={{ color: 'var(--color-muted)', lineHeight: 1.65, fontSize: 'clamp(0.9rem, 2.2vw, 1.05rem)' }}
+        >
+          One founder. A workforce that can&apos;t embezzle itself. A business that gets cheaper to run
+          every time it delivers.
+        </motion.p>
       </div>
 
-      <MoneyGraph
-        event={events[0] ?? null}
-        treasuryUsdc={treasury}
-        pool={pool}
-        jobPriceUsdc={snap.activeJobs[0]?.priceUsdc ?? '25000000'}
-      />
-
-      <div className="grid cols-4 mt">
-        <StatCard label="Pool TVL" value={<>{formatUsdc(pool.tvlUsdc)} <span className="u">USDC</span></>} sub="seeded by demo LPs" />
-        <StatCard label="Utilization" value={formatBps(pool.utilizationBps)} sub="drawn / TVL · cap 80%" />
-        <StatCard
-          label="Fees accrued"
-          value={<>{formatUsdc(pool.feesAccruedUsdc)} <span className="u">USDC</span></>}
-          sub={`first-loss reserve ${formatUsdc(pool.reserveUsdc)}`}
-        />
-        <StatCard label="Pending approvals" value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
-      </div>
-
-      <div className="grid cols-2 mt">
-        <div className="card">
-          <p className="card-title">Recent financial events</p>
-          <EventFeed events={events} />
+      {!snap || !pool ? (
+        <div className="py-20 text-center text-sm" style={{ color: 'var(--color-muted)' }}>
+          Connecting to the daemon event stream…
         </div>
-        <div className="grid" style={{ gap: 16, alignContent: 'start' }}>
-          <div className="card">
-            <p className="card-title">Workforce</p>
-            <WorkforceStrip agents={snap.workforce} />
+      ) : (
+        <>
+          <motion.div variants={fadeUp} custom={2} initial="hidden" animate="visible">
+            <MoneyGraph
+              event={events[0] ?? null}
+              treasuryUsdc={treasury}
+              pool={pool}
+              jobPriceUsdc={snap.activeJobs[0]?.priceUsdc ?? '25000000'}
+            />
+          </motion.div>
+
+          <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <StatCard index={3} label="Pool TVL" icon={Landmark} tint="var(--color-accent)"
+              value={formatUsdc(pool.tvlUsdc)} sub="USDC · seeded by demo LPs" />
+            <StatCard index={4} label="Utilization" icon={Gauge} tint="var(--sky)"
+              value={formatBps(pool.utilizationBps)} sub="drawn / TVL · cap 80%" />
+            <StatCard index={5} label="Fees accrued" icon={Coins} tint="var(--pos)"
+              value={formatUsdc(pool.feesAccruedUsdc)} sub={`USDC · reserve ${formatUsdc(pool.reserveUsdc)}`} />
+            <StatCard index={6} label="Pending approvals" icon={BellRing} tint="var(--warn)"
+              value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
           </div>
-          <div className="card">
-            <p className="card-title">Open advances</p>
-            <AdvancesTable advances={advances} />
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr] [&>*]:min-w-0">
+            <motion.div variants={fadeUp} custom={7} initial="hidden" animate="visible">
+              <Card>
+                <CardTitle>Recent financial events</CardTitle>
+                <EventFeed events={events} />
+              </Card>
+            </motion.div>
+            <div className="grid content-start gap-4 [&>*]:min-w-0">
+              <motion.div variants={fadeUp} custom={8} initial="hidden" animate="visible">
+                <Card>
+                  <CardTitle>Workforce</CardTitle>
+                  <WorkforceStrip agents={snap.workforce} />
+                </Card>
+              </motion.div>
+              <motion.div variants={fadeUp} custom={9} initial="hidden" animate="visible">
+                <Card>
+                  <CardTitle>Open advances</CardTitle>
+                  <AdvancesTable advances={advances} />
+                </Card>
+              </motion.div>
+              <motion.div variants={fadeUp} custom={10} initial="hidden" animate="visible">
+                <Card>
+                  <CardTitle>Active jobs</CardTitle>
+                  <ActiveJobs jobs={snap.activeJobs} />
+                </Card>
+              </motion.div>
+            </div>
           </div>
-          <div className="card">
-            <p className="card-title">Active jobs</p>
-            <ActiveJobs jobs={snap.activeJobs} />
-          </div>
-        </div>
-      </div>
+        </>
+      )}
     </>
   );
 }

@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FinancialEvent, PoolStats } from '@/lib/types';
 import { formatUsdc } from '@/lib/format';
+import Card, { CardTitle } from './Card';
 import ScoreRing from './ScoreRing';
 
 /**
- * F1 Live Money Graph (V10) — the "watch the Snapfall" screen.
+ * F1 Live Money Graph (V10) · the "watch the Snapfall" screen.
  *
  * A node-and-flow diagram driven by the same SSE events the Overview consumes. Each event
  * sends animated droplets down the pipe it moves money through:
@@ -15,7 +16,7 @@ import ScoreRing from './ScoreRing';
  *   payment.delivered Treasury -> Merchant (0.04/0.06)  small droplets
  *   job.accepted      Escrow -> Pool FIRST, then Escrow -> Operator   THE WATERFALL
  *   rate.updated      handled by the Score Ring via the rate prop
- * The waterfall spawns the pool droplet before the operator droplet — pool-first is the
+ * The waterfall spawns the pool droplet before the operator droplet · pool-first is the
  * whole point, so it is visible, not just described.
  */
 
@@ -34,7 +35,7 @@ const NODES: Node[] = [
   { id: 'customer', name: 'Customer', cx: 100, cy: 110 },
   { id: 'escrow', name: 'JobVault', cx: 480, cy: 90, accent: 'var(--sky)' },
   { id: 'merchant', name: 'x402 API', cx: 860, cy: 110 },
-  { id: 'pool', name: 'FloatPool', cx: 100, cy: 350, accent: 'var(--accent)' },
+  { id: 'pool', name: 'FloatPool', cx: 100, cy: 350, accent: 'var(--color-accent)' },
   { id: 'treasury', name: 'Treasury', cx: 480, cy: 270, accent: 'var(--pos)' },
   { id: 'operator', name: 'Operator', cx: 860, cy: 350 },
 ];
@@ -98,27 +99,27 @@ export default function MoneyGraph({
         spawn([{ pipe: 'fund', kind: 'fund', dur: 1.1, begin: 0 }]);
         break;
       case 'advance.issued':
-        // An advance only exists against a Funded job, so the escrow is full here — pin it,
+        // An advance only exists against a Funded job, so the escrow is full here · pin it,
         // so the snap reads 25.00 escrowed on every demo loop, not only the first.
         setEscrow('25000000');
-        setBeat({ label: 'The snap — capital in a snap', kind: 'snap' });
+        setBeat({ label: 'The snap · capital in a snap', kind: 'snap' });
         spawn([{ pipe: 'snap', kind: 'snap', dur: 0.75, begin: 0 }]);
         break;
       case 'payment.delivered':
         setSpent((s) => (BigInt(s) + BigInt(event.amountUsdc ?? '0')).toString());
-        setBeat({ label: 'Safe spend — x402 auto-approved', kind: 'spend' });
+        setBeat({ label: 'Safe spend · x402 auto-approved', kind: 'spend' });
         spawn([
           { pipe: 'spend', kind: 'spend', dur: 1.0, begin: 0 },
           { pipe: 'spend', kind: 'spend', dur: 1.0, begin: 0.18 },
         ]);
         break;
       case 'approval.rejected':
-        setBeat({ label: 'Owner rejects — the workforce cannot embezzle itself', kind: 'reject' });
+        setBeat({ label: 'Owner rejects · the workforce cannot embezzle itself', kind: 'reject' });
         break;
       case 'job.accepted':
         setEscrow('0');
         setOperatorNet('12250000');
-        setBeat({ label: 'Watch the Snapfall — pool repaid first', kind: 'fall' });
+        setBeat({ label: 'Watch the Snapfall · pool repaid first', kind: 'fall' });
         // Pool-first: the repay droplet leads, the operator droplet follows.
         spawn([
           { pipe: 'repay', kind: 'fall-pool', dur: 0.9, begin: 0 },
@@ -126,7 +127,7 @@ export default function MoneyGraph({
         ]);
         break;
       case 'rate.updated':
-        setBeat({ label: 'The flywheel — cheaper capital, earned', kind: 'flywheel' });
+        setBeat({ label: 'The flywheel · cheaper capital, earned', kind: 'flywheel' });
         break;
       case 'job.draft.created':
         setEscrow('0');
@@ -149,10 +150,10 @@ export default function MoneyGraph({
   };
 
   return (
-    <div className="mg card">
-      <div className="mg-head">
+    <Card className="overflow-hidden">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="card-title" style={{ margin: 0 }}>Live Money Graph</p>
+          <CardTitle>Live Money Graph</CardTitle>
           <div className={`mg-beat${beat ? ' show' : ''} beat-${beat?.kind ?? 'none'}`}>
             {beat?.label ?? 'watch the money move'}
           </div>
@@ -204,6 +205,6 @@ export default function MoneyGraph({
           </g>
         ))}
       </svg>
-    </div>
+    </Card>
   );
 }
