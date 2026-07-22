@@ -40,20 +40,14 @@ func goListDeps(t *testing.T, pkg string) map[string]struct{} {
 	return deps
 }
 
-// Funding cannot name a policy.Decision: no import path exists.
-func TestBoundary_FundingCannotNameAPolicyDecision(t *testing.T) {
-	deps := goListDeps(t, modulePrefix+"internal/funding")
-	if _, reachable := deps[modulePrefix+"internal/policy"]; reachable {
-		t.Fatal("internal/funding can reach internal/policy — a bare Decision becomes expressible in Funding's vocabulary, and an expired approval could sail through (Evaluate is clock-free; expiry lives in G7 alone)")
-	}
-}
-
-// Funding cannot invoke the lifecycle either — the direction of dependency is
-// wiring→funding, never funding→approval.
-func TestBoundary_FundingCannotReachTheLifecycle(t *testing.T) {
-	deps := goListDeps(t, modulePrefix+"internal/funding")
-	if _, reachable := deps[modulePrefix+"internal/approval"]; reachable {
-		t.Fatal("internal/funding can reach internal/approval — funding must be a passive boundary the wiring hands grants to")
+// The worker side of THE LAW is untouched by the funding->approval import:
+// internal/worker still reaches NOTHING but envelope (AT-16 remains in force).
+func TestBoundary_WorkerStillCannotReachFundingOrApproval(t *testing.T) {
+	deps := goListDeps(t, modulePrefix+"internal/worker")
+	for _, forbidden := range []string{"internal/funding", "internal/approval", "internal/policy"} {
+		if _, reachable := deps[modulePrefix+forbidden]; reachable {
+			t.Fatalf("internal/worker can reach %s — AT-16 violated", forbidden)
+		}
 	}
 }
 

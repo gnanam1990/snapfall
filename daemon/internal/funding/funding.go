@@ -4,11 +4,23 @@
 // instructions. Phase 1 ships the boundary, not the money: Execute records the instruction
 // and returns; wrapping the real treasury signer is Phase 2 (post-H3).
 //
-// Capability placement: this package's Agent is constructed by whoever wires the daemon and
-// handed ONLY to Brain. Workers cannot reach it — not because a check stops them, but
-// because no code path from internal/worker to this package exists (AT-16). Instructions
-// additionally carry the owner-approval evidence they were born from; an instruction
-// without it is rejected here as defense in depth, never as the primary control.
+// Capability placement, layered (the Step-6 closure of the Grant question):
+//
+//  1. Workers cannot reach this package at all — no import path exists (AT-16).
+//  2. The SOLE mutating entry point, Execute, demands an approval.Grant — the
+//     capability the G7 lifecycle mints only after every gate (hash, state, expiry,
+//     policy version, exactly-once) has passed. A Grant forged outside the approval
+//     package is empty and refused here. The wiring layer cannot invoke funding
+//     "without any Grant existing" because there is nothing else Execute accepts,
+//     and it cannot lie about amounts or approver: every value is READ FROM the
+//     grant, never supplied alongside it.
+//
+// Note the deliberate trade, made at Step-6 review: funding now imports the approval
+// package (type vocabulary for the credential), which transitively reaches policy. The
+// old import-graph proof "funding cannot name a policy.Decision" is superseded by the
+// stronger type-level property: nameable or not, a Decision has no door — the only
+// door demands the unforgeable Grant. boundary tests pin the method set and the
+// empty-grant refusal.
 package funding
 
 import (
@@ -16,19 +28,19 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/gnanam1990/snapfall/daemon/internal/approval"
 )
 
-// Instruction is a Brain-relayed, owner-approved money movement.
+// Instruction is the RECORD of an executed movement — derived inside Execute from the
+// grant, never accepted from a caller. Billing and tests read these.
 type Instruction struct {
-	JobID string
-	// Kind is what to do: "request_advance", "pay_intent", ... (Phase 2 vocabulary).
-	Kind string
-	// AmountMicros is the amount in 6dp USDC units.
+	JobID        string
+	Kind         string
 	AmountMicros int64
-	// ApprovedBy is the owner identity that authorized this; empty = not approved.
-	ApprovedBy string
-	// ApprovedAt is when the owner approved it.
-	ApprovedAt time.Time
+	Merchant     string
+	RequestID    string
+	ApprovedAt   time.Time
 }
 
 // Agent is the funding boundary. Phase 1: records instructions for inspection.
@@ -40,16 +52,24 @@ type Agent struct {
 // New returns a funding agent. Hand the pointer to Brain and to nothing else.
 func New() *Agent { return &Agent{} }
 
-// Execute performs one owner-approved instruction. Phase 1 records it; Phase 2 wraps the signer.
-func (a *Agent) Execute(ctx context.Context, instr Instruction) error {
-	if instr.ApprovedBy == "" {
-		// Defense in depth: even a correctly-routed instruction is refused without
-		// owner approval evidence (FR-BRN-004, SEC-011).
-		return fmt.Errorf("funding: instruction for job %s carries no owner approval", instr.JobID)
+// Execute performs one approved movement. Phase 2 records it; the real signer wrap
+// lands with H3. The ONLY input is the approval-minted Grant: a forged (empty) grant
+// is refused, and every recorded value derives from the grant itself.
+func (a *Agent) Execute(ctx context.Context, g approval.Grant) error {
+	if g.Empty() {
+		return fmt.Errorf("funding: refused — grant is empty (forged outside the approval lifecycle); FR-BRN-004")
 	}
+	in := g.Intent()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.executed = append(a.executed, instr)
+	a.executed = append(a.executed, Instruction{
+		JobID:        in.JobID,
+		Kind:         "pay_intent",
+		AmountMicros: in.AmountMicros,
+		Merchant:     in.Merchant,
+		RequestID:    g.RequestID(),
+		ApprovedAt:   g.GrantedAt(),
+	})
 	return nil
 }
 

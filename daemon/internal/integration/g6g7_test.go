@@ -130,22 +130,15 @@ func TestIntegration_PolicyApprovalFundingOnePath(t *testing.T) {
 	// The executor is the funding boundary: it consumes an approval-minted Grant and
 	// relays an owner-approved instruction. This is the ONLY shape in which funding
 	// ever acts — never from a bare Decision.
-	execErr := l.Execute(ctx, res.Request.Intent, res.Request.ID, func(ctx context.Context, g approval.Grant) error {
-		req, _ := l.Request(g.RequestID())
-		return fund.Execute(ctx, funding.Instruction{
-			JobID:        g.Intent().JobID,
-			Kind:         "pay_intent",
-			AmountMicros: g.Intent().AmountMicros,
-			ApprovedBy:   req.DecidedBy,
-			ApprovedAt:   req.DecidedAt,
-		})
-	})
+	// The executor hands the grant STRAIGHT to funding — wiring cannot restate or
+	// embellish the values; funding derives everything from the grant itself.
+	execErr := l.Execute(ctx, res.Request.Intent, res.Request.ID, fund.Execute)
 	if execErr != nil {
 		t.Fatalf("Execute: %v", execErr)
 	}
 
 	done := fund.Executed()
-	if len(done) != 1 || done[0].AmountMicros != 4_000_000 || done[0].ApprovedBy != "gnanam" {
+	if len(done) != 1 || done[0].AmountMicros != 4_000_000 || done[0].RequestID != res.Request.ID {
 		t.Fatalf("funding boundary saw the wrong instruction: %+v", done)
 	}
 
@@ -197,9 +190,7 @@ func TestIntegration_ExpiredApprovalNeverReachesFunding(t *testing.T) {
 	// Policy would still say yes — it cannot see time. The gate must not.
 	clock.Advance(6 * time.Minute)
 
-	err = l.Execute(ctx, res.Request.Intent, res.Request.ID, func(ctx context.Context, g approval.Grant) error {
-		return fund.Execute(ctx, funding.Instruction{JobID: g.Intent().JobID, Kind: "pay_intent", ApprovedBy: "gnanam", ApprovedAt: clock.Now()})
-	})
+	err = l.Execute(ctx, res.Request.Intent, res.Request.ID, fund.Execute)
 	if err == nil {
 		t.Fatal("an expired approval executed")
 	}
