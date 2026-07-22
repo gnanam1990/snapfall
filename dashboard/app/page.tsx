@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { OverviewSnapshot, PoolStats, OpenAdvance, FinancialEvent, StreamMessage } from '@/lib/types';
 import { formatUsdc, formatBps } from '@/lib/format';
-import TreasuryHero from '@/components/TreasuryHero';
+import MoneyGraph from '@/components/MoneyGraph';
 import StatCard from '@/components/StatCard';
 import EventFeed from '@/components/EventFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
@@ -59,7 +59,12 @@ export default function OverviewPage() {
         <span className="badge-live">live · updates in &lt;2s</span>
       </div>
 
-      <TreasuryHero treasuryUsdc={treasury} orgRateBps={pool.orgRateBps} />
+      <MoneyGraph
+        event={events[0] ?? null}
+        treasuryUsdc={treasury}
+        pool={pool}
+        jobPriceUsdc={snap.activeJobs[0]?.priceUsdc ?? '25000000'}
+      />
 
       <div className="grid cols-4 mt">
         <StatCard label="Pool TVL" value={<>{formatUsdc(pool.tvlUsdc)} <span className="u">USDC</span></>} sub="seeded by demo LPs" />

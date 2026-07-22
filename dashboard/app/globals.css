@@ -144,3 +144,51 @@ table.t { width: 100%; border-collapse: collapse; }
 
 .loading { color: var(--muted); padding: 60px 0; text-align: center; }
 .mt { margin-top: 16px; }
+
+/* ── F1 Money Graph ── */
+.mg { padding: 18px 20px 8px; overflow: hidden; }
+.mg-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.mg-beat {
+  font-size: 18px; font-weight: 700; letter-spacing: -0.02em; margin-top: 6px;
+  color: var(--muted); opacity: 0.6; transition: color 0.3s, opacity 0.3s; min-height: 26px;
+}
+.mg-beat.show { opacity: 1; }
+.beat-fund, .beat-spend { color: var(--sky); }
+.beat-snap { color: var(--accent); }
+.beat-fall { color: var(--accent); }
+.beat-reject { color: var(--warn); }
+.beat-flywheel { color: var(--violet); }
+
+.mg-svg { width: 100%; height: auto; display: block; margin-top: 2px; }
+
+/* pipes: faint conduits with a slow flow shimmer; the two hero flows read brighter */
+.mg-pipe { stroke: var(--border-2); stroke-width: 2; stroke-dasharray: 2 8; stroke-linecap: round; opacity: 0.7; animation: pipeflow 1.4s linear infinite; }
+.pipe-snap, .pipe-repay { stroke: #1f4a45; opacity: 0.9; }
+@keyframes pipeflow { to { stroke-dashoffset: -10; } }
+
+/* droplets */
+.mg-drop { }
+.drop-fund { fill: var(--sky); }
+.drop-spend { fill: var(--sky); }
+.drop-snap { fill: var(--accent); }
+.drop-fall-pool { fill: var(--accent); }
+.drop-fall-op { fill: var(--pos); }
+
+/* nodes */
+.mg-box { fill: var(--panel-2); stroke: var(--border-2); stroke-width: 1.5; }
+.mg-node .mg-box[style] { stroke: var(--n); filter: drop-shadow(0 0 8px color-mix(in srgb, var(--n) 35%, transparent)); }
+.mg-name { fill: var(--muted); font-size: 13px; font-weight: 600; text-anchor: middle; }
+.mg-bal { fill: var(--text); font-size: 14px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
+
+/* ── F2 Score Ring ── */
+.ring-wrap { position: relative; width: 120px; flex: none; text-align: center; }
+.ring-wrap.bump .ring-svg { animation: ringbump 0.5s ease; }
+@keyframes ringbump { 0%,100% { transform: scale(1); } 40% { transform: scale(1.07); } }
+.ring-svg { width: 120px; height: 120px; }
+.ring-track { fill: none; stroke: var(--border); stroke-width: 9; }
+.ring-arc { fill: none; stroke: var(--accent); stroke-width: 9; stroke-linecap: round; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 55%, transparent)); transition: stroke-dasharray 0.1s linear; }
+.ring-center { position: absolute; top: 44px; left: 0; right: 0; }
+.ring-pct { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ring-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.ring-hint { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.ring-hint b { color: var(--pos); }
