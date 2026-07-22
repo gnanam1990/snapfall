@@ -155,6 +155,52 @@ func (s *Store) MarkPublished(ctx context.Context, id int64) error {
 	return err
 }
 
+// ExecuteEffect runs a side effect for an outbox row with exactly-once semantics (G2).
+//
+// The handler receives the transaction in which the row's `published` flag is flipped, and
+// MUST perform its state changes through that transaction. Then either both the effect and
+// the flag commit, or neither does:
+//
+//   - crash BEFORE commit  -> effect rolled back, row still unpublished -> replay runs it once
+//   - crash AFTER  commit  -> row published -> replay skips it
+//
+// There is no interleaving in which the effect runs zero times or twice. The published check
+// happens inside the transaction, so two concurrent executors cannot both run the same row.
+//
+// Effects with consequences OUTSIDE this database (an HTTP call, a chain transaction) cannot
+// get this guarantee from any local machinery — those must go through an idempotency key at
+// the far end, and the handler's job is to record the attempt transactionally. Every purely
+// local effect belongs in here.
+func (s *Store) ExecuteEffect(ctx context.Context, rowID int64, fn func(tx *sql.Tx) error) (ran bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	// Claim-check inside the tx: a published row is already done.
+	var published int
+	err = tx.QueryRowContext(ctx, `SELECT published FROM outbox WHERE id = ?`, rowID).Scan(&published)
+	if err != nil {
+		return false, fmt.Errorf("loading outbox row %d: %w", rowID, err)
+	}
+	if published != 0 {
+		return false, nil
+	}
+
+	if err := fn(tx); err != nil {
+		return false, fmt.Errorf("effect for outbox row %d: %w", rowID, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE outbox SET published = 1 WHERE id = ?`, rowID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // EventCount reports how many events are in the log — used by restart recovery (AT-10)
 // to confirm state survived a kill.
 func (s *Store) EventCount(ctx context.Context) (int, error) {
