@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
@@ -128,14 +127,10 @@ type Lifecycle struct {
 
 	mu       sync.Mutex
 	requests map[string]*Request
-	inFlight atomic.Int32
 }
 
-// InFlight reports executions currently past their gates — the freeze registry's
-// probe, so an Engage() that lands mid-execution can TELL the owner (G11 pin 2).
-func (l *Lifecycle) InFlight() int { return int(l.inFlight.Load()) }
-
-// frozenErr consults the kill switch for this intent's scopes.
+// frozenErr consults the kill switch for this intent's scopes (a non-authoritative
+// fast-fail; the authoritative gate is admitExecution, which is atomic with Engage).
 func (l *Lifecycle) frozenErr(in Intent) error {
 	if l.Freeze == nil {
 		return nil
@@ -144,6 +139,18 @@ func (l *Lifecycle) frozenErr(in Intent) error {
 		return freeze.Err(e)
 	}
 	return nil
+}
+
+// admitExecution atomically gates AND counts this execution against the freeze registry.
+// The in-flight count now lives in the registry (incremented under the same lock Engage
+// snapshots), so freeze admission and the in-flight transition are one step w.r.t. a
+// concurrent Engage — closing the gap where an admitted payment was reported as
+// zero-in-flight (review fix, Anandan #4.1). With no registry wired, it is a no-op.
+func (l *Lifecycle) admitExecution(in Intent) (func(), error) {
+	if l.Freeze == nil {
+		return func() {}, nil
+	}
+	return l.Freeze.AdmitExecution(in.OrgID, in.JobID, in.AgentID)
 }
 
 // New builds a lifecycle over the given store and clock.
@@ -380,15 +387,28 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 		return ErrAlreadyExecuted
 	}
 
-	// Write-ahead: claim execution before performing it.
+	// ── ATOMIC freeze admission + claim (review fix, Anandan #4.1). While still holding
+	//    l.mu, gate on the kill switch AND count this execution in-flight in one step
+	//    (the count lives in the registry, incremented under the lock Engage snapshots).
+	//    So the freeze admission and the executed/in-flight transition are atomic w.r.t.
+	//    a concurrent Engage: it either refuses this execution or reports it in-flight —
+	//    never "nothing was in flight" while a payment proceeds. Frozen here -> no claim,
+	//    intent NOT burned. ──
+	release, err := l.admitExecution(req.Intent)
+	if err != nil {
+		l.mu.Unlock()
+		return err
+	}
+
+	// Write-ahead: claim execution before performing it (atomic with the admission above).
 	req.Executed = true
 	req.ExecutedAt = l.clock()
 	l.mu.Unlock()
 
 	// The claim MUST be durable before the executor runs (review-batch fix): a
 	// memory-only claim disappears in a crash and the payment would repeat. If the
-	// append fails, un-claim and abort — the executor has not run, so retrying later
-	// is safe. No durable claim, no execution.
+	// append fails, un-claim, release the in-flight admission, and abort — the executor
+	// has not run, so retrying later is safe. No durable claim, no execution.
 	if err := l.appendEvent(ctx, req.JobID, "payment.executing", map[string]any{
 		"request_id": req.ID, "intent_hash": req.IntentHash,
 	}); err != nil {
@@ -396,13 +416,13 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 		req.Executed = false
 		req.ExecutedAt = time.Time{}
 		l.mu.Unlock()
+		release()
 		return fmt.Errorf("refusing to execute without a durable claim: %w", err)
 	}
 
-	// In-flight window: a freeze engaged from here until the executor returns is
-	// recorded with this execution counted, and the owner report says it completed.
-	l.inFlight.Add(1)
-	defer l.inFlight.Add(-1)
+	// Release the in-flight admission when the executor returns; a freeze engaged in this
+	// window is recorded with this execution counted, and the owner report says it completed.
+	defer release()
 
 	grant := Grant{intent: in, requestID: req.ID, grantedAt: req.ExecutedAt}
 	if err := exec(ctx, grant); err != nil {

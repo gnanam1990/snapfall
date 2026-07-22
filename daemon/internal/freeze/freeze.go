@@ -66,12 +66,40 @@ func key(kind Kind, id string) string { return string(kind) + ":" + id }
 type Registry struct {
 	st    *store.Store
 	clock func() time.Time
-	// InFlightProbe reports executions currently past their gates (wired to
-	// approval.Lifecycle.InFlight). Optional; nil probes as zero.
-	InFlightProbe func() int
 
 	mu     sync.Mutex
 	active map[string]Entry
+	// inFlight counts executions admitted past the freeze gate and not yet completed.
+	// It is incremented by AdmitExecution and read by Engage UNDER THE SAME LOCK, so a
+	// freeze can never observe a not-frozen admission without also counting it (review
+	// fix, Anandan #4.1). This is the atomicity the previous external probe lacked.
+	inFlight int
+}
+
+// AdmitExecution atomically gates one execution on the freeze state and, if admitted,
+// counts it in flight — both under r.mu, so it is serialized with Engage. Either Engage
+// runs first (this admission then sees the freeze and is refused) or this admission runs
+// first (Engage then snapshots it as in-flight); there is no gap in which an admitted
+// execution is reported as zero-in-flight. The returned release decrements the count and
+// is idempotent; call it exactly when the execution finishes.
+func (r *Registry) AdmitExecution(org, job, agent string) (func(), error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, k := range []string{key(KindOrg, org), key(KindJob, job), key(KindAgent, agent)} {
+		if e, ok := r.active[k]; ok && e.ID != "" {
+			hit := e
+			return nil, Err(&hit)
+		}
+	}
+	r.inFlight++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.mu.Lock()
+			r.inFlight--
+			r.mu.Unlock()
+		})
+	}, nil
 }
 
 // NewRegistry builds a registry and REPLAYS freeze state from the event log, so a
@@ -128,11 +156,10 @@ func (r *Registry) Engage(ctx context.Context, kind Kind, id, by, reason string)
 		return existing, nil
 	}
 
-	inFlight := 0
-	if r.InFlightProbe != nil {
-		inFlight = r.InFlightProbe()
-	}
-	e := Entry{Kind: kind, ID: id, By: by, Reason: reason, At: r.clock().UTC(), InFlightAtEngage: inFlight}
+	// The in-flight count is read under the SAME r.mu that AdmitExecution increments it
+	// under, so this snapshot is exact: it counts every execution admitted before this
+	// freeze and none admitted after (review fix, Anandan #4.1).
+	e := Entry{Kind: kind, ID: id, By: by, Reason: reason, At: r.clock().UTC(), InFlightAtEngage: r.inFlight}
 
 	// Event FIRST (durable, transactional with its outbox row), then the flag. A crash
 	// between the two re-engages on replay — fail-frozen, never fail-open.

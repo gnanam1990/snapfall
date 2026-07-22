@@ -19,8 +19,10 @@ import (
 	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/agents"
+	"github.com/gnanam1990/snapfall/daemon/internal/brain"
 	"github.com/gnanam1990/snapfall/daemon/internal/config"
 	"github.com/gnanam1990/snapfall/daemon/internal/events"
+	"github.com/gnanam1990/snapfall/daemon/internal/funding"
 	"github.com/gnanam1990/snapfall/daemon/internal/logging"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 	"github.com/gnanam1990/snapfall/daemon/internal/supervisor"
@@ -138,6 +140,23 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool) erro
 		return err
 	}
 	log.Info("store ready", "path", dbPath, "journal_mode", mode, "existing_events", existing)
+
+	// ── Brain runtime-state recovery (G11 / review fix, Anandan #4.2) ──
+	// Rehydrate Brain's job map from the durable per-job memory files at startup, so a
+	// job that was mid-flight before a restart (e.g. parked in qa_review with a draft)
+	// resumes at its recorded stage instead of vanishing. Previously Brain.Recover had
+	// no production caller and therefore no runtime effect. (Full Brain routing into the
+	// supervisor is later work; this establishes the durable recovery step now.)
+	memDir := filepath.Join(filepath.Dir(dbPath), "memory")
+	mem, err := brain.NewMemoryStore(memDir)
+	if err != nil {
+		return fmt.Errorf("opening brain memory store %s: %w", memDir, err)
+	}
+	br := brain.New(log, st, mem, funding.New())
+	if err := br.Recover(); err != nil {
+		return fmt.Errorf("recovering brain state: %w", err)
+	}
+	log.Info("brain state recovered", "memory_dir", memDir, "jobs", br.JobCount())
 
 	// ── Typed bus + outbox publisher ──
 	bus := events.NewBus()

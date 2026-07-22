@@ -98,6 +98,63 @@ func TestG9_AuthorReportAloneNeverReachesDeliveryReady(t *testing.T) {
 	}
 }
 
+// Review fix (Anandan #4.3): a job crashed mid-review recovers its DRAFT, so a later
+// passing verdict emits a REAL delivery report rather than an empty one. Without the
+// fix, jm.Draft is empty and the recovered report is blank.
+func TestRecover_RestoresQADraftForNonEmptyReport(t *testing.T) {
+	dir := t.TempDir()
+	mem, err := NewMemoryStore(filepath.Join(dir, "jobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b1, st, _ := newTestBrain(t)
+	b1.memory = mem
+	if err := b1.RegisterQAWorker(qa.Worker{}); err != nil { // sets qaKind
+		t.Fatalf("RegisterQAWorker: %v", err)
+	}
+	// Swap in a QA worker that never verdicts, so the job parks in qa_review with a draft.
+	b1.mu.Lock()
+	b1.workers[b1.qaKind] = silentWorker{kind: b1.qaKind}
+	b1.mu.Unlock()
+	ctx := context.Background()
+
+	if _, err := b1.HandleOwnerRequest(ctx, "job_draft", "Acme Corp"); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if err := b1.Confirm(ctx, "job_draft", "gnanam"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if js, _ := b1.Job("job_draft"); js.Stage != StageQAReview || js.Draft == nil {
+		t.Fatalf("precondition: want qa_review with a draft, got stage=%s draft=%v", js.Stage, js.Draft)
+	}
+	// The crux of the fix: the draft is durably persisted, not memory-only.
+	if jm, _ := mem.Get("job_draft"); jm.Draft == "" {
+		t.Fatal("draft was not persisted to JobMemory — recovery would emit an empty report")
+	}
+
+	// "Restart": a fresh Brain over the same memory recovers the parked job AND its draft.
+	b2 := New(b1.log, st, mem, b1.funding)
+	b2.SetScoper(StubScoper{})
+	if err := b2.Recover(); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	b2.mu.Lock()
+	jsPtr := b2.jobs["job_draft"]
+	b2.mu.Unlock()
+	if jsPtr == nil || jsPtr.Draft == nil {
+		t.Fatalf("draft lost across restart: %+v", jsPtr)
+	}
+
+	// A passing verdict on the RECOVERED job produces a NON-EMPTY report from the draft.
+	if err := b2.markDeliveryReady(ctx, jsPtr, envelope.QAVerdict{Passed: true, Disclaimer: qa.Disclaimer}); err != nil {
+		t.Fatalf("markDeliveryReady: %v", err)
+	}
+	if jm2, _ := mem.Get("job_draft"); jm2.Report == "" {
+		t.Fatal("recovered job produced an EMPTY delivery report — the fix did not take")
+	}
+}
+
 // silentWorker accepts its assignment and says nothing.
 type silentWorker struct{ kind string }
 

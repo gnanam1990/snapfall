@@ -39,7 +39,6 @@ func TestAT10Extended_KillFreezeRestartUnfreeze(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewRegistry: %v", err)
 		}
-		reg.InFlightProbe = l.InFlight
 		l.Freeze = reg
 		return l, reg, funding.New()
 	}

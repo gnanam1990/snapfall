@@ -38,8 +38,12 @@ type JobMemory struct {
 	Report         string         `json:"report,omitempty"`
 	// G9: the QA trail — every bounce reason, the revision count, and the
 	// evidence-not-guarantee disclaimer surfaced with any verdict.
-	QANotes       []string  `json:"qa_notes,omitempty"`
-	QADisclaimer  string    `json:"qa_disclaimer,omitempty"`
+	QANotes      []string `json:"qa_notes,omitempty"`
+	QADisclaimer string   `json:"qa_disclaimer,omitempty"`
+	// Draft is the author's deliverable under QA, persisted as JSON so a crash during
+	// qa_review/revision recovers the actual content — without it, recovery would emit an
+	// EMPTY delivery report (review fix, Anandan #4.3). Cleared once the report is sealed.
+	Draft         string    `json:"draft,omitempty"`
 	RevisionCount int       `json:"revision_count,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

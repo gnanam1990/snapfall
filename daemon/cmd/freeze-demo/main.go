@@ -83,7 +83,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		r.InFlightProbe = l.InFlight
+		// The registry now counts in-flight executions itself, atomically at admission
+		// (Execute -> AdmitExecution when Freeze is wired). No external probe to wire.
 		l.Freeze = r
 		return l, r, funding.New()
 	}

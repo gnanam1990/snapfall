@@ -31,7 +31,6 @@ func newFrozenFixture(t *testing.T) (*fixture, *freeze.Registry, *store.Store) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	reg.InFlightProbe = f.l.InFlight
 	f.l.Freeze = reg
 	return f, reg, st
 }

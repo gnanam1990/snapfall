@@ -219,7 +219,13 @@ func TestFreeze_StatusReportCarriesInFlightNote(t *testing.T) {
 	r, _ := newRegistry(t)
 	ctx := context.Background()
 
-	r.InFlightProbe = func() int { return 1 } // one execution mid-flight
+	// One execution admitted past the freeze gate (counts in-flight under r.mu, the same
+	// lock Engage snapshots — the atomicity the old external probe lacked).
+	release, err := r.AdmitExecution("org_demo", "job_x", "agent_x")
+	if err != nil {
+		t.Fatalf("AdmitExecution: %v", err)
+	}
+	defer release()
 	r.Engage(ctx, KindOrg, "org_demo", "gnanam", "kill switch during payment")
 
 	rep := r.StatusReport()
@@ -240,6 +246,40 @@ func TestFreeze_StatusReportCarriesInFlightNote(t *testing.T) {
 	r2.Engage(ctx, KindJob, "job_a", "gnanam", "quiet freeze")
 	if note := r2.StatusReport().InFlightNote; note != "" {
 		t.Errorf("unexpected in-flight note: %q", note)
+	}
+}
+
+// Review fix (Anandan #4.1): admission and the in-flight count are one step under r.mu,
+// so a freeze can never observe a not-frozen admission without counting it, and no new
+// admission slips past a live freeze.
+func TestFreeze_AdmitExecutionSerializedWithEngage(t *testing.T) {
+	r, _ := newRegistry(t)
+	ctx := context.Background()
+
+	// An execution admitted before the freeze is counted in flight.
+	release, err := r.AdmitExecution("org_demo", "job_x", "agent_x")
+	if err != nil {
+		t.Fatalf("first admit: %v", err)
+	}
+	e, err := r.Engage(ctx, KindOrg, "org_demo", "gnanam", "freeze during payment")
+	if err != nil {
+		t.Fatalf("Engage: %v", err)
+	}
+	if e.InFlightAtEngage != 1 {
+		t.Fatalf("in_flight_at_engage = %d, want 1 — the freeze missed an admitted execution", e.InFlightAtEngage)
+	}
+
+	// After the freeze, a NEW execution in that scope is refused — no admission past a
+	// live freeze, so no Grant, no money.
+	if _, err := r.AdmitExecution("org_demo", "job_y", "agent_y"); err == nil {
+		t.Fatal("admission in a frozen org must be refused")
+	}
+
+	// The admitted execution completes and un-counts; release is idempotent.
+	release()
+	release()
+	if got := r.StatusReport(); got.Active[0].InFlightAtEngage != 1 {
+		t.Fatalf("recorded entry mutated after release: %+v", got.Active)
 	}
 }
 
