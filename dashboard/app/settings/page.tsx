@@ -1,15 +1,20 @@
+import { HandPalm } from '@phosphor-icons/react/dist/ssr';
+import PageHeader from '@/components/PageHeader';
+import Card, { CardBody } from '@/components/Card';
+
 export default function SettingsPage() {
   return (
     <>
-      <div className="topbar">
-        <div>
-          <h1 className="page-title">Settings</h1>
-          <p className="page-sub">Models, integrations, policies, wallet/chain, global freeze.</p>
-        </div>
-      </div>
-      <div className="card">
-        <p className="stat-sub">Includes the global kill switch: stop new tasks, signatures, and advances.</p>
-      </div>
+      <PageHeader
+        title="Settings"
+        sub="Models, integrations, policies, wallet and chain, global freeze."
+      />
+      <Card><CardBody className="flex items-center gap-3">
+        <HandPalm size={20} weight="regular" color='var(--color-muted)' />
+        <p className="m-0 text-sm" style={{ color: 'var(--color-muted)' }}>
+          Includes the global kill switch: stop new tasks, signatures, and advances within 1s.
+        </p>
+      </CardBody></Card>
     </>
   );
 }

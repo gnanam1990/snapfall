@@ -5,8 +5,8 @@ import { formatBps, formatUsdc } from '@/lib/format';
 
 /**
  * F2 Snapfall Score Ring (V11). The advance rate rendered as a felt reward: the number
- * eases 50% -> 55% on the flywheel event, the ring bumps, and a "next job unlocks N" line
- * makes the abstract on-chain rate concrete. Value is read from chain via the SSE stream.
+ * eases 50% -> 55% on the flywheel event and the ring bumps. Only the percentage lives
+ * inside the circle; labels sit below it, so nothing can clip.
  */
 export default function ScoreRing({
   rateBps,
@@ -49,31 +49,37 @@ export default function ScoreRing({
   const FLOOR = 3000;
   const CAP = 8500;
   const frac = Math.max(0, Math.min(1, (displayBps - FLOOR) / (CAP - FLOOR)));
-  const R = 46;
+  const R = 52;
   const CIRC = 2 * Math.PI * R;
   const dash = CIRC * frac;
 
   const unlock = jobPriceUsdc ? formatUsdc((BigInt(jobPriceUsdc) * BigInt(displayBps)) / 10_000n) : null;
 
   return (
-    <div className={`ring-wrap${bump ? ' bump' : ''}`}>
-      <svg viewBox="0 0 120 120" className="ring-svg" aria-hidden="true">
-        <circle cx="60" cy="60" r={R} className="ring-track" />
-        <circle
-          cx="60"
-          cy="60"
-          r={R}
-          className="ring-arc"
-          strokeDasharray={`${dash} ${CIRC - dash}`}
-          strokeDashoffset={0}
-          transform="rotate(-90 60 60)"
-        />
-      </svg>
-      <div className="ring-center">
-        <div className="ring-pct">{formatBps(displayBps)}</div>
-        <div className="ring-lbl">advance&nbsp;rate</div>
+    <div className="ring-wrap">
+      <div className={`ring-figure${bump ? ' bump' : ''}`}>
+        <svg viewBox="0 0 120 120" className="ring-svg" aria-hidden="true">
+          <circle cx="60" cy="60" r={R} className="ring-track" />
+          <circle
+            cx="60"
+            cy="60"
+            r={R}
+            className="ring-arc"
+            strokeDasharray={`${dash} ${CIRC - dash}`}
+            strokeDashoffset={0}
+            transform="rotate(-90 60 60)"
+          />
+        </svg>
+        <div className="ring-center">
+          <span className="ring-pct">{formatBps(displayBps)}</span>
+        </div>
       </div>
-      {unlock ? <div className="ring-hint">next job unlocks <b>{unlock}</b></div> : null}
+      <div className="ring-cap">Advance rate</div>
+      {unlock ? (
+        <div className="ring-hint">
+          next job unlocks <b>{unlock}</b>
+        </div>
+      ) : null}
     </div>
   );
 }

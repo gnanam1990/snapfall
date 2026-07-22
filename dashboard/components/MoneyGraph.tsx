@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FinancialEvent, PoolStats } from '@/lib/types';
 import { formatUsdc } from '@/lib/format';
+import Card, { CardHeader, Well } from './Card';
 import ScoreRing from './ScoreRing';
 
 /**
- * F1 Live Money Graph (V10) — the "watch the Snapfall" screen.
+ * F1 Live Money Graph (V10) · the "watch the Snapfall" screen.
  *
  * A node-and-flow diagram driven by the same SSE events the Overview consumes. Each event
  * sends animated droplets down the pipe it moves money through:
@@ -15,7 +16,7 @@ import ScoreRing from './ScoreRing';
  *   payment.delivered Treasury -> Merchant (0.04/0.06)  small droplets
  *   job.accepted      Escrow -> Pool FIRST, then Escrow -> Operator   THE WATERFALL
  *   rate.updated      handled by the Score Ring via the rate prop
- * The waterfall spawns the pool droplet before the operator droplet — pool-first is the
+ * The waterfall spawns the pool droplet before the operator droplet · pool-first is the
  * whole point, so it is visible, not just described.
  */
 
@@ -34,7 +35,7 @@ const NODES: Node[] = [
   { id: 'customer', name: 'Customer', cx: 100, cy: 110 },
   { id: 'escrow', name: 'JobVault', cx: 480, cy: 90, accent: 'var(--sky)' },
   { id: 'merchant', name: 'x402 API', cx: 860, cy: 110 },
-  { id: 'pool', name: 'FloatPool', cx: 100, cy: 350, accent: 'var(--accent)' },
+  { id: 'pool', name: 'FloatPool', cx: 100, cy: 350, accent: 'var(--color-accent)' },
   { id: 'treasury', name: 'Treasury', cx: 480, cy: 270, accent: 'var(--pos)' },
   { id: 'operator', name: 'Operator', cx: 860, cy: 350 },
 ];
@@ -66,11 +67,13 @@ export default function MoneyGraph({
   treasuryUsdc,
   pool,
   jobPriceUsdc,
+  streamStatus = 'live',
 }: {
   event: FinancialEvent | null;
   treasuryUsdc: string;
   pool: PoolStats;
   jobPriceUsdc?: string;
+  streamStatus?: 'connecting' | 'live' | 'reconnecting';
 }) {
   // Balances the graph tracks locally from the event stream (treasury + pool come from props).
   // Every figure is DERIVED from event amounts - no demo constants (review: PR #9).
@@ -170,18 +173,31 @@ export default function MoneyGraph({
   };
 
   return (
-    <div className="mg card">
-      <div className="mg-head">
-        <div>
-          <p className="card-title" style={{ margin: 0 }}>Live Money Graph</p>
+    <Card>
+      <CardHeader
+        title="Live money graph"
+        meta={
+          streamStatus === 'live' ? (
+            <>
+              <span className="dot-live" style={{ width: 6, height: 6 }} /> demo replay · updates in &lt;2s
+            </>
+          ) : (
+            <>
+              <span className="dot-live" style={{ width: 6, height: 6, background: 'var(--warn)', animation: 'none' }} /> reconnecting…
+            </>
+          )
+        }
+      />
+      <div className="p-5">
+        <div className="flex items-center justify-between gap-4">
           <div className={`mg-beat${beat ? ' show' : ''} beat-${beat?.kind ?? 'none'}`}>
             {beat?.label ?? 'watch the money move'}
           </div>
+          <ScoreRing rateBps={pool.orgRateBps} jobPriceUsdc={jobPriceUsdc} />
         </div>
-        <ScoreRing rateBps={pool.orgRateBps} jobPriceUsdc={jobPriceUsdc} />
-      </div>
 
-      <svg viewBox="0 0 960 440" className="mg-svg" role="img" aria-label="Snapfall money flow">
+        <Well className="mt-3 px-2 py-1">
+          <svg viewBox="0 0 960 440" className="mg-svg" role="img" aria-label="Snapfall money flow">
         <defs>
           <filter id="mg-glow" x="-60%" y="-60%" width="220%" height="220%">
             <feGaussianBlur stdDeviation="4" result="b" />
@@ -206,25 +222,27 @@ export default function MoneyGraph({
           </circle>
         ))}
 
-        {/* nodes */}
-        {NODES.map((n) => (
-          <g key={n.id} className="mg-node">
-            <rect
-              x={n.cx - W / 2}
-              y={n.cy - H / 2}
-              width={W}
-              height={H}
-              rx={13}
-              className="mg-box"
-              style={n.accent ? ({ ['--n' as string]: n.accent }) : undefined}
-            />
-            <text x={n.cx} y={n.cy - 6} className="mg-name">{n.name}</text>
-            <text x={n.cx} y={n.cy + 15} className="mg-bal">
-              {balances[n.id] == null ? 'Acme Labs' : `${formatUsdc(balances[n.id] as string)} USDC`}
-            </text>
-          </g>
-        ))}
-      </svg>
-    </div>
+          {/* nodes */}
+          {NODES.map((n) => (
+            <g key={n.id} className="mg-node">
+              <rect
+                x={n.cx - W / 2}
+                y={n.cy - H / 2}
+                width={W}
+                height={H}
+                rx={13}
+                className="mg-box"
+                style={n.accent ? ({ ['--n' as string]: n.accent }) : undefined}
+              />
+              <text x={n.cx} y={n.cy - 6} className="mg-name">{n.name}</text>
+              <text x={n.cx} y={n.cy + 15} className="mg-bal">
+                {balances[n.id] == null ? 'Acme Labs' : `${formatUsdc(balances[n.id] as string)} USDC`}
+              </text>
+            </g>
+          ))}
+        </svg>
+        </Well>
+      </div>
+    </Card>
   );
 }

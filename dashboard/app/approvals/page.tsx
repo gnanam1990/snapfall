@@ -1,15 +1,20 @@
+import { ShieldWarning } from '@phosphor-icons/react/dist/ssr';
+import PageHeader from '@/components/PageHeader';
+import Card, { CardBody } from '@/components/Card';
+
 export default function ApprovalsPage() {
   return (
     <>
-      <div className="topbar">
-        <div>
-          <h1 className="page-title">Approvals</h1>
-          <p className="page-sub">Approve, reject, or request a cheaper alternative — the rejection beat.</p>
-        </div>
-      </div>
-      <div className="card">
-        <p className="stat-sub">The approvals inbox arrives with V8, wired to the H2 approval lifecycle.</p>
-      </div>
+      <PageHeader
+        title="Approvals"
+        sub="Approve, reject, or request a cheaper alternative. The rejection beat lives here."
+      />
+      <Card><CardBody className="flex items-center gap-3">
+        <ShieldWarning size={20} weight="regular" color='var(--color-muted)' />
+        <p className="m-0 text-sm" style={{ color: 'var(--color-muted)' }}>
+          The approvals inbox arrives with V8, wired to the H2 approval lifecycle.
+        </p>
+      </CardBody></Card>
     </>
   );
 }
