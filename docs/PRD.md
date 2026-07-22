@@ -188,6 +188,8 @@ End-to-end flow (all amounts exact):
 12. **The fall:** one atomic transaction — **12.75 to the pool first** (12.50 principal + 0.25 fee at 200 bps on the advance), remainder to the operator.
 13. **The flywheel:** the rate ring ticks **50% → 55%**; "next job unlocks 13.75."
 
+**Precondition for step 3 (the snap):** FloatPool must be seeded with **TVL ≥ 125 USDC** before the demo. The frozen contract caps per-org exposure at 10% of TVL (`ORG_EXPOSURE_CAP_BPS = 1000`), so the 12.50 advance reverts `CapExceeded` on any smaller pool. Plan **150 USDC** for headroom — it also covers the 13.75 second-job beat (needs ≥ 137.50). Seeding lands in the V12 seed script.
+
 ### 5.2 The generalization beat — Project-Build Fund Monitor (≤30 s)
 
 The escrow-native standing pipeline: a client pays a contractor through Snapfall; the **Build-Monitor-worker** watches the contractor's repo; on a fund request it reports completion % to Brain **before** any release; each milestone = a **fresh JobVault cycle** (§6.4) through the identical loop.
@@ -413,6 +415,23 @@ AT-01..15 remain in force from the v4 SRS annex, with AT-10 extended (restart re
 - Recording integrity: replay of real runs, live transactions, disclosed caption. Record Thu; edit + deck + README Fri (**Teammate 2 owns final README/deck review**).
 - Submission Sat 8 Aug, evening IST; all links verified incognito. Sun 9 Aug = AoE contingency only, not build time.
 
+### 11.4 Requirement-to-test traceability *(proposed — mined from the Kimi formalization, standup ratification required)*
+
+Canonical IDs only; the invented AT-20/AT-21 from the source material are deliberately excluded.
+
+| Requirement / rule | Verified by |
+|---|---|
+| FR-BRN-001 / FR-BRN-003 — Brain is sole router; Workers report to Brain only | AT-16 (a Worker → Funding direct call is impossible) |
+| FR-BRN-004 — Funding acts only on Brain-relayed, owner-approved instructions | AT-16 + AT-05 approval-hash binding (v4 annex) |
+| FR-PIPE-001 / ADR-016 — fresh JobVault job per milestone | AT-17 (second advance on a prior job reverts; SC-FP-003 contract tests) |
+| Law 5 / §6.7 — x402 stays inside Circle's facilitator | AT-18 |
+| FR-QA-001 — QA bounce blocks `DeliveryReady` until revised | AT-19 |
+| NFR-v7-01 — Brain restart rebuilds from the event log | AT-10 (extended) |
+| FR-FLT-002 (amended) — advance formula, 10%/80% caps, 200 bps fee, reserve cut | Frozen contract suite (rate, caps, fee, reserve tests) |
+| Settlement waterfall ordering — pool principal + fee before operator | Frozen contract suite (ordering asserted; reordering fails red) |
+| FR-APR-004 / AT-05 — substitution defence (hash + live merchant/price/asset equality) | Sidecar service tests on `main` (hash mismatch, merchant swap, price-exceeds-reserved) |
+| SEC-009 — kill switch stops payments and advances ≤1 s | AT-09 |
+
 ---
 
 ## 12. Timeline, Milestones & Operating Rules
@@ -464,6 +483,7 @@ AT-01..15 remain in force from the v4 SRS annex, with AT-10 extended (restart re
 | USYC | Idle pool capital sweep | Mock behind interface if the testnet integration is unavailable in time (stays mock per cut order). |
 | Circle Session Keys | Roadmap: in-contract staged release | Post-GA; removes the fresh-job-per-milestone workaround. |
 | CCTP | Roadmap: funding | Post-submission. |
+| **Demo pool seeding** | The snap beat (§5.1 step 3) | **FloatPool TVL ≥ 125 USDC required** for the 12.50 advance under the 10% per-org exposure cap; seed **150** (V12 seed script). Under-seeding reverts `CapExceeded` at the demo's most important moment. |
 
 ---
 
@@ -523,7 +543,15 @@ AT-01..15 remain in force from the v4 SRS annex, with AT-10 extended (restart re
 
 ### 17.2 Open items
 
-- None unresolved in the v7 line. The milestone ↔ JobVault mapping (v6's open item) is resolved by SC-FP-003 (§6.4). The approval-fatigue digest is P1 and first in the cut order; policy sliders/playground and the shareable receipt card are conditional garnish.
+Resolved: the milestone ↔ JobVault mapping (v6's open item) is resolved by SC-FP-003 (§6.4). The approval-fatigue digest is P1 and first in the cut order; policy sliders/playground and the shareable receipt card are conditional garnish.
+
+Open *(added by the Kimi-formalization mining pass — each needs a standup ruling)*:
+
+| # | Open question |
+|---|---|
+| OQ-A | **WorkforceRegistry / ADR-019 provenance.** v7.1 lists exactly eight ADRs and claims "zero new decisions"; ADR-019 and FR-WFR-001/002 exist only in the v7.2 line. Ratify ADR-019 explicitly (one standup nod) or mark it pending. Roadmap placement is unaffected either way. |
+| OQ-B | **The "84 tests green" figure is stale.** The five contract test files on disk contain ~102 `function test` declarations (Advance 18, FloatPool 19, JobVault 30, Waterfall 24, Wiring 11). The frozen suite is *larger* than advertised — good news, but the number is cited in three normative places and should be corrected once, everywhere. |
+| OQ-C | **Event-name drift vs the frozen ABI.** The H1 handshake schema says `DeliverySet` and `RateUpdated`; the frozen contracts emit `DeliverySubmitted` and `RateChanged` (and also `AdvanceRepaid`, absent from the H1 list). The contract names are frozen and win; WORK-SPLIT.md is corrected in this PR — indexer (A2) and Score Ring (V11) consume the corrected names. |
 
 ---
 
@@ -541,6 +569,23 @@ AT-01..15 remain in force from the v4 SRS annex, with AT-10 extended (restart re
 | 2:10–2:25 | Flywheel | Ring 50% → 55%; "next job unlocks 13.75." |
 | 2:25–2:50 | Generalization | Build-Monitor: milestone → completion % → fresh job cycles the same rails. "Different work. Same Brain. Same waterfall." |
 | 2:50–3:00 | Close | Adoption map flash. "Snapfall, built on Arc. The first AI business that finances itself." |
+
+### A.1 Per-beat replayable evidence *(proposed — mined from the Kimi formalization, standup ratification required)*
+
+What each beat leaves behind for the recording-integrity rule (NFR-v7-07) and judge Q&A. Honest note: the rejection in beat 5 is deliberately an **off-chain** human decision (inbox escalation + rejected PaymentIntent record); its on-chain half is the $0.06 replacement settlement. The opening balance read and the close carry no new transaction.
+
+| Beat | Replayable evidence |
+|---|---|
+| Thesis | Treasury balance read: 0.00 (explorer address view) |
+| Brain scopes + fund | `JobCreated` + `JobFunded` events; 25 USDC escrow tx |
+| The snap | `AdvanceIssued` event; 12.50 transfer to treasury, sub-second |
+| Autonomous work | x402 settlement for 0.04; payment receipt with request/response hashes; compliance screen record |
+| Human control | Inbox escalation + rejected PaymentIntent (off-chain, by design); $0.06 replacement x402 settlement (on-chain half) |
+| QA + delivery | Bounce-with-reasons record; revised deliverable; `DeliverySubmitted` event with content hash |
+| The fall | One atomic tx: `AdvanceRepaid` (12.75 to pool) then operator transfer; `JobSettled(advanceRepaid, operatorNet)` |
+| Flywheel | `RateChanged` event; `advanceRate()` read: 5000 → 5500 bps |
+| Generalization | Fresh `JobCreated`/`JobFunded`/`AdvanceIssued` cycle for the milestone job |
+| Close | No new transaction (adoption-map slide) |
 
 ## Appendix B — Source Consolidation & Credit Map
 
@@ -585,6 +630,22 @@ Every component's origin, credited — nothing in this PRD is uncredited or sile
 | **TVL** | Total value locked in the pool. |
 | **AoE** | Anywhere on Earth — the submission-buffer timezone convention for Sun 9 Aug. |
 | **AT / FR / NFR / SEC / SC** | Acceptance test / functional / non-functional / security / smart-contract requirement families (detailed IDs in the v4 SRS annex). |
+
+## Appendix D — Data Schemas *(proposed — input to the Fri 24 Jul interface freeze; standup ratification required)*
+
+The four record shapes the Brain runtime, policy engine, sidecar, and dashboard exchange. The PaymentIntent and approval-token shapes below are **already shipped in code on `main`** (`sidecar/src/h3.ts`, H2/H3 handshake surface) — freezing them here costs nothing and prevents drift. Amounts are atomic-USDC decimal strings (6dp).
+
+**PaymentIntent (wire form; H3 `pay` input, policy-engine output):**
+`intentId, jobId, taskId, agentId, resource, network, asset, merchant, amount, maxAmount, purpose, nonce, decision (AUTO_APPROVE | HUMAN_APPROVED | HUMAN_APPROVAL_REQUIRED | DENY), policyVersion, createdAt, expiresAt` — all strings. The 14-field canonical subset (excluding `decision`, `createdAt`) is keccak256-hashed as `intentHash`; approval binds to that hash (AT-05).
+
+**Approval token (H2 decision object, consumed unchanged by H3 `pay`):**
+`intentHash, decision, approvedAmount, approver, policyVersion, issuedAt, expiresAt, signature` — HMAC-SHA256 over `intentHash|decision|approvedAmount|expiresAt`, lowercase hex.
+
+**Brain per-job memory file (FR-BRN-002):**
+`jobId, scope, stagePercent, assignedWorker, ownerConfirmations[] (each with timestamp), escrowState, settlementState` — rebuilt from the event log on restart (NFR-v7-01).
+
+**Worker manifest (policy surface, FR-POL-010):**
+`role, model, memoryNamespace, filesystemScope, commandAllowlist, networkAllowlist, budgetUsdc, perTxLimitUsdc, blockedCategories (default: token-trading, gambling), escalatesTo` — validated deterministically before activation; `can_sign_payments`/`can_request_advance` are structurally false for every Worker.
 
 ---
 
