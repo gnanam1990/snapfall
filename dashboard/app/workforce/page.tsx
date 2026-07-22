@@ -1,4 +1,4 @@
-import { UsersThree } from '@phosphor-icons/react';
+import { UsersThree } from '@phosphor-icons/react/dist/ssr';
 import PageHeader from '@/components/PageHeader';
 import Card, { CardBody } from '@/components/Card';
 

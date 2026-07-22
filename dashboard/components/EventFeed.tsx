@@ -15,7 +15,7 @@ import {
   type Icon,
 } from '@phosphor-icons/react';
 import type { FinancialEvent, EventCategory } from '@/lib/types';
-import { formatUsdc, relativeTime } from '@/lib/format';
+import { formatUsdc, relativeTime, isSafeExplorerUrl } from '@/lib/format';
 
 const CAT: Record<EventCategory, Icon> = {
   Float: Lightning,
@@ -60,7 +60,7 @@ export default function EventFeed({ events }: { events: FinancialEvent[] }) {
                 <span className="font-mono">{e.type}</span>
                 <span>·</span>
                 <span>{relativeTime(e.ts)}</span>
-                {e.explorerUrl ? (
+                {e.explorerUrl && isSafeExplorerUrl(e.explorerUrl) ? (
                   <a
                     href={e.explorerUrl}
                     target="_blank"

@@ -14,7 +14,10 @@ export default function Reveal({
   const ref = useRef<HTMLDivElement>(null);
   const [shown, setShown] = useState(false);
 
+  const [reduced, setReduced] = useState(false);
+
   useEffect(() => {
+    setReduced(window.matchMedia('(prefers-reduced-motion: reduce)').matches);
     const el = ref.current;
     if (!el) return;
     const io = new IntersectionObserver(
@@ -29,6 +32,9 @@ export default function Reveal({
     io.observe(el);
     return () => io.disconnect();
   }, []);
+
+  // Reduced motion: content is simply visible; no slide, no fade (review: PR #10 a11y).
+  if (reduced) return <div ref={ref}>{children}</div>;
 
   return (
     <div

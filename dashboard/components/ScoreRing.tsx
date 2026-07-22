@@ -29,15 +29,21 @@ export default function ScoreRing({
     const start = performance.now();
     const dur = 900;
     let raf = 0;
+    let bumpTimer: ReturnType<typeof setTimeout> | undefined;
     const tick = (t: number) => {
       const p = Math.min(1, (t - start) / dur);
       const eased = 1 - Math.pow(1 - p, 3);
       setDisplayBps(Math.round(from + (to - from) * eased));
       if (p < 1) raf = requestAnimationFrame(tick);
-      else setTimeout(() => setBump(false), 500);
+      else bumpTimer = setTimeout(() => setBump(false), 500);
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    // Clear the pending bump-reset too, so a rate change mid-cycle cannot cancel
+    // the NEXT animation's bump early (review: PR #9).
+    return () => {
+      cancelAnimationFrame(raf);
+      if (bumpTimer) clearTimeout(bumpTimer);
+    };
   }, [rateBps]);
 
   const FLOOR = 3000;

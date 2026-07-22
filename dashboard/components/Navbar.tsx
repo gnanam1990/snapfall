@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -24,8 +24,41 @@ const EXPLORER = 'https://testnet.arcscan.app';
 export default function Navbar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const burgerRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const sheetRef = useRef<HTMLElement>(null);
 
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));
+
+  // Modal semantics for the sheet: Escape dismisses, focus moves in on open and back to the
+  // trigger on close, and Tab stays inside while open (review: PR #10 a11y).
+  useEffect(() => {
+    if (!open) return;
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        return;
+      }
+      if (e.key !== 'Tab' || !sheetRef.current) return;
+      const focusables = sheetRef.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled])');
+      if (!focusables.length) return;
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      burgerRef.current?.focus();
+    };
+  }, [open]);
 
   return (
     <header className="sticky top-0 z-20 px-5 pb-2 pt-4 sm:px-8">
@@ -50,6 +83,7 @@ export default function Navbar() {
             <Link
               key={n.href}
               href={n.href}
+              aria-current={isActive(n.href) ? 'page' : undefined}
               className="text-sm font-medium transition-opacity hover:opacity-70"
               style={{
                 color: isActive(n.href) ? 'var(--color-accent)' : 'var(--color-text)',
@@ -67,7 +101,7 @@ export default function Navbar() {
             className="hidden items-center gap-2 whitespace-nowrap rounded-full px-4 py-2.5 text-sm font-medium lg:flex"
             style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', color: 'var(--color-muted)' }}
           >
-            <span className="dot-live" /> live on Arc testnet
+            <span className="dot-live" /> demo replay · Arc testnet next
           </span>
           <ThemeToggle />
           <motion.a
@@ -87,7 +121,9 @@ export default function Navbar() {
         <div className="flex items-center gap-2 md:hidden">
           <ThemeToggle />
           <button
+            ref={burgerRef}
             aria-label={open ? 'Close menu' : 'Open menu'}
+            aria-expanded={open}
             onClick={() => setOpen((o) => !o)}
             className="relative flex h-10 w-10 items-center justify-center"
             style={{ color: 'var(--color-text)', background: 'none', border: 'none' }}
@@ -114,6 +150,10 @@ export default function Navbar() {
             />
             <motion.aside
               key="sheet"
+              ref={sheetRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navigation menu"
               className="fixed right-0 top-0 z-40 flex flex-col"
               style={{
                 width: 'min(88vw, 360px)',
@@ -133,6 +173,7 @@ export default function Navbar() {
                   </span>
                 </span>
                 <motion.button
+                  ref={closeRef}
                   aria-label="Close menu"
                   whileTap={{ scale: 0.9 }}
                   onClick={() => setOpen(false)}
@@ -153,6 +194,7 @@ export default function Navbar() {
                     <Link
                       href={n.href}
                       onClick={() => setOpen(false)}
+                      aria-current={isActive(n.href) ? 'page' : undefined}
                       className="block rounded-xl px-4 py-3 text-[1.1rem] font-medium transition-colors hover:bg-[rgba(128,128,128,0.16)]"
                       style={{ color: isActive(n.href) ? 'var(--color-accent)' : 'var(--color-text)' }}
                     >
@@ -175,7 +217,7 @@ export default function Navbar() {
                   className="flex w-full items-center justify-center gap-2 rounded-full py-3.5 text-[0.95rem] font-medium"
                   style={{ background: 'var(--color-card)', color: 'var(--color-text)' }}
                 >
-                  <span className="dot-live" /> live on Arc testnet
+                  <span className="dot-live" /> demo replay · Arc testnet next
                 </span>
               </div>
             </motion.aside>

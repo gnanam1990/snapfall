@@ -5,26 +5,36 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { MoonStars, Sun } from '@phosphor-icons/react';
 
 const KEY = 'snapfall-theme';
+const EVT = 'snapfall-theme-change';
 type Theme = 'light' | 'dark';
 
-/** Sun/Moon theme toggle. The boot script in layout.tsx sets data-theme before paint;
- *  this just reads it after mount and flips it on click (persisted to localStorage). */
+/** Sun/Moon theme toggle. The boot script in layout.tsx sets data-theme before paint.
+ *  All mounted instances (desktop + mobile) stay in sync by re-reading the document on a
+ *  shared change event instead of holding independent state (review: PR #10). */
 export default function ThemeToggle() {
   const [theme, setTheme] = useState<Theme | null>(null);
 
   useEffect(() => {
-    setTheme((document.documentElement.dataset.theme as Theme) || 'light');
+    const read = () => setTheme((document.documentElement.dataset.theme as Theme) || 'light');
+    read();
+    window.addEventListener(EVT, read);
+    window.addEventListener('storage', read);
+    return () => {
+      window.removeEventListener(EVT, read);
+      window.removeEventListener('storage', read);
+    };
   }, []);
 
   const toggle = () => {
-    const next: Theme = theme === 'dark' ? 'light' : 'dark';
+    const current = (document.documentElement.dataset.theme as Theme) || 'light';
+    const next: Theme = current === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = next;
     try {
       localStorage.setItem(KEY, next);
     } catch {
       /* private mode etc. */
     }
-    setTheme(next);
+    window.dispatchEvent(new Event(EVT));
   };
 
   return (

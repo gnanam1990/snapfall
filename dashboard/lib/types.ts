@@ -81,7 +81,16 @@ export interface OverviewSnapshot {
 }
 
 /** SSE envelope on /api/events/stream. Each event carries the fields it moved, so the
- *  Overview stays live without re-fetching the whole snapshot. */
+ *  Overview stays live without re-fetching the whole snapshot. `activeJobs` and
+ *  `pendingApprovals` are included only when the event changed them. */
 export type StreamMessage =
   | { kind: 'snapshot'; snapshot: OverviewSnapshot }
-  | { kind: 'event'; event: FinancialEvent; treasuryUsdc: string; pool: PoolStats; openAdvances: OpenAdvance[] };
+  | {
+      kind: 'event';
+      event: FinancialEvent;
+      treasuryUsdc: string;
+      pool: PoolStats;
+      openAdvances: OpenAdvance[];
+      activeJobs?: JobSummary[];
+      pendingApprovals?: number;
+    };

@@ -25,7 +25,7 @@ export function CardHeader({ title, meta }: { title: string; meta?: React.ReactN
       className="flex min-h-[46px] items-center justify-between gap-3 px-5"
       style={{ borderBottom: '1px solid var(--color-divider)' }}
     >
-      <span className="text-[13px] font-semibold">{title}</span>
+      <h3 className="m-0 text-[13px] font-semibold">{title}</h3>
       {meta ? (
         <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--color-faint)' }}>
           {meta}
@@ -51,7 +51,8 @@ export function Well({ children, className = '' }: { children: React.ReactNode; 
   );
 }
 
-/** Back-compat kicker (still used by stub pages until they migrate). */
+/** Back-compat kicker (still used by stub pages until they migrate). A real heading,
+ *  so screen readers can navigate card sections (review: PR #10 a11y). */
 export function CardTitle({ children }: { children: React.ReactNode }) {
-  return <p className="m-0 mb-4 text-[13px] font-semibold">{children}</p>;
+  return <h3 className="m-0 mb-4 text-[13px] font-semibold">{children}</h3>;
 }

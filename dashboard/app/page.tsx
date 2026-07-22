@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Lightning, Waves, Bank, Gauge, Coins, BellRinging } from '@phosphor-icons/react';
 import type { OverviewSnapshot, PoolStats, OpenAdvance, FinancialEvent, StreamMessage } from '@/lib/types';
 import { formatUsdc, formatBps } from '@/lib/format';
+import { useEventStream } from '@/lib/useEventStream';
 import { fadeUp } from '@/lib/motion';
 import MoneyGraph from '@/components/MoneyGraph';
 import StatCard from '@/components/StatCard';
@@ -30,26 +31,35 @@ export default function OverviewPage() {
   const [advances, setAdvances] = useState<OpenAdvance[]>([]);
   const [events, setEvents] = useState<FinancialEvent[]>([]);
 
-  useEffect(() => {
-    const es = new EventSource('/api/events/stream');
-    es.onmessage = (m) => {
-      const msg = JSON.parse(m.data) as StreamMessage;
-      if (msg.kind === 'snapshot') {
-        setSnap(msg.snapshot);
-        setTreasury(msg.snapshot.treasuryUsdc);
-        setPool(msg.snapshot.pool);
-        setAdvances(msg.snapshot.openAdvances);
-        setEvents(msg.snapshot.recentEvents);
-      } else {
-        setTreasury(msg.treasuryUsdc);
-        setPool(msg.pool);
-        setAdvances(msg.openAdvances);
-        setEvents((prev) => [msg.event, ...prev].slice(0, 12));
+  const onMessage = useCallback((msg: StreamMessage) => {
+    if (msg.kind === 'snapshot') {
+      setSnap(msg.snapshot);
+      setTreasury(msg.snapshot.treasuryUsdc);
+      setPool(msg.snapshot.pool);
+      setAdvances(msg.snapshot.openAdvances);
+      setEvents(msg.snapshot.recentEvents);
+    } else {
+      setTreasury(msg.treasuryUsdc);
+      setPool(msg.pool);
+      setAdvances(msg.openAdvances);
+      setEvents((prev) => [msg.event, ...prev].slice(0, 12));
+      // Jobs and approvals stream too, so acceptance is visible everywhere (review: PR #8).
+      const { activeJobs, pendingApprovals } = msg;
+      if (activeJobs || pendingApprovals !== undefined) {
+        setSnap((s) =>
+          s
+            ? {
+                ...s,
+                activeJobs: activeJobs ?? s.activeJobs,
+                pendingApprovals: pendingApprovals ?? s.pendingApprovals,
+              }
+            : s,
+        );
       }
-    };
-    es.onerror = () => es.close();
-    return () => es.close();
+    }
   }, []);
+
+  const status = useEventStream('/api/events/stream', onMessage);
 
   return (
     <>
@@ -99,7 +109,8 @@ export default function OverviewPage() {
               event={events[0] ?? null}
               treasuryUsdc={treasury}
               pool={pool}
-              jobPriceUsdc={snap.activeJobs[0]?.priceUsdc ?? '25000000'}
+              jobPriceUsdc={snap.activeJobs[0]?.priceUsdc}
+              streamStatus={status}
             />
           </motion.div>
 

@@ -88,6 +88,16 @@ h1, h2, h3 { font-family: var(--font-heading), sans-serif; }
   transition: transform 300ms cubic-bezier(0.77, 0, 0.175, 1);
 }
 
+/* WCAG 2.3.3: ambient/decorative motion honors the user's reduced-motion preference.
+   (Framer-driven entrances are covered by MotionConfig reducedMotion="user".) */
+@media (prefers-reduced-motion: reduce) {
+  .dot-live { animation: none; }
+  .mg-pipe { animation: none; }
+  .ring-figure.bump { animation: none; }
+  .hamburger-line { transition: none; }
+  .mg-beat { transition: none; }
+}
+
 /* live pulse dot */
 .dot-live { width: 8px; height: 8px; border-radius: 999px; background: var(--pos); animation: pulse 1.8s infinite; }
 @keyframes pulse {

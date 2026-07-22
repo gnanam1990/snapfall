@@ -2,13 +2,17 @@
  * Scripted demo data for the Overview scaffold.
  *
  * This replays the PRD §15.1 demo spine as a live event stream so the dashboard shows the whole
- * Snapfall story on load: 0.00 treasury -> the snap (12.50 advance) -> safe spend -> a rejected
- * purchase -> the waterfall -> the rate flywheel. Numbers use the corrected 150.00 pool seed
- * (see docs: the 100.00 seed reverts the advance on the 10% exposure cap). Replaced wholesale by
- * the real H2 REST/SSE feed once that handshake lands.
+ * Snapfall story on load: funding -> the snap (12.50 advance) -> safe spend -> a rejected
+ * purchase -> the waterfall -> the rate flywheel -> an explicit loop reset. Numbers use the
+ * corrected 150.00 pool seed (a 100.00 seed reverts the advance on the 10% exposure cap).
+ *
+ * Review notes applied (PR #8): each step now carries the job state it changed, so active
+ * jobs update as the story advances; the loop ends with an EXPLICIT reset event that returns
+ * treasury AND rate to the opening state, so the replay never shows a silent rate regression.
+ * Replaced wholesale by the real H2 REST/SSE feed once that handshake lands.
  */
 
-import type { OverviewSnapshot, PoolStats, OpenAdvance, FinancialEvent } from './types';
+import type { OverviewSnapshot, PoolStats, OpenAdvance, FinancialEvent, JobSummary } from './types';
 
 const EXPLORER = 'https://testnet.arcscan.app/tx';
 
@@ -17,6 +21,16 @@ const POOL_BASE: PoolStats = {
   utilizationBps: 0,
   feesAccruedUsdc: '0',
   reserveUsdc: '0',
+  orgRateBps: 5000,
+};
+
+const POOL_DRAWN: PoolStats = { ...POOL_BASE, utilizationBps: 833 };
+
+const POOL_SETTLED: PoolStats = {
+  tvlUsdc: '150200000',
+  utilizationBps: 0,
+  feesAccruedUsdc: '250000',
+  reserveUsdc: '50000',
   orgRateBps: 5000,
 };
 
@@ -29,18 +43,20 @@ const ADVANCE_OPEN: OpenAdvance = {
   status: 'Issued',
 };
 
+const JOB = (state: JobSummary['state']): JobSummary[] => [
+  {
+    jobId: 'job_104',
+    customer: 'Acme Labs',
+    title: 'Competitor analysis · 3 AI coding products',
+    state,
+    priceUsdc: '25000000',
+  },
+];
+
 export const snapshot: OverviewSnapshot = {
   treasuryUsdc: '0', // the $0 start · the first 10 seconds of the pitch
   pool: POOL_BASE,
-  activeJobs: [
-    {
-      jobId: 'job_104',
-      customer: 'Acme Labs',
-      title: 'Competitor analysis · 3 AI coding products',
-      state: 'Funded',
-      priceUsdc: '25000000',
-    },
-  ],
+  activeJobs: JOB('Funded'),
   pendingApprovals: 0,
   workforce: [
     { id: 'brain', role: 'Brain', status: 'idle' },
@@ -53,7 +69,7 @@ export const snapshot: OverviewSnapshot = {
   recentEvents: [
     {
       seq: 100,
-      ts: new Date().toISOString(),
+      ts: new Date().toISOString(), // re-stamped per connection by the stream route
       category: 'Job',
       type: 'job.funded',
       summary: 'Acme Labs funded job_104 · 25.00 USDC escrowed',
@@ -70,9 +86,25 @@ export interface TimelineStep {
   treasuryUsdc: string;
   pool: PoolStats;
   openAdvances: OpenAdvance[];
+  activeJobs?: JobSummary[];
+  pendingApprovals?: number;
 }
 
 export const timeline: TimelineStep[] = [
+  {
+    event: {
+      category: 'Job',
+      type: 'job.funded',
+      summary: 'Acme Labs funded job_104 · 25.00 USDC escrowed',
+      amountUsdc: '25000000',
+      jobId: 'job_104',
+      explorerUrl: `${EXPLORER}/0xfund`,
+    },
+    treasuryUsdc: '0',
+    pool: POOL_BASE,
+    openAdvances: [],
+    activeJobs: JOB('Funded'),
+  },
   {
     event: {
       category: 'Float',
@@ -83,8 +115,9 @@ export const timeline: TimelineStep[] = [
       explorerUrl: `${EXPLORER}/0xadvance`,
     },
     treasuryUsdc: '12500000',
-    pool: { ...POOL_BASE, utilizationBps: 833 },
+    pool: POOL_DRAWN,
     openAdvances: [ADVANCE_OPEN],
+    activeJobs: JOB('InProgress'),
   },
   {
     event: {
@@ -95,7 +128,7 @@ export const timeline: TimelineStep[] = [
       jobId: 'job_104',
     },
     treasuryUsdc: '12460000',
-    pool: { ...POOL_BASE, utilizationBps: 833 },
+    pool: POOL_DRAWN,
     openAdvances: [ADVANCE_OPEN],
   },
   {
@@ -106,8 +139,9 @@ export const timeline: TimelineStep[] = [
       jobId: 'job_104',
     },
     treasuryUsdc: '12460000',
-    pool: { ...POOL_BASE, utilizationBps: 833 },
+    pool: POOL_DRAWN,
     openAdvances: [ADVANCE_OPEN],
+    pendingApprovals: 0,
   },
   {
     event: {
@@ -118,7 +152,7 @@ export const timeline: TimelineStep[] = [
       jobId: 'job_104',
     },
     treasuryUsdc: '12400000',
-    pool: { ...POOL_BASE, utilizationBps: 833 },
+    pool: POOL_DRAWN,
     openAdvances: [ADVANCE_OPEN],
   },
   {
@@ -131,8 +165,9 @@ export const timeline: TimelineStep[] = [
       explorerUrl: `${EXPLORER}/0xwaterfall`,
     },
     treasuryUsdc: '24650000',
-    pool: { tvlUsdc: '150200000', utilizationBps: 0, feesAccruedUsdc: '250000', reserveUsdc: '50000', orgRateBps: 5000 },
+    pool: POOL_SETTLED,
     openAdvances: [],
+    activeJobs: JOB('Accepted'),
   },
   {
     event: {
@@ -142,17 +177,19 @@ export const timeline: TimelineStep[] = [
       jobId: 'job_104',
     },
     treasuryUsdc: '24650000',
-    pool: { tvlUsdc: '150200000', utilizationBps: 0, feesAccruedUsdc: '250000', reserveUsdc: '50000', orgRateBps: 5500 },
+    pool: { ...POOL_SETTLED, orgRateBps: 5500 },
     openAdvances: [],
   },
   {
     event: {
       category: 'Intake',
       type: 'job.draft.created',
-      summary: 'Next cycle · treasury reset to 0.00, rate now starts at 55%',
+      summary: 'Demo loop restarts · treasury, rate, and job reset to the opening state',
     },
     treasuryUsdc: '0',
-    pool: { tvlUsdc: '150200000', utilizationBps: 0, feesAccruedUsdc: '250000', reserveUsdc: '50000', orgRateBps: 5500 },
+    pool: POOL_BASE,
     openAdvances: [],
+    activeJobs: JOB('Funded'),
+    pendingApprovals: 0,
   },
 ];
