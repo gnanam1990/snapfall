@@ -19,38 +19,71 @@ import (
 	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/agents"
+	"github.com/gnanam1990/snapfall/daemon/internal/config"
 	"github.com/gnanam1990/snapfall/daemon/internal/events"
+	"github.com/gnanam1990/snapfall/daemon/internal/logging"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 	"github.com/gnanam1990/snapfall/daemon/internal/supervisor"
 )
 
 func main() {
 	var (
-		dbPath       = flag.String("db", "snapfall.db", "path to the local SQLite database")
-		manifestDir  = flag.String("manifests", "manifests", "directory of agent manifests")
+		configPath   = flag.String("config", "snapfall.yaml", "path to the YAML config file")
+		dbPath       = flag.String("db", "", "path to the local SQLite database (overrides config)")
+		manifestDir  = flag.String("manifests", "", "directory of agent manifests (overrides config)")
 		beats        = flag.Int("beats", 0, "stop the dummy worker after N heartbeats (0 = run until interrupted)")
 		validateOnly = flag.Bool("validate", false, "validate manifests and exit, without starting the daemon")
-		heartbeatMS  = flag.Int("heartbeat-ms", 1000, "dummy worker heartbeat interval in milliseconds")
-		verbose      = flag.Bool("v", false, "debug logging")
+		heartbeatMS  = flag.Int("heartbeat-ms", 0, "dummy worker heartbeat interval in ms (overrides config)")
+		verbose      = flag.Bool("v", false, "debug logging (overrides config log_level)")
 	)
 	flag.Parse()
 
-	level := slog.LevelInfo
-	if *verbose {
-		level = slog.LevelDebug
+	// G1 config precedence: defaults -> YAML -> env -> flags.
+	configExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			configExplicit = true
+		}
+	})
+	cfg, err := config.Load(*configPath, configExplicit)
+	if err != nil {
+		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("config load failed", "err", err)
+		os.Exit(1)
 	}
+	if *dbPath != "" {
+		cfg.DBPath = *dbPath
+	}
+	if *manifestDir != "" {
+		cfg.ManifestDir = *manifestDir
+	}
+	if *heartbeatMS > 0 {
+		cfg.HeartbeatMS = *heartbeatMS
+	}
+	if *verbose {
+		cfg.LogLevel = "debug"
+	}
+
+	level := map[string]slog.Level{
+		"debug": slog.LevelDebug, "info": slog.LevelInfo,
+		"warn": slog.LevelWarn, "error": slog.LevelError,
+	}[cfg.LogLevel]
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	if err := run(log, *dbPath, *manifestDir, *beats, *heartbeatMS, *validateOnly); err != nil {
+	if err := run(log, cfg, *beats, *validateOnly); err != nil {
 		log.Error("daemon exited with error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, dbPath, manifestDir string, beats, heartbeatMS int, validateOnly bool) error {
+func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool) error {
 	// Ctrl-C and SIGTERM cancel the root context; every worker unwinds from there.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// G1: the org correlation ID scopes every log line from here down.
+	ctx = logging.With(ctx, logging.Correlation{Org: cfg.OrgID})
+	log = logging.From(ctx, log)
+	dbPath, manifestDir, heartbeatMS := cfg.DBPath, cfg.ManifestDir, cfg.HeartbeatMS
 
 	// ── Manifests (FR-ORG-006). Validation is fatal by design: an unsafe permission set
 	//    must never reach an activated workforce. ──
