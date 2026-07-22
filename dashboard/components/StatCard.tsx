@@ -42,7 +42,7 @@ export default function StatCard({
           </div>
           <span
             className="flex h-10 w-10 flex-none items-center justify-center rounded-xl"
-            style={{ background: `color-mix(in srgb, ${tint} 12%, white)`, color: tint }}
+            style={{ background: `color-mix(in srgb, ${tint} 14%, var(--color-card))`, color: tint }}
           >
             <Icon size={19} />
           </span>

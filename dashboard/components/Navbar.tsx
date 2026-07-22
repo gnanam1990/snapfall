@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Menu, X, ExternalLink } from 'lucide-react';
 import Logo from './Logo';
+import ThemeToggle from './ThemeToggle';
 import { EASE_IN, EASE_OUT } from '@/lib/motion';
 
 const NAV = [
@@ -60,11 +61,12 @@ export default function Navbar() {
         {/* right: pills (desktop) */}
         <div className="hidden items-center gap-3 md:flex">
           <span
-            className="hidden items-center gap-2 whitespace-nowrap rounded-full bg-white px-4 py-2.5 text-sm font-medium lg:flex"
-            style={{ border: '1px solid var(--color-border)', color: 'var(--color-muted)' }}
+            className="hidden items-center gap-2 whitespace-nowrap rounded-full px-4 py-2.5 text-sm font-medium lg:flex"
+            style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', color: 'var(--color-muted)' }}
           >
             <span className="dot-live" /> live on Arc testnet
           </span>
+          <ThemeToggle />
           <motion.a
             href={EXPLORER}
             target="_blank"
@@ -78,15 +80,17 @@ export default function Navbar() {
           </motion.a>
         </div>
 
-        {/* mobile: hamburger */}
-        <button
-          className="md:hidden"
-          aria-label={open ? 'Close menu' : 'Open menu'}
-          onClick={() => setOpen((o) => !o)}
-          style={{ color: 'var(--color-text)', background: 'none', border: 'none', padding: 4 }}
-        >
-          {open ? <X size={24} /> : <Menu size={24} />}
-        </button>
+        {/* mobile: theme toggle + hamburger */}
+        <div className="flex items-center gap-2 md:hidden">
+          <ThemeToggle />
+          <button
+            aria-label={open ? 'Close menu' : 'Open menu'}
+            onClick={() => setOpen((o) => !o)}
+            style={{ color: 'var(--color-text)', background: 'none', border: 'none', padding: 4 }}
+          >
+            {open ? <X size={24} /> : <Menu size={24} />}
+          </button>
+        </div>
       </nav>
 
       {/* mobile slide-in sheet */}
@@ -109,7 +113,7 @@ export default function Navbar() {
               style={{
                 width: 'min(88vw, 360px)',
                 height: '100dvh',
-                background: '#CFC8C5',
+                background: 'var(--sheet-bg)',
                 boxShadow: '-12px 0 48px rgba(25,40,55,0.18)',
               }}
               initial={{ x: '100%' }}
@@ -128,12 +132,12 @@ export default function Navbar() {
                   whileTap={{ scale: 0.9 }}
                   onClick={() => setOpen(false)}
                   className="flex h-10 w-10 items-center justify-center rounded-full"
-                  style={{ background: 'rgba(25,40,55,0.1)', border: 'none', color: 'var(--color-text)' }}
+                  style={{ background: 'color-mix(in srgb, var(--color-text) 10%, transparent)', border: 'none', color: 'var(--color-text)' }}
                 >
                   <X size={20} />
                 </motion.button>
               </div>
-              <div className="mx-6 h-px" style={{ background: 'rgba(25,40,55,0.12)' }} />
+              <div className="mx-6 h-px" style={{ background: 'color-mix(in srgb, var(--color-text) 12%, transparent)' }} />
               <div className="flex flex-1 flex-col gap-1 px-4 py-4">
                 {NAV.map((n, i) => (
                   <motion.div
@@ -144,7 +148,7 @@ export default function Navbar() {
                     <Link
                       href={n.href}
                       onClick={() => setOpen(false)}
-                      className="block rounded-xl px-4 py-3 text-[1.1rem] font-medium transition-colors hover:bg-black/10"
+                      className="block rounded-xl px-4 py-3 text-[1.1rem] font-medium transition-colors hover:bg-[rgba(128,128,128,0.16)]"
                       style={{ color: isActive(n.href) ? 'var(--color-accent)' : 'var(--color-text)' }}
                     >
                       {n.label}
@@ -164,7 +168,7 @@ export default function Navbar() {
                 </a>
                 <span
                   className="flex w-full items-center justify-center gap-2 rounded-full py-3.5 text-[0.95rem] font-medium"
-                  style={{ background: 'var(--color-login-bg)', color: 'var(--color-text)' }}
+                  style={{ background: 'var(--color-card)', color: 'var(--color-text)' }}
                 >
                   <span className="dot-live" /> live on Arc testnet
                 </span>

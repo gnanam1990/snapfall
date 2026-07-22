@@ -8,8 +8,8 @@ export default function Card({
 }) {
   return (
     <div
-      className={`rounded-2xl bg-white p-5 ${className}`}
-      style={{ border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)' }}
+      className={`rounded-2xl p-5 ${className}`}
+      style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)' }}
     >
       {children}
     </div>

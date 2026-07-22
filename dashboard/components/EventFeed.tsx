@@ -47,7 +47,7 @@ export default function EventFeed({ events }: { events: FinancialEvent[] }) {
           >
             <span
               className="mt-0.5 flex h-8 w-8 flex-none items-center justify-center rounded-lg"
-              style={{ background: `color-mix(in srgb, ${tint} 12%, white)`, color: tint }}
+              style={{ background: `color-mix(in srgb, ${tint} 14%, var(--color-card))`, color: tint }}
             >
               <Icon size={15} />
             </span>

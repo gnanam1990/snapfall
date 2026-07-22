@@ -19,6 +19,37 @@
   --accent-soft: rgba(115, 66, 226, 0.10);
   --shadow-card: 0 1px 2px rgba(25, 40, 55, 0.04), 0 8px 28px rgba(25, 40, 55, 0.06);
   --shadow-accent: 0 4px 24px rgba(115, 66, 226, 0.28);
+  --bg-glow: rgba(115, 66, 226, 0.07);
+  --ring-track: #E8E5DA;
+  --pipe: #DAD6C9;
+  --pipe-accent: #CBB9F2;
+  --sheet-bg: #CFC8C5;
+  color-scheme: light;
+}
+
+/* Dark theme: same system, inverted surfaces. Toggled via data-theme (ThemeToggle). */
+:root[data-theme='dark'] {
+  --color-text: #E8EDF3;
+  --color-accent: #9066F0;
+  --color-login-bg: #0D141C;
+
+  --color-card: #151E28;
+  --color-border: #263340;
+  --color-muted: #97A6B4;
+  --color-faint: #64758a;
+  --pos: #34D399;
+  --warn: #FBBF24;
+  --neg: #FB7185;
+  --sky: #38BDF8;
+  --accent-soft: rgba(144, 102, 240, 0.16);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 28px rgba(0, 0, 0, 0.30);
+  --shadow-accent: 0 4px 24px rgba(144, 102, 240, 0.35);
+  --bg-glow: rgba(144, 102, 240, 0.13);
+  --ring-track: #26313E;
+  --pipe: #2B3844;
+  --pipe-accent: #4E3E80;
+  --sheet-bg: #1A232E;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -29,9 +60,10 @@ body {
   font-family: var(--font-body), sans-serif;
   color: var(--color-text);
   background:
-    radial-gradient(900px 420px at 85% -10%, rgba(115, 66, 226, 0.07), transparent 60%),
+    radial-gradient(900px 420px at 85% -10%, var(--bg-glow), transparent 60%),
     var(--color-login-bg);
   -webkit-font-smoothing: antialiased;
+  transition: background 0.3s, color 0.3s;
 }
 
 h1, h2, h3 { font-family: var(--font-heading), sans-serif; }
@@ -47,8 +79,8 @@ h1, h2, h3 { font-family: var(--font-heading), sans-serif; }
 /* ── F1 Money Graph (SVG internals; light theme) ── */
 .mg-svg { width: 100%; height: auto; display: block; margin-top: 2px; }
 
-.mg-pipe { stroke: #DAD6C9; stroke-width: 2; stroke-dasharray: 2 8; stroke-linecap: round; opacity: 0.9; animation: pipeflow 1.4s linear infinite; }
-.pipe-snap, .pipe-repay { stroke: #CBB9F2; }
+.mg-pipe { stroke: var(--pipe); stroke-width: 2; stroke-dasharray: 2 8; stroke-linecap: round; opacity: 0.9; animation: pipeflow 1.4s linear infinite; }
+.pipe-snap, .pipe-repay { stroke: var(--pipe-accent); }
 @keyframes pipeflow { to { stroke-dashoffset: -10; } }
 
 .drop-fund { fill: var(--sky); }
@@ -83,7 +115,7 @@ h1, h2, h3 { font-family: var(--font-heading), sans-serif; }
 .ring-wrap.bump .ring-svg { animation: ringbump 0.5s ease; }
 @keyframes ringbump { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.07); } }
 .ring-svg { width: 120px; height: 120px; }
-.ring-track { fill: none; stroke: #E8E5DA; stroke-width: 9; }
+.ring-track { fill: none; stroke: var(--ring-track); stroke-width: 9; }
 .ring-arc {
   fill: none; stroke: var(--color-accent); stroke-width: 9; stroke-linecap: round;
   filter: drop-shadow(0 0 6px rgba(115, 66, 226, 0.45));

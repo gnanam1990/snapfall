@@ -23,8 +23,15 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${heading.variable} ${body.variable}`}>
+    <html lang="en" className={`${heading.variable} ${body.variable}`} suppressHydrationWarning>
       <body>
+        {/* Theme boot: runs before paint so a stored/system dark preference never flashes light. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('snapfall-theme');if(t!=='light'&&t!=='dark'){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();",
+          }}
+        />
         <Navbar />
         <main className="relative z-10 mx-auto w-full max-w-[1280px] px-5 pb-16 sm:px-8">
           {children}

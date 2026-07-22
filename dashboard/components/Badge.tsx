@@ -20,7 +20,7 @@ export default function Badge({ kind }: { kind: string }) {
   return (
     <span
       className="inline-block rounded-full px-2.5 py-0.5 text-[11.5px] font-semibold"
-      style={{ background: `color-mix(in srgb, ${tint} 12%, white)`, color: tint }}
+      style={{ background: `color-mix(in srgb, ${tint} 14%, var(--color-card))`, color: tint }}
     >
       {kind}
     </span>

@@ -27,8 +27,8 @@ export default function WorkforceStrip({ agents }: { agents: AgentCard[] }) {
         return (
           <div
             key={a.id}
-            className="flex items-center gap-2 rounded-full bg-white py-1.5 pl-2.5 pr-3"
-            style={{ border: '1px solid var(--color-border)' }}
+            className="flex items-center gap-2 rounded-full py-1.5 pl-2.5 pr-3"
+            style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)' }}
           >
             <Icon size={14} style={{ color: 'var(--color-muted)' }} />
             <span className="text-[13px] font-semibold">{a.role}</span>
