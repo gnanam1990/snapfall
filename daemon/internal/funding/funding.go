@@ -47,10 +47,14 @@ type Instruction struct {
 type Agent struct {
 	mu       sync.Mutex
 	executed []Instruction
+	// seen dedups by RequestID: a callback retaining a valid Grant must not be able to
+	// replay it into multiple movements (review-batch fix — belt-and-suspenders atop the
+	// lifecycle's exactly-once; a real signer would make this durable).
+	seen map[string]bool
 }
 
 // New returns a funding agent. Hand the pointer to Brain and to nothing else.
-func New() *Agent { return &Agent{} }
+func New() *Agent { return &Agent{seen: make(map[string]bool)} }
 
 // Execute performs one approved movement. Phase 2 records it; the real signer wrap
 // lands with H3. The ONLY input is the approval-minted Grant: a forged (empty) grant
@@ -62,6 +66,11 @@ func (a *Agent) Execute(ctx context.Context, g approval.Grant) error {
 	in := g.Intent()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// One movement per approval, even if a caller replays the same Grant.
+	if a.seen[g.RequestID()] {
+		return fmt.Errorf("funding: refused — grant for request %s already executed (replay)", g.RequestID())
+	}
+	a.seen[g.RequestID()] = true
 	a.executed = append(a.executed, Instruction{
 		JobID:        in.JobID,
 		Kind:         "pay_intent",

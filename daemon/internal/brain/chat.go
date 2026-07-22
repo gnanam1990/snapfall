@@ -273,6 +273,20 @@ func (b *Brain) onWorkerReport(ctx context.Context, kind string, e envelope.Enve
 		return fmt.Errorf("report for unknown job %s", e.JobID)
 	}
 
+	// A draft is authored ONLY by the job's assigned author, and only while the job is
+	// awaiting one. This stops the QA worker (or any worker retaining a callback) from
+	// injecting a TypeWorkerReport that gets treated as an author draft it then reviews
+	// (review-batch fix; the kind stamp is brain-applied and unforgeable).
+	if kind == qaKind {
+		return fmt.Errorf("worker report refused: the QA reviewer %q does not author drafts", kind)
+	}
+	if js.Worker != "" && kind != js.Worker {
+		return fmt.Errorf("worker report refused: %q is not the assigned author %q for job %s", kind, js.Worker, e.JobID)
+	}
+	if js.Stage != StageAssigned && js.Stage != StageRevision {
+		return fmt.Errorf("worker report refused: job %s is %s, not awaiting an author draft", e.JobID, js.Stage)
+	}
+
 	// ── G9: with a QA slot registered, an author draft NEVER completes the job
 	//    directly — it goes to review. There is no branch from here to
 	//    StageDeliveryReady or StageComplete when QA is active. ──

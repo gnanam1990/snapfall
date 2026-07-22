@@ -123,11 +123,15 @@ func (b *Brain) Deliver(ctx context.Context, e envelope.Envelope) error {
 }
 
 // workerReportFor builds the single outbound capability a Worker receives. It pins
-// From to RoleWorker AND stamps the worker KIND Brain assigned — both applied by the
-// closure, neither forgeable by the worker. The kind stamp is what makes "only the
-// registered QA worker can issue a verdict" a structural property (G9 pin 1).
-func (b *Brain) workerReportFor(kind string) worker.Report {
+// From to RoleWorker AND stamps the worker KIND and JOB Brain assigned — all applied
+// by the closure, none forgeable by the worker. The kind stamp makes "only the
+// registered QA worker can issue a verdict" structural (G9 pin 1); the job stamp stops
+// a worker reporting against a DIFFERENT job by swapping e.JobID (review-batch fix).
+func (b *Brain) workerReportFor(kind, jobID string) worker.Report {
 	return func(ctx context.Context, e envelope.Envelope) error {
+		if e.JobID != jobID {
+			return fmt.Errorf("worker %q reported job %q but was assigned job %q; cross-job report refused", kind, e.JobID, jobID)
+		}
 		e.From = envelope.RoleWorker
 		return b.deliverFromWorker(ctx, kind, e)
 	}
@@ -198,5 +202,5 @@ func (b *Brain) assign(ctx context.Context, jobID, kind string, bounceReasons []
 
 	// Synchronous in Phase 1/2: the worker runs inline and reports through the one
 	// kind-stamped callback it is handed.
-	return w.Handle(ctx, assignment, b.workerReportFor(kind))
+	return w.Handle(ctx, assignment, b.workerReportFor(kind, jobID))
 }

@@ -89,6 +89,25 @@ func TestReview_CustomerDataLeakage(t *testing.T) {
 	}
 }
 
+// Review batch: "anywhere" includes the source lists — a confidential marker used as
+// a source identifier must bounce too.
+func TestReview_CustomerDataLeakageInSources(t *testing.T) {
+	r := Reviewer{LeakMarkers: []string{"ACME-INTERNAL-KEY-7"}}
+
+	d := goodDeliverable()
+	d.Sources = append(d.Sources, "ACME-INTERNAL-KEY-7/export.csv")
+	if v := r.Review(d); v.Passed {
+		t.Fatal("marker in the deliverable source list passed QA")
+	}
+
+	d2 := goodDeliverable()
+	d2.Claims[0].Sources = []string{"registry:1", "ref:ACME-INTERNAL-KEY-7"}
+	d2.Sources = append(d2.Sources, "ref:ACME-INTERNAL-KEY-7")
+	if v := r.Review(d2); v.Passed {
+		t.Fatal("marker in a claim's citation list passed QA")
+	}
+}
+
 // G9 pin 3: EVERY verdict — pass or fail — carries the evidence-not-guarantee
 // disclaimer. A pass is a review result, not a certification.
 func TestReview_DisclaimerOnEveryVerdict(t *testing.T) {

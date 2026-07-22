@@ -85,9 +85,30 @@ func (r Reviewer) Review(d envelope.Deliverable) envelope.QAVerdict {
 			reasons = append(reasons, fmt.Sprintf("customer-data leakage: confidential marker %q appears in the deliverable", marker))
 			continue
 		}
+		leaked := false
 		for _, c := range d.Claims {
 			if strings.Contains(c.Text, marker) {
 				reasons = append(reasons, fmt.Sprintf("customer-data leakage: confidential marker %q appears in claim %q", marker, c.Text))
+				leaked = true
+				break
+			}
+			for _, src := range c.Sources { // "anywhere" includes citations (review-batch fix)
+				if strings.Contains(src, marker) {
+					reasons = append(reasons, fmt.Sprintf("customer-data leakage: confidential marker %q appears in a citation for claim %q", marker, c.Text))
+					leaked = true
+					break
+				}
+			}
+			if leaked {
+				break
+			}
+		}
+		if leaked {
+			continue
+		}
+		for _, src := range d.Sources { // and the deliverable's own source list
+			if strings.Contains(src, marker) {
+				reasons = append(reasons, fmt.Sprintf("customer-data leakage: confidential marker %q appears in the source list", marker))
 				break
 			}
 		}

@@ -56,6 +56,8 @@ const (
 	CodeMerchantNotAllowlisted = "merchant-not-allowlisted"
 	CodeCategoryBlocked        = "category-blocked"
 	CodeAboveApprovalThreshold = "amount-above-approval-threshold"
+	CodeInvalidSpendState      = "invalid-spend-state"
+	CodeApprovalNotConfigured  = "approval-threshold-not-configured"
 )
 
 // maxIntentMicros bounds a single intent at 100M USDC — far above anything legitimate,
@@ -107,6 +109,13 @@ type SpendState struct {
 // misconfigured daemon fails at startup instead of silently denying every payment at
 // the first intent (Step-2 follow-up B). Evaluate keeps its own per-call guards as
 // defense in depth; this is the early, loud version of the same rule.
+//
+// TRACKED (review batch, architect ruling): production policy-config LOADING does not
+// exist yet, so Validate currently has no production call site — the fail-closed-at-
+// startup property is UNREALISED, not shipped; the runtime guards are what actually
+// operate today. Whoever writes the policy-config loader MUST call Validate() at load
+// and refuse to boot on error. The same note sits in internal/config's package doc so
+// the loader's author finds it.
 func (c PolicyConfig) Validate() error {
 	if c.JobBudgetMicros <= 0 {
 		return fmt.Errorf("policy config: job_budget must be positive (unset does not mean unlimited)")
@@ -172,13 +181,25 @@ type Decision struct {
 	Checks  []Check `json:"checks"`
 }
 
-// FormatUSDC renders micros as a decimal USDC string ("6.000001").
+// FormatUSDC renders micros as a decimal USDC string ("6.000001"). Handles the full
+// int64 range: MinInt64's magnitude does not fit int64, so the negation goes through
+// uint64 (review-batch fix).
 func FormatUSDC(micros int64) string {
 	sign := ""
+	mag := uint64(micros)
 	if micros < 0 {
-		sign, micros = "-", -micros
+		sign = "-"
+		mag = uint64(-(micros + 1)) + 1 // |MinInt64| without overflowing
 	}
-	return fmt.Sprintf("%s%d.%06d", sign, micros/1_000_000, micros%1_000_000)
+	return fmt.Sprintf("%s%d.%06d", sign, mag/1_000_000, mag%1_000_000)
+}
+
+// satAdd is a saturating add for REPORTING only (never for the comparison itself).
+func satAdd(a, b int64) int64 {
+	if a > 0 && b > 9223372036854775807-a {
+		return 9223372036854775807
+	}
+	return a + b
 }
 
 // Evaluate runs the pipeline. Pure; safe for concurrent use.
@@ -202,6 +223,15 @@ func Evaluate(cfg PolicyConfig, state SpendState, in PaymentIntent) Decision {
 			Message:      fmt.Sprintf("intent amount %s USDC is not a positive amount within bounds", FormatUSDC(in.AmountMicros)),
 		})
 	}
+	// Negative spend state is corrupt input, not a discount (review-batch fix):
+	// a negative committed/daily figure would inflate remaining headroom.
+	if state.JobCommittedMicros < 0 || state.DailySpentMicros < 0 {
+		return fail(Reason{
+			Rule: RuleIntentValidation, Code: CodeInvalidSpendState,
+			Message: fmt.Sprintf("spend state is negative (job %s, daily %s USDC); refusing to evaluate against corrupt state",
+				FormatUSDC(state.JobCommittedMicros), FormatUSDC(state.DailySpentMicros)),
+		})
+	}
 
 	// ── 1. Job budget. ──
 	if cfg.JobBudgetMicros <= 0 {
@@ -211,13 +241,14 @@ func Evaluate(cfg PolicyConfig, state SpendState, in PaymentIntent) Decision {
 			Message:      "job has no operating budget configured; unset does not mean unlimited",
 		})
 	}
-	wouldCommit := state.JobCommittedMicros + in.AmountMicros
-	if wouldCommit > cfg.JobBudgetMicros {
+	// Overflow-safe: compare amount against remaining headroom instead of adding
+	// (near-MaxInt64 state must DENY, never wrap negative — review-batch fix).
+	if in.AmountMicros > cfg.JobBudgetMicros-state.JobCommittedMicros {
 		return fail(Reason{
 			Rule: RuleJobBudget, Code: CodeJobBudgetExceeded,
-			LimitMicros: cfg.JobBudgetMicros, ActualMicros: wouldCommit,
+			LimitMicros: cfg.JobBudgetMicros, ActualMicros: satAdd(state.JobCommittedMicros, in.AmountMicros),
 			Message: fmt.Sprintf("job budget exceeded: this purchase would commit %s of the %s USDC operating budget",
-				FormatUSDC(wouldCommit), FormatUSDC(cfg.JobBudgetMicros)),
+				FormatUSDC(satAdd(state.JobCommittedMicros, in.AmountMicros)), FormatUSDC(cfg.JobBudgetMicros)),
 		})
 	}
 	pass(RuleJobBudget)
@@ -248,13 +279,12 @@ func Evaluate(cfg PolicyConfig, state SpendState, in PaymentIntent) Decision {
 			Message:      "no daily spend cap configured; unset does not mean unlimited",
 		})
 	}
-	wouldDaily := state.DailySpentMicros + in.AmountMicros
-	if wouldDaily > cfg.DailyCapMicros {
+	if in.AmountMicros > cfg.DailyCapMicros-state.DailySpentMicros {
 		return fail(Reason{
 			Rule: RuleDailyCap, Code: CodeDailyCapExceeded,
-			LimitMicros: cfg.DailyCapMicros, ActualMicros: wouldDaily,
+			LimitMicros: cfg.DailyCapMicros, ActualMicros: satAdd(state.DailySpentMicros, in.AmountMicros),
 			Message: fmt.Sprintf("daily cap exceeded: this purchase would bring today's spend to %s of the %s USDC cap (UTC day)",
-				FormatUSDC(wouldDaily), FormatUSDC(cfg.DailyCapMicros)),
+				FormatUSDC(satAdd(state.DailySpentMicros, in.AmountMicros)), FormatUSDC(cfg.DailyCapMicros)),
 		})
 	}
 	pass(RuleDailyCap)
@@ -293,8 +323,21 @@ func Evaluate(cfg PolicyConfig, state SpendState, in PaymentIntent) Decision {
 	pass(RuleBlockedCategory)
 
 	// ── 6. Approval threshold: Auto vs Human. Every deny rule has passed; a
-	//      deniable intent never reaches this line. ──
-	if cfg.ApprovalAboveMicros > 0 && in.AmountMicros > cfg.ApprovalAboveMicros {
+	//      deniable intent never reaches this line. An UNSET threshold escalates
+	//      EVERYTHING — unset never means auto-approve, the same fail-closed ruling
+	//      as the deny limits (review-batch fix). ──
+	if cfg.ApprovalAboveMicros <= 0 {
+		return Decision{
+			Outcome: HumanApprovalRequired,
+			Reason: &Reason{
+				Rule: RuleApprovalThreshold, Code: CodeApprovalNotConfigured,
+				ActualMicros: in.AmountMicros,
+				Message:      "no auto-approval threshold configured; unset does not mean auto-approve — owner approval required",
+			},
+			Checks: checks,
+		}
+	}
+	if in.AmountMicros > cfg.ApprovalAboveMicros {
 		return Decision{
 			Outcome: HumanApprovalRequired,
 			Reason: &Reason{

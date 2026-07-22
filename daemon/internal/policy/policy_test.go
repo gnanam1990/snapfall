@@ -223,7 +223,49 @@ func fixtureTable() []fixtureCase {
 			wantOutcome: Deny, wantRule: RuleJobBudget, wantCode: CodeJobBudgetNotConfigured,
 			wantChecks: 1, wantLastCheck: RuleJobBudget,
 		},
+
+		// ── Review batch (PR #2 bot findings, verified) ──
+		{
+			// Negative spend state is corrupt input, not a discount: fail closed.
+			name: "22_negative_spend_state_denies",
+			cfg:  cfg, state: SpendState{JobCommittedMicros: -1},
+			intent:      intent(40_000, "api.research-data.example"),
+			wantOutcome: Deny, wantRule: RuleIntentValidation, wantCode: CodeInvalidSpendState,
+			wantChecks: 1, wantLastCheck: RuleIntentValidation,
+		},
+		{
+			// Near-MaxInt64 committed spend must DENY on the budget, not wrap negative
+			// and sail through to auto-approval.
+			name: "23_near_max_committed_denies_not_wraps",
+			cfg:  cfg, state: SpendState{JobCommittedMicros: 9_223_372_036_854_775_000},
+			intent:      intent(40_000, "api.research-data.example"),
+			wantOutcome: Deny, wantRule: RuleJobBudget, wantCode: CodeJobBudgetExceeded,
+			wantChecks: 1, wantLastCheck: RuleJobBudget,
+		},
+		{
+			// Same overflow posture on the daily cap.
+			name: "23b_near_max_daily_denies_not_wraps",
+			cfg:  cfg, state: SpendState{DailySpentMicros: 9_223_372_036_854_775_000},
+			intent:      intent(40_000, "api.research-data.example"),
+			wantOutcome: Deny, wantRule: RuleDailyCap, wantCode: CodeDailyCapExceeded,
+			wantChecks: 3, wantLastCheck: RuleDailyCap,
+		},
+		{
+			// An UNSET approval threshold escalates everything — unset never means
+			// auto-approve (the same fail-closed ruling as the deny limits).
+			name: "24_zero_threshold_escalates_everything",
+			cfg:  overrideThreshold(cfg, 0), state: SpendState{},
+			intent:      intent(10_000, "api.research-data.example"), // one cent
+			wantOutcome: HumanApprovalRequired,
+			wantRule:    RuleApprovalThreshold, wantCode: CodeApprovalNotConfigured,
+			wantChecks: 5, wantLastCheck: RuleBlockedCategory,
+		},
 	}
+}
+
+func overrideThreshold(cfg PolicyConfig, v int64) PolicyConfig {
+	cfg.ApprovalAboveMicros = v
+	return cfg
 }
 
 func overrideBudget(cfg PolicyConfig, budget int64) PolicyConfig {
@@ -334,6 +376,19 @@ func TestReason_MarshalsToStableJSON(t *testing.T) {
 // Step-2 addition A: the daily window definition is a CALLER contract. This pins it:
 // the window is the UTC calendar day. Two instants in the same UTC day share a window;
 // crossing UTC midnight resets it, regardless of local timezone.
+// FormatUSDC must render every int64, including MinInt64 (whose negation overflows).
+func TestFormatUSDC_Extremes(t *testing.T) {
+	if got := FormatUSDC(-9223372036854775808); got != "-9223372036854.775808" {
+		t.Errorf("FormatUSDC(MinInt64) = %q", got)
+	}
+	if got := FormatUSDC(-1); got != "-0.000001" {
+		t.Errorf("FormatUSDC(-1) = %q", got)
+	}
+	if got := FormatUSDC(9223372036854775807); got != "9223372036854.775807" {
+		t.Errorf("FormatUSDC(MaxInt64) = %q", got)
+	}
+}
+
 func TestDailyWindowStartUTC(t *testing.T) {
 	ist := time.FixedZone("IST", 5*3600+1800)
 

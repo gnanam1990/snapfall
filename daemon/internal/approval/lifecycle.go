@@ -98,6 +98,16 @@ func (g Grant) GrantedAt() time.Time { return g.grantedAt }
 // Empty reports whether this grant was forged outside the lifecycle (zero value).
 func (g Grant) Empty() bool { return g.requestID == "" }
 
+// NewGrantForTest builds a populated Grant for tests in OTHER packages (funding's
+// boundary tests). Named *ForTest so its purpose is unmistakable; production Grants
+// are minted only inside Execute, after the gates.
+func NewGrantForTest(requestID, jobID string, amountMicros int64, merchant string) Grant {
+	return Grant{
+		intent:    Intent{JobID: jobID, AmountMicros: amountMicros, Merchant: merchant},
+		requestID: requestID,
+	}
+}
+
 // Executor performs the approved action — for the demo spine, the Funding-agent call.
 // It receives an approval-minted Grant, never a bare Intent or policy Decision.
 type Executor func(ctx context.Context, g Grant) error
@@ -139,6 +149,12 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 		return SubmitResult{}, fmt.Errorf("lifecycle not wired: Policy and Spend must be set")
 	}
 
+	// ── Resolve the active policy version BEFORE the nonce claim, so the durable
+	//    payment_intents row records the version actually evaluated (review-batch fix:
+	//    it previously recorded the caller-supplied/empty value). ──
+	cfg, version := l.Policy()
+	in.PolicyVersion = version
+
 	// ── Nonce claim (durable, unique). ──
 	if err := l.claimNonce(ctx, in); err != nil {
 		return SubmitResult{}, err
@@ -156,8 +172,6 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 	}
 
 	// ── Policy evaluation (G6, pure). ──
-	cfg, version := l.Policy()
-	in.PolicyVersion = version
 	d := policy.Evaluate(cfg, l.Spend(in.JobID), policy.PaymentIntent{
 		IntentID: in.IntentID, OrgID: in.OrgID, JobID: in.JobID, TaskID: in.TaskID,
 		AgentID: in.AgentID, Merchant: in.Merchant, Resource: in.Resource,
@@ -165,9 +179,11 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 		PolicyVersion: version,
 	})
 
-	l.appendEvent(ctx, in.JobID, "policy.evaluated", map[string]any{
+	if err := l.appendEvent(ctx, in.JobID, "policy.evaluated", map[string]any{
 		"intent_id": in.IntentID, "outcome": string(d.Outcome), "reason": d.Reason,
-	})
+	}); err != nil {
+		return SubmitResult{}, err
+	}
 
 	if d.Outcome == policy.Deny {
 		return SubmitResult{Decision: d}, ErrDenied
@@ -192,14 +208,24 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 		req.State = StatePending
 	}
 
+	// Durable BEFORE visible: the approval.requested event is what recovery rebuilds
+	// from, so it must land before the request enters the map (review-batch fix). The
+	// full intent rides the event so a restart can re-verify the hash.
+	if err := l.appendEvent(ctx, in.JobID, "approval.requested", map[string]any{
+		"request_id": req.ID, "intent_hash": hash, "state": string(req.State),
+		"intent": in, "decided_by": req.DecidedBy,
+	}); err != nil {
+		return SubmitResult{}, err
+	}
+
 	l.mu.Lock()
 	l.requests[req.ID] = req
 	l.mu.Unlock()
 
-	l.appendEvent(ctx, in.JobID, "approval.requested", map[string]any{
-		"request_id": req.ID, "intent_hash": hash, "state": string(req.State),
-	})
-	return SubmitResult{Decision: d, Request: req}, nil
+	// Return a COPY: mutating the returned struct must never move gate state
+	// (review-batch fix; the map-owned request stays private).
+	cp := *req
+	return SubmitResult{Decision: d, Request: &cp}, nil
 }
 
 // Decide records a human decision. Idempotent: repeating the SAME decision is a
@@ -229,7 +255,8 @@ func (l *Lifecycle) Decide(ctx context.Context, requestID string, kind DecisionK
 	// Idempotency first: the same decision landing twice is one effect, not two —
 	// and not an error, so a retried Telegram tap is harmless.
 	if req.State == target && req.DecidedBy == by {
-		return req, nil
+		cp := *req
+		return &cp, nil
 	}
 	if req.State.terminal() {
 		return nil, fmt.Errorf("%w: request is %s", ErrAlreadyDecided, req.State)
@@ -240,8 +267,11 @@ func (l *Lifecycle) Decide(ctx context.Context, requestID string, kind DecisionK
 		req.State = StateExpired
 		req.DecidedAt = l.clock()
 		req.Reason = "expired before decision"
-		l.appendEvent(ctx, req.JobID, "approval.expired", map[string]any{"request_id": req.ID})
-		return req, ErrExpired
+		if err := l.appendEvent(ctx, req.JobID, "approval.expired", map[string]any{"request_id": req.ID}); err != nil {
+			return nil, err
+		}
+		cp := *req
+		return &cp, ErrExpired
 	}
 
 	req.State = target
@@ -249,10 +279,13 @@ func (l *Lifecycle) Decide(ctx context.Context, requestID string, kind DecisionK
 	req.Reason = reason
 	req.DecidedAt = l.clock()
 
-	l.appendEvent(ctx, req.JobID, "approval."+string(kind), map[string]any{
+	if err := l.appendEvent(ctx, req.JobID, "approval."+string(kind), map[string]any{
 		"request_id": req.ID, "by": by, "reason": reason,
-	})
-	return req, nil
+	}); err != nil {
+		return nil, err
+	}
+	cp := *req
+	return &cp, nil
 }
 
 // Execute runs the approved action — the ONLY path to an Executor.
@@ -317,23 +350,37 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 	req.ExecutedAt = l.clock()
 	l.mu.Unlock()
 
-	l.appendEvent(ctx, req.JobID, "payment.executing", map[string]any{
+	// The claim MUST be durable before the executor runs (review-batch fix): a
+	// memory-only claim disappears in a crash and the payment would repeat. If the
+	// append fails, un-claim and abort — the executor has not run, so retrying later
+	// is safe. No durable claim, no execution.
+	if err := l.appendEvent(ctx, req.JobID, "payment.executing", map[string]any{
 		"request_id": req.ID, "intent_hash": req.IntentHash,
-	})
+	}); err != nil {
+		l.mu.Lock()
+		req.Executed = false
+		req.ExecutedAt = time.Time{}
+		l.mu.Unlock()
+		return fmt.Errorf("refusing to execute without a durable claim: %w", err)
+	}
 
 	grant := Grant{intent: in, requestID: req.ID, grantedAt: req.ExecutedAt}
 	if err := exec(ctx, grant); err != nil {
 		// The claim stands (no retry without a fresh intent) — mirrors the sidecar's
 		// conservative posture: never risk a double-spend to save a retry.
-		l.appendEvent(ctx, req.JobID, "payment.failed", map[string]any{
+		_ = l.appendEvent(ctx, req.JobID, "payment.failed", map[string]any{
 			"request_id": req.ID, "error": err.Error(),
 		})
 		return fmt.Errorf("execution failed (intent is consumed; submit a fresh one): %w", err)
 	}
 
-	l.appendEvent(ctx, req.JobID, "payment.executed", map[string]any{
+	if err := l.appendEvent(ctx, req.JobID, "payment.executed", map[string]any{
 		"request_id": req.ID, "intent_hash": req.IntentHash,
-	})
+	}); err != nil {
+		// The money moved; the durable executing-claim protects against replay. Surface
+		// the audit-gap loudly rather than swallowing it.
+		return fmt.Errorf("execution COMPLETED but the executed-event append failed (claim is durable; no replay risk): %w", err)
+	}
 	return nil
 }
 
@@ -367,8 +414,14 @@ func (l *Lifecycle) claimNonce(ctx context.Context, in Intent) error {
 	return nil
 }
 
-func (l *Lifecycle) appendEvent(ctx context.Context, jobID, kind string, payload map[string]any) {
-	// Best-effort audit append; the store is the same WAL SQLite the rest of the
-	// daemon writes, and Append is transactional (event + outbox together).
-	_, _ = l.st.Append(ctx, store.Event{Kind: kind, EntityID: jobID, Actor: "approval", Payload: payload})
+// appendEvent writes one audit event. NOT best-effort (review-batch fix): Recover()
+// rebuilds all request state from these events, so a silently-lost append is lost
+// recovery state — and for payment.executing, an open double-pay window. Callers on
+// money-critical paths fail closed on error.
+func (l *Lifecycle) appendEvent(ctx context.Context, jobID, kind string, payload map[string]any) error {
+	_, err := l.st.Append(ctx, store.Event{Kind: kind, EntityID: jobID, Actor: "approval", Payload: payload})
+	if err != nil {
+		return fmt.Errorf("audit append %s: %w", kind, err)
+	}
+	return nil
 }

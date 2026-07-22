@@ -44,13 +44,6 @@ type Assignment struct {
 	Draft *envelope.Deliverable `json:"draft,omitempty"`
 }
 
-// DDReport is the payload the stub DD worker sends back with TypeWorkerReport.
-type DDReport struct {
-	Summary  string   `json:"summary"`
-	Findings []string `json:"findings"`
-	Complete bool     `json:"complete"`
-}
-
 // StubDD is the scripted due-diligence worker for the Sun-26 exit gate. Real source
 // purchases (via PaymentIntents through Brain) and the compliance step arrive in G8;
 // the loop it exercises is already the real one.

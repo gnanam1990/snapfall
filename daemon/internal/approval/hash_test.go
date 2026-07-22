@@ -179,6 +179,32 @@ func TestCanonicalWire_DoesNotHTMLEscape(t *testing.T) {
 	}
 }
 
+// Review batch: Go's encoder escapes U+2028/U+2029 even with SetEscapeHTML(false);
+// JS JSON.stringify emits them literally. The canonicalization must emit the LITERAL
+// characters or the wire hash diverges on any purpose string containing them.
+// (The separators are written via escapes HERE so the test itself is unambiguous;
+// the assertion is that the canonical output carries the raw characters.)
+func TestCanonicalWire_LineSeparatorsMatchJS(t *testing.T) {
+	sep := "\u2028line two\u2029" // Go source escapes -> literal chars in the string
+	in := vectorIntent()
+	in.Purpose = "line one" + sep + "end"
+
+	c := CanonicalWire(in)
+	if !strings.Contains(c, "line one"+sep+"end") {
+		t.Fatalf("U+2028/U+2029 not emitted literally — diverges from JS JSON.stringify:\n%q", c)
+	}
+	for _, esc := range []string{`\u2028`, `\u2029`} {
+		if strings.Contains(c, esc) {
+			t.Fatalf("found %s escape in canonical JSON:\n%q", esc, c)
+		}
+	}
+	// The internal canonicalization uses the same encoder — same property.
+	ci := CanonicalInternal(in)
+	if strings.Contains(ci, `\u2028`) || strings.Contains(ci, `\u2029`) {
+		t.Fatalf("internal canonical form still escapes line separators:\n%q", ci)
+	}
+}
+
 // The wire canonical form matches H3 §3.3's shape exactly: 14 keys, lexicographic,
 // no whitespace. Golden vector printed for cross-checking against Vasanth's JS side.
 func TestCanonicalWire_ShapeAndGoldenVector(t *testing.T) {

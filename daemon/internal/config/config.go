@@ -3,6 +3,10 @@
 // Precedence, lowest to highest: defaults → YAML file → environment variables.
 // Flags in main override the lot. Everything has a working default so a bare
 // `snapfall` starts without any config at all.
+//
+// TRACKED (G6 review batch): when PAYMENT-POLICY config loading lands here, it MUST
+// call policy.PolicyConfig.Validate() and refuse to boot on error — Step-2 follow-up
+// B's fail-closed-at-startup property is unrealised until that call site exists.
 package config
 
 import (

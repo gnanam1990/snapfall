@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/sha3"
@@ -79,7 +80,13 @@ func jsonString(s string) string {
 		// A Go string always encodes; this is unreachable, but never silently.
 		panic(fmt.Sprintf("encoding %q: %v", s, err))
 	}
-	return string(bytes.TrimRight(buf.Bytes(), "\n"))
+	out := string(bytes.TrimRight(buf.Bytes(), "\n"))
+	// Go escapes U+2028/U+2029 unconditionally; JS JSON.stringify emits them literally.
+	// Normalize to the JS behavior so the byte-compat claim holds for every valid
+	// JSON string (review-batch fix; both are valid JSON either way).
+	out = strings.ReplaceAll(out, `\u2028`, "\u2028")
+	out = strings.ReplaceAll(out, `\u2029`, "\u2029")
+	return out
 }
 
 // canonicalValue renders one Intent field value deterministically.

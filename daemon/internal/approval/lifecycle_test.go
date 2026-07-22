@@ -466,6 +466,62 @@ func TestNonce_SurvivesRestart(t *testing.T) {
 	}
 }
 
+// Review batch: Submit/Decide return COPIES — mutating them cannot move the real
+// gate state (the map-owned request stays private).
+func TestSubmit_ReturnedRequestIsACopy(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	res, _ := f.l.Submit(ctx, f.demoIntent(nil))
+	res.Request.State = StateApproved // caller tampers with the returned struct
+
+	// The REAL request is still pending: execution refuses.
+	if err := f.l.Execute(ctx, res.Request.Intent, res.Request.ID, f.exec.fn()); !errors.Is(err, ErrNotApproved) {
+		t.Fatalf("mutating the returned request changed gate state: %v", err)
+	}
+	if f.exec.n.Load() != 0 {
+		t.Fatal("executor ran off a caller-mutated request")
+	}
+
+	// Decide's return is a copy too.
+	req, err := f.l.Decide(ctx, res.Request.ID, DecideApprove, "gnanam", "")
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	req.Executed = true // tamper
+	if err := f.l.Execute(ctx, req.Intent, req.ID, f.exec.fn()); err != nil {
+		t.Fatalf("execute after tampering a COPY must still work: %v", err)
+	}
+	if f.exec.n.Load() != 1 {
+		t.Fatal("execution did not run exactly once")
+	}
+}
+
+// Review batch (the double-pay hazard): if the write-ahead claim CANNOT be persisted,
+// the executor must not run — a memory-only claim disappears in a crash and the
+// payment would repeat. Fail closed: no durable claim, no execution.
+func TestExecute_StoreDownFailsClosedBeforeExecutor(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "down.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	f := newFixtureOn(t, st)
+
+	res, _ := f.l.Submit(ctx, f.demoIntent(nil))
+	f.l.Decide(ctx, res.Request.ID, DecideApprove, "gnanam", "")
+
+	st.Close() // the store dies before execution
+
+	err = f.l.Execute(ctx, res.Request.Intent, res.Request.ID, f.exec.fn())
+	if err == nil {
+		t.Fatal("execution proceeded without a durable claim")
+	}
+	if f.exec.n.Load() != 0 {
+		t.Fatal("executor ran without a durable write-ahead claim — the double-pay window is open")
+	}
+}
+
 // A denied intent opens no approval path at all.
 func TestSubmit_DeniedIntentHasNoRequest(t *testing.T) {
 	f := newFixture(t)

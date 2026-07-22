@@ -52,3 +52,20 @@ func TestFunding_RefusesForgedEmptyGrant(t *testing.T) {
 		t.Fatalf("refused grant was recorded: %d instruction(s)", got)
 	}
 }
+
+// Review batch: a caller replaying the SAME legitimate grant must produce ONE movement,
+// not many — belt-and-suspenders atop the lifecycle's exactly-once.
+func TestFunding_RefusesGrantReplay(t *testing.T) {
+	agent := funding.New()
+	g := approval.NewGrantForTest("req_1", "job_x", 4_000_000, "api.m.example")
+
+	if err := agent.Execute(context.Background(), g); err != nil {
+		t.Fatalf("first execute: %v", err)
+	}
+	if err := agent.Execute(context.Background(), g); err == nil {
+		t.Fatal("replaying the same grant must be refused")
+	}
+	if got := len(agent.Executed()); got != 1 {
+		t.Fatalf("grant replay produced %d movements, want 1", got)
+	}
+}
