@@ -17,8 +17,9 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { purchase, PolicyViolation, type ApprovedIntent } from './buyer.js';
+import { purchase, probeChallenge, PolicyViolation, type ApprovedIntent } from './buyer.js';
 import { formatUsdc } from './x402.js';
 
 const PORT = 4099; // off the default so a running dev seller is not disturbed
@@ -65,7 +66,9 @@ async function main() {
 
   const seller: ChildProcess = spawn(
     process.execPath,
-    ['--import', 'tsx', new URL('./seller.ts', import.meta.url).pathname],
+    // fileURLToPath, not .pathname: on Windows .pathname yields "/D:/…", which spawn mangles
+    // into "D:\D:\…". fileURLToPath returns a proper native path on every platform.
+    ['--import', 'tsx', fileURLToPath(new URL('./seller.ts', import.meta.url))],
     { env: { ...process.env, PAID_API_PORT: String(PORT), ARC_CHAIN_ID: String(CHAIN_ID) }, stdio: 'inherit' },
   );
 
@@ -160,6 +163,53 @@ async function main() {
     console.log('\n6. demo totals');
     const spend = profile.amountPaid + bench.amountPaid;
     check('total external spend is 0.10 USDC', spend === 100_000n, `${formatUsdc(spend)} USDC`);
+
+    // ── 7. Merchant substitution (AT-05, payee half) ──
+    // The other AT-05 case (price > maxAmount) is test 5. This is the payee half the old
+    // suite never exercised: a seller can keep the price in-budget but swap the payTo, and
+    // the treasury must refuse before signing. Probe the live payee, then approve a DIFFERENT
+    // one and assert no signature is produced.
+    console.log('\n7. merchant swap — approval bound to a different payee than the seller quotes');
+    const live = await probeChallenge(`${BASE}/v1/company-profile`, CHAIN_ID);
+    const WRONG_PAYEE = '0x000000000000000000000000000000000000bEEF'; // != seller live payTo
+    let signedWrongPayee = false;
+    try {
+      await purchase(
+        intent({
+          resource: `${BASE}/v1/company-profile`,
+          maxAmount: 40_000n,
+          amount: BigInt(live.amount),
+          asset: live.asset,
+          merchant: WRONG_PAYEE,
+        }),
+        account,
+        { chainId: CHAIN_ID },
+      );
+      signedWrongPayee = true;
+    } catch (e) {
+      check(
+        'refused before signing (MERCHANT_CHANGED)',
+        e instanceof PolicyViolation && e.code === 'MERCHANT_CHANGED',
+        (e as Error).message,
+      );
+    }
+    check('no signature for a swapped payee', !signedWrongPayee);
+
+    // ── 8. Fully-bound purchase still succeeds when every approved term matches ──
+    console.log('\n8. bound terms match — purchase proceeds normally');
+    const bound = await purchase(
+      intent({
+        resource: `${BASE}/v1/company-profile`,
+        maxAmount: 40_000n,
+        amount: BigInt(live.amount),
+        asset: live.asset,
+        merchant: live.payTo,
+        network: live.network,
+      }),
+      account,
+      { chainId: CHAIN_ID },
+    );
+    check('bound purchase returns 200', bound.amountPaid === 40_000n, `paid ${formatUsdc(bound.amountPaid)} USDC`);
 
     console.log(
       failures === 0
