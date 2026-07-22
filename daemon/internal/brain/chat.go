@@ -345,6 +345,14 @@ func (b *Brain) onQAVerdict(ctx context.Context, kind string, e envelope.Envelop
 	js, ok := b.jobs[e.JobID]
 	qaKind := b.qaKind
 	maxRev := b.maxRevisions
+	// Capture the stage UNDER the lock (Anandan re-review): the verdict paths write
+	// js.Stage under b.mu, so reading js.Stage unlocked below is a data race even though
+	// the later atomic claim prevents duplicate EFFECTS. The captured value is a fine
+	// non-authoritative snapshot; the authoritative gate is still the atomic claim.
+	var stage JobStage
+	if ok {
+		stage = js.Stage
+	}
 	b.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("verdict for unknown job %s", e.JobID)
@@ -352,10 +360,11 @@ func (b *Brain) onQAVerdict(ctx context.Context, kind string, e envelope.Envelop
 	if kind == "" || kind != qaKind {
 		return fmt.Errorf("verdict refused: worker kind %q is not the registered QA reviewer %q — only QA issues verdicts", kind, qaKind)
 	}
-	// A cheap non-authoritative pre-check for a friendly error; the AUTHORITATIVE gate is
-	// the atomic claim below / in markDeliveryReady (review fix, Anandan #3).
-	if js.Stage != StageQAReview {
-		return fmt.Errorf("verdict refused: job %s is %s, not under QA review", e.JobID, js.Stage)
+	// A cheap non-authoritative pre-check for a friendly error (reads the captured stage,
+	// never js.Stage unlocked). The AUTHORITATIVE gate is the atomic claim below / in
+	// markDeliveryReady.
+	if stage != StageQAReview {
+		return fmt.Errorf("verdict refused: job %s is %s, not under QA review", e.JobID, stage)
 	}
 
 	var v envelope.QAVerdict
