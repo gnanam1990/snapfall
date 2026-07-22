@@ -165,6 +165,12 @@ function isApprovalToken(x: unknown): x is ApprovalToken {
   return !!x && typeof x === 'object' && s.every((k) => typeof (x as Record<string, unknown>)[k] === 'string');
 }
 
+/** A canonical atomic-USDC amount: a base-10 non-negative integer string with no sign,
+ *  decimal, leading zeros (except "0"), or `0x`. Anything else must not reach BigInt(). */
+function isCanonicalAtomic(v: unknown): v is string {
+  return typeof v === 'string' && /^(0|[1-9][0-9]*)$/.test(v);
+}
+
 function h3Receipt(w: WireIntent, r: { receipt: { amount: string; payer: string; payee: string; nonce: string; settlement: string } }): H3Receipt {
   return {
     resource: w.resource,
@@ -255,6 +261,19 @@ async function handlePay(body: unknown): Promise<Reply> {
   const intent = b.intent;
   const token = b.approvalToken;
 
+  // Semantic validation of the atomic-amount fields BEFORE any BigInt() conversion:
+  // isWireIntent is type-only, so a non-canonical amount ("4.0", "0x5", "") would reach
+  // BigInt() and surface as a 500 instead of the documented 400 (review fix).
+  for (const [field, value] of [
+    ['intent.amount', intent.amount],
+    ['intent.maxAmount', intent.maxAmount],
+    ['approvalToken.approvedAmount', token.approvedAmount],
+  ] as const) {
+    if (!isCanonicalAtomic(value)) {
+      return errorReply(400, 'BAD_REQUEST', `${field} is not a canonical atomic USDC string: ${JSON.stringify(value)}`);
+    }
+  }
+
   const intentHash = computeIntentHash(intent);
   const paymentId = computePaymentId(intentHash, intent.nonce);
 
@@ -293,12 +312,18 @@ async function handlePay(body: unknown): Promise<Reply> {
     //    that does not resolve is worse than none. The envelope's paymentId is non-null
     //    ONLY once a durable record exists (review fix — closes the spec/code divergence).
     //    A failure here means nothing was signed; Funding releases its reservation. ──
-    if (token.intentHash !== intentHash) {
-      return errorReply(409, 'INTENT_HASH_MISMATCH', 'approval hash does not match the intent (AT-05)', null);
-    }
+    // AUTHENTICATE the token before trusting any of its fields (review fix — the token's
+    // HMAC must verify before we act on its claimed intentHash/decision/amount). This is
+    // the order the spec §2.2 now documents.
     if (!verifyApproval(H2_SECRET, token)) {
       return errorReply(401, 'APPROVAL_TOKEN_INVALID', 'approval signature failed verification', null);
     }
+    if (token.intentHash !== intentHash) {
+      return errorReply(409, 'INTENT_HASH_MISMATCH', 'approval hash does not match the intent (AT-05)', null);
+    }
+    // decision/expiresAt divergence between token and intent means the token authorizes a
+    // DIFFERENT deal than the one presented → APPROVAL_TOKEN_INVALID (§2.4; the team may
+    // split these into DECISION_MISMATCH/EXPIRES_AT_MISMATCH at the H3 session).
     if (token.decision !== intent.decision || token.expiresAt !== intent.expiresAt) {
       return errorReply(401, 'APPROVAL_TOKEN_INVALID', 'approval decision/expiry does not match the intent', null);
     }
@@ -440,7 +465,14 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return send(res, await handlePay(await readBody(req)));
     }
     if (method === 'GET' && path.startsWith('/v1/status/')) {
-      return send(res, handleStatus(decodeURIComponent(path.slice('/v1/status/'.length))));
+      // decodeURIComponent throws on a malformed %-escape; keep that a 400, not a 500.
+      let id: string;
+      try {
+        id = decodeURIComponent(path.slice('/v1/status/'.length));
+      } catch {
+        return send(res, errorReply(400, 'BAD_REQUEST', 'malformed paymentId in path'));
+      }
+      return send(res, handleStatus(id));
     }
 
     return send(res, errorReply(404, 'BAD_REQUEST', `no such route: ${method} ${path}`));

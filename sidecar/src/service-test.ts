@@ -265,6 +265,25 @@ async function main() {
     const badq = await api('POST', '/v1/quote', { resource: 'not a url', chainId: CHAIN_ID });
     check('400 BAD_REQUEST on malformed URL', badq.status === 400 && badq.json?.error?.code === 'BAD_REQUEST', `HTTP ${badq.status} ${badq.json?.error?.code}`);
 
+    // 16. Non-canonical atomic amount is a 400, not a 500 (never reaches BigInt()).
+    console.log('\n16. non-canonical amount is a client error');
+    const badAmt = makeIntent(profileUrl, accept, { amount: '4.0' });
+    const ba = await api('POST', '/v1/pay', { intent: badAmt, approvalToken: makeToken(badAmt) });
+    check('400 BAD_REQUEST on non-canonical amount', ba.status === 400 && ba.json?.error?.code === 'BAD_REQUEST', `HTTP ${ba.status} ${ba.json?.error?.code}`);
+
+    // 17. The token HMAC is checked BEFORE the intent hash: a token with a bad signature
+    //     AND a mismatched hash returns APPROVAL_TOKEN_INVALID, not INTENT_HASH_MISMATCH.
+    console.log('\n17. token authenticated before its fields are trusted');
+    const ordIntent = makeIntent(profileUrl, accept);
+    const ordToken = makeToken(ordIntent, 'the-wrong-secret', { intentHash: '0xdeadbeef' });
+    const ord = await api('POST', '/v1/pay', { intent: ordIntent, approvalToken: ordToken });
+    check('401 APPROVAL_TOKEN_INVALID before hash check', ord.status === 401 && ord.json?.error?.code === 'APPROVAL_TOKEN_INVALID', `HTTP ${ord.status} ${ord.json?.error?.code}`);
+
+    // 18. Malformed paymentId on status is a 400, not a 500.
+    console.log('\n18. malformed status id is a client error');
+    const badStatus = await api('GET', '/v1/status/%');
+    check('400 BAD_REQUEST on malformed status id', badStatus.status === 400 && badStatus.json?.error?.code === 'BAD_REQUEST', `HTTP ${badStatus.status} ${badStatus.json?.error?.code}`);
+
     console.log(
       failures === 0
         ? '\nH3 sidecar green: quote -> approve -> pay -> status, with every gate holding.\n'

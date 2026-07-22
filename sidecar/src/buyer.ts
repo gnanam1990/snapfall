@@ -117,8 +117,13 @@ export class PolicyViolation extends Error {
   }
 }
 
-/** Thrown on a wire/transport/seller failure. `FACILITATOR_ERROR` is post-sign (may still
- *  settle, must reconcile); all other codes are pre-sign (safe to release). */
+/** Thrown on a wire/transport/seller failure. POST-SIGN codes (the signed authorization
+ *  was already submitted, so it may still settle and MUST be reconciled, not released):
+ *  `FACILITATOR_ERROR` and `PAYMENT_REJECTED` (a non-200 to X-PAYMENT still means the
+ *  seller received the bearer authorization). PRE-SIGN codes are safe to release:
+ *  `RESOURCE_NOT_FOUND`, `CHALLENGE_UNAVAILABLE`, `NO_MATCHING_NETWORK`,
+ *  `UPSTREAM_UNREACHABLE`. (Dry run: no broadcast, so PAYMENT_REJECTED is effectively
+ *  terminal; the distinction becomes load-bearing once a real facilitator is wired.) */
 export class PaymentFailed extends Error {
   readonly code: PaymentCode;
   constructor(code: PaymentCode, message: string) {
@@ -141,6 +146,21 @@ function freshNonce(): Hex {
  * endpoint (V4), so the probe/select logic cannot drift between the two paths.
  */
 export async function probeChallenge(resource: string, chainId: number): Promise<AcceptOption> {
+  // Validate the URL BEFORE fetching: `intent.resource` is caller-supplied, so an
+  // unvalidated GET is an SSRF surface. Reject anything that is not a well-formed
+  // http(s) URL. (A configurable host allowlist is the production hardening; noted for
+  // the H3 session. Here we at least refuse non-http schemes and unparseable URLs so a
+  // malformed or file://-style resource cannot trigger a fetch — review fix.)
+  let url: URL;
+  try {
+    url = new URL(resource);
+  } catch {
+    throw new PaymentFailed('RESOURCE_NOT_FOUND', `resource is not a valid URL: ${resource}`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new PaymentFailed('RESOURCE_NOT_FOUND', `resource must be http(s), got ${url.protocol}`);
+  }
+
   let probe: Response;
   try {
     probe = await fetch(resource, { method: 'GET' });
@@ -306,7 +326,21 @@ export async function signAndSubmit(
     );
   }
 
-  const { data, receipt } = (await paid.json()) as PurchaseResult;
+  // A parse failure AFTER the seller's 200 is post-submit: the authorization was signed
+  // and delivered, so the outcome is unknown, not a clean failure. Surface it as
+  // FACILITATOR_ERROR (may still settle; reconcile) rather than letting a raw
+  // SyntaxError escape (review fix).
+  let parsed: PurchaseResult;
+  try {
+    parsed = (await paid.json()) as PurchaseResult;
+  } catch (e) {
+    throw new PaymentFailed(
+      'FACILITATOR_ERROR',
+      `seller returned 200 but its body did not parse (${(e as Error).message}); ` +
+        `the signed authorization was submitted and may still settle — reconcile`,
+    );
+  }
+  const { data, receipt } = parsed;
 
   // Prefer the header receipt when present (FR-X402-004 evidence chain).
   const headerReceipt = paid.headers.get('x-payment-response');

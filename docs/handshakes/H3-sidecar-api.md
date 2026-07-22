@@ -125,11 +125,11 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
 
 **Execution order (normative; the first failure short-circuits).** No signature is produced before step 7.
 1. Bearer auth → `401 UNAUTHENTICATED`.
-2. Shape/type validation of `intent` + `approvalToken` → `400 BAD_REQUEST`.
+2. Shape/type validation of `intent` + `approvalToken` → `400 BAD_REQUEST`. Includes **canonical atomic-amount validation**: `intent.amount`, `intent.maxAmount`, `approvalToken.approvedAmount` must each be a base-10 non-negative integer string (`^(0|[1-9][0-9]*)$`), validated **before** any `BigInt()` conversion so a non-canonical amount is a `400`, never a `500`.
 3. **Durable idempotency lookup by `idempotencyNonce`** (§4.2): if a record exists and is `DELIVERED`/terminal, return it (`idempotentReplay:true`); if it exists but is unresolved (`SIGNED`/`SUBMITTED` after a crash) → `409 PAYMENT_IN_PROGRESS` (reconcile via `status`, never a `200` that reads as success); if an in-flight lock is held → `409 PAYMENT_IN_PROGRESS`. Never re-execute.
-4. Approval HMAC verify (§3.4) → `401 APPROVAL_TOKEN_INVALID` (`paymentId: null`).
-5. Recompute `intentHash(intent)` and compare to `approvalToken.intentHash` → `409 INTENT_HASH_MISMATCH` (**AT-05, hash defense**). Also enforce `approvalToken.decision == intent.decision`, `approvalToken.approvedAmount == intent.amount`, `approvalToken.expiresAt == intent.expiresAt`. (all `paymentId: null`)
-6. Decision gate (Gate 1): `intent.decision ∈ {AUTO_APPROVE, HUMAN_APPROVED}` → else `403 INTENT_NOT_APPROVED`. Expiry: `now < intent.expiresAt` AND `intent.expiresAt` parses to a finite instant → else `410 APPROVAL_EXPIRED` (an unparseable timestamp fails closed).
+4. **Approval HMAC verify (§3.4) → `401 APPROVAL_TOKEN_INVALID` — FIRST, so the token is authenticated before any of its fields are trusted** (`paymentId: null`).
+5. Recompute `intentHash(intent)` and compare to `approvalToken.intentHash` → `409 INTENT_HASH_MISMATCH` (**AT-05, hash defense**). Then enforce `approvalToken.decision == intent.decision` and `approvalToken.expiresAt == intent.expiresAt` (→ `401 APPROVAL_TOKEN_INVALID`), and `approvalToken.approvedAmount == intent.amount` (→ `409 APPROVED_AMOUNT_MISMATCH`). (all `paymentId: null`)
+6. Expiry: `now < intent.expiresAt` AND `intent.expiresAt` parses to a finite instant → else `410 APPROVAL_EXPIRED` (an unparseable timestamp fails closed). Decision gate (Gate 1): `intent.decision ∈ {AUTO_APPROVE, HUMAN_APPROVED}` → else `403 INTENT_NOT_APPROVED`.
 7. **Probe the resource exactly once** to obtain the live `accept`. Then, **before signing**, assert against the approved intent (**AT-05, live-equality defense**):
    - `accept.network == intent.network` else `422 NO_MATCHING_NETWORK`
    - `accept.payTo == intent.merchant` else `409 MERCHANT_CHANGED`
@@ -167,21 +167,25 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
 | 401 | `UNAUTHENTICATED` | bad bearer token |
 | 400 | `BAD_REQUEST` | malformed intent/token, non-atomic amount, bad hex |
 | 409 | `PAYMENT_IN_PROGRESS` | same nonce executing elsewhere (§4.3); `retriable:true`, carries `paymentId` |
-| 401 | `APPROVAL_TOKEN_INVALID` | approval HMAC verify failed |
+| 401 | `APPROVAL_TOKEN_INVALID` | approval HMAC verify failed (**checked first — authenticate the token before trusting its fields**); OR `token.decision`/`token.expiresAt` diverge from the intent |
 | 409 | `INTENT_HASH_MISMATCH` | recomputed hash != token hash — **AT-05 hash defense**, pre-sign |
+| 409 | `APPROVED_AMOUNT_MISMATCH` | `approvalToken.approvedAmount != intent.amount` — evaluated in step 5, **before** the decision/expiry gates |
+| 410 | `APPROVAL_EXPIRED` | `now >= intent.expiresAt`, OR `intent.expiresAt` is unparseable (fail closed) |
 | 403 | `INTENT_NOT_APPROVED` | decision ∉ {AUTO_APPROVE, HUMAN_APPROVED} — Gate 1, pre-sign |
-| 410 | `APPROVAL_EXPIRED` | `now >= intent.expiresAt` |
-| 409 | `APPROVED_AMOUNT_MISMATCH` | `approvalToken.approvedAmount != intent.amount` |
 | 422 | `NO_MATCHING_NETWORK` | live `accept.network != intent.network` |
 | 409 | `MERCHANT_CHANGED` | live `accept.payTo != intent.merchant` — **AT-05 live defense**, pre-sign |
 | 409 | `ASSET_CHANGED` | live `accept.asset != intent.asset` — pre-sign |
 | 409 | `PRICE_CHANGED` | live `accept.amount != intent.amount` — **AT-05 live defense**, pre-sign |
 | 402 | `PRICE_EXCEEDS_RESERVED` | live `accept.amount > intent.maxAmount` — Gate 2, pre-sign |
-| 402 | `PAYMENT_REJECTED` | seller non-200 to `X-PAYMENT`; `details.sellerReason` = challenge `error` |
-| 502 | `FACILITATOR_ERROR` | transport failure **after submit**; record → `RECONCILING` (non-terminal), `retriable:true` |
+| 402 | `PAYMENT_REJECTED` | seller non-200 to `X-PAYMENT`; `details.sellerReason` = challenge `error`. **POST-sign** (see release safety) |
+| 502 | `FACILITATOR_ERROR` | transport failure **after submit**, OR a 200 whose body did not parse; record → `RECONCILING` (non-terminal), `retriable:true` |
 | 500 | `INTERNAL` | unexpected sidecar fault |
 
-**Release safety (see §7):** every code **above** `FACILITATOR_ERROR` is a pre-sign or pre-submit failure — nothing settled, so Funding releases the full reservation immediately. `FACILITATOR_ERROR` is post-submit: the signed authorization may still settle, so the record goes to `RECONCILING` and Funding MUST reconcile via `status` before releasing.
+The table lists codes in evaluation order (matching the step order above), so the row order is normative, not cosmetic.
+
+> **Open for the H3 session (cubic finding):** `token.decision`/`token.expiresAt` divergence currently returns `APPROVAL_TOKEN_INVALID` (the token authorizes a different deal). If the team wants granularity, add `DECISION_MISMATCH` / `EXPIRES_AT_MISMATCH` to the §2.4 enum — the sibling `APPROVED_AMOUNT_MISMATCH` already exists. Decision is deliberately outside the intentHash (§3.3), so `INTENT_HASH_MISMATCH` will not catch it; the code above is the current contract.
+
+**Release safety (see §7).** *Pre-sign* codes (everything from `UNAUTHENTICATED` through `PRICE_EXCEEDS_RESERVED`) mean nothing was signed — Funding releases the full reservation immediately. *Post-sign* codes — `PAYMENT_REJECTED` **and** `FACILITATOR_ERROR` — mean the signed authorization was submitted and, once a real facilitator is wired, may still settle: the record goes to `RECONCILING`/terminal and Funding MUST reconcile via `status` before releasing. (In the current dry run there is no broadcast, so `PAYMENT_REJECTED` is effectively terminal — but consumers must code to the post-sign contract so the distinction holds when settlement lands.)
 
 ### 2.3 `status` — read a payment's state
 - **`GET /v1/status/{paymentId}`**
