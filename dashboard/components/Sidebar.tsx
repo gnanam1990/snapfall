@@ -25,7 +25,12 @@ export default function Sidebar() {
         {NAV.map((n) => {
           const active = n.href === '/' ? pathname === '/' : pathname.startsWith(n.href);
           return (
-            <Link key={n.href} href={n.href} className={`nav-link${active ? ' active' : ''}`}>
+            <Link
+              key={n.href}
+              href={n.href}
+              className={`nav-link${active ? ' active' : ''}`}
+              aria-current={active ? 'page' : undefined}
+            >
               <span>{n.label}</span>
               {n.pill ? <span className="pill">{n.pill}</span> : null}
             </Link>
@@ -33,7 +38,7 @@ export default function Sidebar() {
         })}
       </nav>
       <div className="sidebar-foot">
-        <div className="dot-live">● live on Arc testnet</div>
+        <div className="dot-live">● demo replay · Arc testnet next</div>
         <div style={{ marginTop: 4 }}>capital in a snap,<br />settlement in a waterfall</div>
       </div>
     </aside>

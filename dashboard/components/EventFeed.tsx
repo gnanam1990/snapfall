@@ -1,5 +1,5 @@
 import type { FinancialEvent, EventCategory } from '@/lib/types';
-import { formatUsdc, relativeTime } from '@/lib/format';
+import { formatUsdc, relativeTime, isSafeExplorerUrl } from '@/lib/format';
 
 const CAT_COLOR: Record<EventCategory, string> = {
   Float: 'var(--accent)',
@@ -29,7 +29,7 @@ export default function EventFeed({ events }: { events: FinancialEvent[] }) {
               <span className="feed-type">{e.type}</span>
               <span>·</span>
               <span>{relativeTime(e.ts)}</span>
-              {e.explorerUrl ? (
+              {e.explorerUrl && isSafeExplorerUrl(e.explorerUrl) ? (
                 <>
                   <span>·</span>
                   <a className="feed-link" href={e.explorerUrl} target="_blank" rel="noreferrer">

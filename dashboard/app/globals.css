@@ -71,6 +71,12 @@ a { color: inherit; text-decoration: none; }
 .badge-live { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .badge-live::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: var(--pos); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); animation: pulse 1.8s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); } 70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+.badge-reconnecting::before { background: var(--warn); animation: none; }
+/* WCAG 2.3.3: the ambient pulse is decorative; honor reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  .badge-live::before { animation: none; }
+  .hero-num { transition: none; }
+}
 
 /* ── cards & grid ── */
 .grid { display: grid; gap: 16px; }
@@ -138,9 +144,12 @@ table.t { width: 100%; border-collapse: collapse; }
 
 /* ── badges ── */
 .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--border-2); color: var(--muted); }
-.badge.Funded, .badge.Accepted { color: var(--pos); border-color: #1c4634; background: #0e2018; }
-.badge.InProgress, .badge.Delivered { color: var(--sky); border-color: #14374a; background: #0b1c26; }
+.badge.Funded, .badge.Accepted, .badge.Repaid { color: var(--pos); border-color: #1c4634; background: #0e2018; }
+.badge.InProgress, .badge.Delivered, .badge.DeliveryReady { color: var(--sky); border-color: #14374a; background: #0b1c26; }
 .badge.Issued { color: var(--accent); border-color: var(--accent-dim); background: #0c1f1d; }
+.badge.Failed, .badge.Refunded, .badge.Cancelled, .badge.WrittenOff { color: var(--neg); border-color: #58222f; background: #230b12; }
+.badge.AwaitingFunding { color: var(--warn); border-color: #574314; background: #201806; }
+.badge.Draft { color: var(--muted-2); }
 
 .loading { color: var(--muted); padding: 60px 0; text-align: center; }
 .mt { margin-top: 16px; }
