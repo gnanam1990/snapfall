@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,8 +39,13 @@ func TestAT09_FrozenJobStopsNewTasks(t *testing.T) {
 		t.Fatalf("request: %v", err)
 	}
 	reg.Engage(ctx, freeze.KindJob, "job_f1", "gnanam", "incident")
-	if err := b.Confirm(ctx, "job_f1", "gnanam"); err == nil || !strings.Contains(err.Error(), "frozen") {
-		t.Fatalf("confirm on frozen job: %v, want frozen refusal", err)
+	// Async (G8): Confirm dispatches and returns; the freeze gate at worker-start withholds
+	// the run, surfacing as the task's terminal error.
+	if err := b.Confirm(ctx, "job_f1", "gnanam"); err != nil {
+		t.Fatalf("confirm dispatch: %v", err)
+	}
+	if err := b.AwaitTask("job_f1"); err == nil || !strings.Contains(err.Error(), "frozen") {
+		t.Fatalf("frozen job task: %v, want frozen refusal", err)
 	}
 	js, _ := b.Job("job_f1")
 	if js.Stage == StageComplete || js.Stage == StageDeliveryReady {
@@ -58,8 +64,11 @@ func TestAT09_FrozenJobStopsNewTasks(t *testing.T) {
 	if _, err := b.HandleOwnerRequest(ctx, "job_f3", "Gamma Corp"); err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	if err := b.Confirm(ctx, "job_f3", "gnanam"); err == nil || !strings.Contains(err.Error(), "frozen") {
-		t.Fatalf("dispatch of frozen agent: %v, want frozen refusal", err)
+	if err := b.Confirm(ctx, "job_f3", "gnanam"); err != nil {
+		t.Fatalf("confirm dispatch: %v", err)
+	}
+	if err := b.AwaitTask("job_f3"); err == nil || !strings.Contains(err.Error(), "frozen") {
+		t.Fatalf("dispatch of frozen agent task: %v, want frozen refusal", err)
 	}
 }
 
@@ -77,9 +86,13 @@ func TestAT09_FreezeMidQALoopWithholdsReassignment(t *testing.T) {
 	}
 	// The QA worker below engages a job freeze BEFORE returning its bounce verdict,
 	// so the bounce's re-assignment must be withheld.
-	err := b.Confirm(ctx, "job_mid", "gnanam")
-	if err == nil || !strings.Contains(err.Error(), "frozen") {
-		t.Fatalf("bounce re-assignment on frozen job: %v, want frozen refusal", err)
+	if err := b.Confirm(ctx, "job_mid", "gnanam"); err != nil {
+		t.Fatalf("confirm dispatch: %v", err)
+	}
+	// The QA worker engages a job freeze before its bounce verdict; the bounce's
+	// re-assignment is withheld at worker-start and surfaces as the task's terminal error.
+	if err := b.AwaitTask("job_mid"); err == nil || !strings.Contains(err.Error(), "frozen") {
+		t.Fatalf("bounce re-assignment task: %v, want frozen refusal", err)
 	}
 	js, _ := b.Job("job_mid")
 	if js.Stage != StageRevision {
@@ -118,6 +131,7 @@ func TestAT09_ReadsRemainWhileFrozen(t *testing.T) {
 	if err := b.Confirm(ctx, "job_r", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_r")
 	reg.Engage(ctx, freeze.KindOrg, "org_demo", "gnanam", "full stop")
 
 	if _, ok := b.Job("job_r"); !ok {
@@ -179,6 +193,7 @@ func TestRecover_BrainRehydratesJobStages(t *testing.T) {
 	if err := b1.Confirm(ctx, "job_h", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b1, "job_h")
 
 	// "Restart": a fresh Brain over the same memory dir, jobs map empty until Recover.
 	b2 := New(b1.log, st, mem, b1.funding)
@@ -196,4 +211,44 @@ func TestRecover_BrainRehydratesJobStages(t *testing.T) {
 	if js.Stage != StageComplete || js.Scope == "" {
 		t.Fatalf("rehydrated job wrong: %+v", js)
 	}
+}
+
+// Review decision #3 (G8 freeze × async): a freeze that engages in the dispatch->start
+// WINDOW — after dispatchTask launched the goroutine, before the worker's freeze-check —
+// still stops the worker. "Begins" means worker-start. The test-only beforeFreezeCheck
+// hook engages the freeze deterministically inside that window.
+func TestAT09_FreezeInDispatchWindowStopsWorker(t *testing.T) {
+	b, reg := newFrozenBrain(t)
+	ctx := context.Background()
+
+	var ran atomic.Bool
+	b.mu.Lock()
+	b.workers["due-diligence"] = windowWorker{ran: &ran}
+	// Engage a JOB freeze in the dispatch->start window (invoked just before the gate).
+	b.beforeFreezeCheck = func() {
+		reg.Engage(ctx, freeze.KindJob, "job_win", "gnanam", "freeze in the dispatch window")
+	}
+	b.mu.Unlock()
+
+	if _, err := b.HandleOwnerRequest(ctx, "job_win", "Acme Corp"); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if err := b.Confirm(ctx, "job_win", "gnanam"); err != nil {
+		t.Fatalf("confirm dispatch: %v", err)
+	}
+	if err := b.AwaitTask("job_win"); err == nil || !strings.Contains(err.Error(), "frozen") {
+		t.Fatalf("task: %v, want frozen refusal", err)
+	}
+	if ran.Load() {
+		t.Fatal("the worker RAN despite a freeze in the dispatch->start window — \"begins\" is not worker-start")
+	}
+}
+
+// windowWorker records whether its Handle body ever executed.
+type windowWorker struct{ ran *atomic.Bool }
+
+func (windowWorker) Kind() string { return "due-diligence" }
+func (w windowWorker) Handle(context.Context, envelope.Envelope, worker.Report) error {
+	w.ran.Store(true)
+	return nil
 }

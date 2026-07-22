@@ -35,6 +35,7 @@ func TestReport_QAWorkerCannotAuthorDraft(t *testing.T) {
 	if err := b.Confirm(ctx, "job_x", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_x")
 	// Deliver a TypeWorkerReport stamped as the QA kind (as deliverFromWorker would
 	// see it): it must be refused, not stored as an author draft.
 	draft := envelope.Deliverable{Title: "self-authored", Summary: "x",

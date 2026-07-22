@@ -48,6 +48,24 @@ type Brain struct {
 	// freezeReg is the G11 kill switch (nil = ungated); orgID scopes org-level checks.
 	freezeReg *freeze.Registry
 	orgID     string
+	// beforeFreezeCheck is a TEST-ONLY hook (nil in production) invoked at worker-start,
+	// immediately before the freeze gate — it lets a test engage a freeze deterministically
+	// in the dispatch->start window to pin that "begins" means worker-start (decision #3).
+	beforeFreezeCheck func()
+	// tasks tracks the one background goroutine per dispatched job (G8 async assignment).
+	// Assignment is no longer inline in the owner's Confirm() call — the worker runs on
+	// its own goroutine so a blocked Purchase never holds the owner's call hostage, and a
+	// single-threaded owner surface (Telegram/HTTP) cannot deadlock. Each handle carries a
+	// done channel for a DETERMINISTIC completion signal (tests await it, never poll).
+	tasks map[string]*taskHandle
+}
+
+// taskHandle is the per-job background dispatch: its done channel closes when the whole
+// worker interaction (author -> QA loop -> terminal) has run to completion or been
+// withheld, and err is the terminal outcome, set before done is closed.
+type taskHandle struct {
+	done chan struct{}
+	err  error
 }
 
 // SetFreeze wires the kill-switch registry and the org identity it checks against.
@@ -81,6 +99,7 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 		funding: fund,
 		workers: make(map[string]worker.Worker),
 		jobs:    make(map[string]*jobState),
+		tasks:   make(map[string]*taskHandle),
 	}
 
 	b.maxRevisions = 2
@@ -192,12 +211,58 @@ func (b *Brain) deliverFromWorker(ctx context.Context, kind string, e envelope.E
 	}
 }
 
-// assign dispatches an assignment to the registered worker of the given kind.
-// bounceReasons and draft parameterize the G9 loop: a revision carries the QA
-// reasons back to the author; a QA assignment carries the draft under review.
-// This is Brain acting, not an inbound route — there is no envelope a spoke could
-// send that lands here.
-func (b *Brain) assign(ctx context.Context, jobID, kind string, bounceReasons []string, draft *envelope.Deliverable) error {
+// bounceReasons and draft parameterize the G9 loop: a revision carries the QA reasons
+// back to the author; a QA assignment carries the draft under review. This is Brain
+// acting, not an inbound route — there is no envelope a spoke could send that lands here.
+//
+// dispatchTask is the ASYNC entry to a job's worker (G8): it launches runTask on a
+// tracked background goroutine and returns immediately, so the owner's Confirm() call is
+// never held for the job's duration. The freeze gate is NOT here — it is inside runTask,
+// immediately before Handle, so "begins" means worker-start (decision #3): a freeze that
+// engages in the dispatch->start window still stops the worker. Nested dispatches inside
+// the QA loop (author<->QA) run INLINE via runTask on this same goroutine, so one handle
+// covers the whole interaction and its done channel fires exactly at the terminal state.
+func (b *Brain) dispatchTask(ctx context.Context, jobID, kind string, bounceReasons []string, draft *envelope.Deliverable) error {
+	h := &taskHandle{done: make(chan struct{})}
+	b.mu.Lock()
+	b.tasks[jobID] = h
+	b.mu.Unlock()
+
+	// Detach from the caller's request context so the task is not killed when Confirm()
+	// returns — that decoupling is the whole point of going async.
+	taskCtx := context.WithoutCancel(ctx)
+	go func() {
+		err := b.runTask(taskCtx, jobID, kind, bounceReasons, draft)
+		b.mu.Lock()
+		h.err = err
+		b.mu.Unlock()
+		close(h.done)
+	}()
+	return nil
+}
+
+// AwaitTask blocks until the job's dispatched task reaches its terminal state and returns
+// its outcome. This is the DETERMINISTIC completion signal — closed by the goroutine's
+// completion, never a wall-clock poll (decision #2). A job never dispatched returns nil.
+func (b *Brain) AwaitTask(jobID string) error {
+	b.mu.Lock()
+	h := b.tasks[jobID]
+	b.mu.Unlock()
+	if h == nil {
+		return nil
+	}
+	<-h.done
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return h.err
+}
+
+// runTask is THE dispatch chokepoint: the freeze gate and the sole worker-invocation
+// site live here (pinned by TestAT09_DispatchChokepointIsSingle). It runs one invocation
+// inline; the worker's report callbacks may re-enter runTask (QA loop) synchronously on
+// the same goroutine. Called on the background goroutine by dispatchTask (first dispatch)
+// and inline by the QA-loop handlers (re-assignments).
+func (b *Brain) runTask(ctx context.Context, jobID, kind string, bounceReasons []string, draft *envelope.Deliverable) error {
 	b.mu.Lock()
 	w, ok := b.workers[kind]
 	js := b.jobs[jobID]
@@ -209,9 +274,13 @@ func (b *Brain) assign(ctx context.Context, jobID, kind string, bounceReasons []
 		return fmt.Errorf("unknown job %s", jobID)
 	}
 
-	// ── G11: THE task chokepoint. Every dispatch flows through here (pinned by the
-	//    source-scan test), so one gate stops all new tasks. Withheld dispatches are
-	//    recorded — a frozen job fails loudly, never silently. ──
+	// ── G11 + G8: THE task chokepoint, checked at WORKER-START. With async dispatch,
+	//    "begins" means here — not when dispatchTask launched the goroutine — so a freeze
+	//    that engages in the dispatch->start window still stops the worker (decision #3).
+	//    One gate stops all new tasks; withheld dispatches are recorded (fail loudly). ──
+	if b.beforeFreezeCheck != nil {
+		b.beforeFreezeCheck() // test-only hook: engage a freeze IN the dispatch->start window
+	}
 	if err := b.frozenErr(jobID, kind); err != nil {
 		_, _ = b.store.Append(ctx, store.Event{
 			Kind: "task.withheld", EntityID: jobID, Actor: "brain",

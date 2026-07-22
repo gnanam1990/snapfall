@@ -36,6 +36,12 @@ func newTestBrain(t *testing.T) (*Brain, *store.Store, *funding.Agent) {
 	return b, st, fund
 }
 
+// waitJob blocks until the job's ASYNC dispatch (G8) has run to its terminal state, then
+// callers assert the resulting stage. This is the deterministic completion signal — the
+// task goroutine closing its done channel, never a wall-clock poll. A non-nil terminal
+// outcome (frozen/failed) is legitimate and left for the caller to check by stage.
+func waitJob(b *Brain, jobID string) { _ = b.AwaitTask(jobID) }
+
 // G3: a message with no entry in the routing table does not route. The table IS the
 // complete set of flows; anything else is an error, not a fallthrough.
 func TestRouter_UnroutedMessageIsAnError(t *testing.T) {
@@ -70,6 +76,7 @@ func TestRouter_EveryMessageIsLogged(t *testing.T) {
 	if err := b.Confirm(ctx, "job_log", "owner"); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
+	waitJob(b, "job_log")
 
 	after, _ := st.EventCount(ctx)
 	// owner.request + scope_proposal + owner.confirm + assignment + progress + report + job_report = 7
@@ -95,7 +102,7 @@ func TestRouter_WorkerCannotSpoofOwnerRole(t *testing.T) {
 	b.jobs["job_evil"] = &jobState{JobID: "job_evil", Scope: "x", Stage: StageConfirmed, Worker: evil.Kind()}
 	b.mu.Unlock()
 
-	err := b.assign(ctx, "job_evil", evil.Kind(), nil, nil)
+	err := b.runTask(ctx, "job_evil", evil.Kind(), nil, nil)
 	if err == nil {
 		t.Fatal("the spoofed owner.confirm must fail to route: From was pinned to worker, and no worker->owner.confirm route exists")
 	}

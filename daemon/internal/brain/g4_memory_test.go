@@ -48,7 +48,9 @@ func TestG4_ConcurrentJobsZeroContextBleed(t *testing.T) {
 			}
 			if err := b.Confirm(ctx, jobID, "owner-"+jobID); err != nil {
 				errs <- fmt.Errorf("%s confirm: %w", jobID, err)
+				return
 			}
+			waitJob(b, jobID) // await the async task before asserting the terminal state
 		}(jobID, marker)
 	}
 	wg.Wait()
@@ -110,6 +112,7 @@ func TestG4_MemoryFilesSurviveRestart(t *testing.T) {
 	if err := b.Confirm(ctx, "job_r", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_r")
 
 	// "Restart": a brand-new MemoryStore over the same dir.
 	mem2, err := NewMemoryStore(memDir)
