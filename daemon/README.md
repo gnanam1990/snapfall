@@ -36,7 +36,7 @@ Flags: `--db` (default `snapfall.db`), `--manifests`, `--beats`, `--heartbeat-ms
 - [x] manifest loader validates `manifests/*.yaml` (FR-ORG-006)
 - [x] typed bus + outbox table wired
 
-The Anandan H1 chain indexer now has a standalone polling command, seven-event decoder,
+The Anandan H1 chain indexer now has a standalone polling command, eight-event decoder,
 transactional SQLite projection/cursor, and local-ledger reconciliation. It is not yet registered
 as a worker in the main daemon; keeping the first integration behind `cmd/indexer` avoids a
 cross-workstream change to the supervisor while H1 is under review.

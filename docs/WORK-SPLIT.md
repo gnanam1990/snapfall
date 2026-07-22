@@ -74,7 +74,7 @@ After Friday: schema changes need all-three agreement + version bump. This is wh
 
 ### Phase 1 · Tue 21 – Sun 26 Jul
 - **A1. Deployment config export.** Addresses, ABIs, chain config, funded-wallet set committed as machine-readable config (this is build config, not docs — everything downstream imports it). *Done when:* Gnanam's and Vasanth's code read chain config from it. *(0.25d)*
-- **A2. Go indexer.** Subscribe/poll JobVault, FloatPool, AuditAnchor; parse all seven H1 events; confirmation-depth handling. *Done when:* a testnet spine run appears as normalized rows. *(1.5d)*
+- **A2. Go indexer.** Subscribe/poll JobVault, FloatPool, AuditAnchor; parse all eight H1 events; confirmation-depth handling. *Done when:* a testnet spine run appears as normalized rows. *(1.5d)*
 - **A3. Indexer → event store.** Idempotent writes per H1 (re-run safe, no dupes); backfill from block N. *Done when:* running the indexer twice produces identical state. *(1d)*
 - **A4. Reconciliation engine.** Local ledger vs chain to the cent; mismatch = structured alert + dashboard flag. *Done when:* an injected fake local row triggers the alert in a test. *(1d)*
 

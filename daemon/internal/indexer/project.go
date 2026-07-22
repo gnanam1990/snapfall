@@ -9,7 +9,7 @@ import (
 )
 
 func project(ctx context.Context, tx *sql.Tx, chainID uint64, log Log, event decodedEvent) error {
-	if event.Kind == "RateUpdated" {
+	if event.Kind == "RateChanged" {
 		rate, err := strconv.ParseUint(event.Payload["rateBps"], 10, 16)
 		if err != nil {
 			return err
@@ -53,12 +53,15 @@ func project(ctx context.Context, tx *sql.Tx, chainID uint64, log Log, event dec
 		}
 		query = `UPDATE chain_job_financials SET expense_total_atomic = ?, last_block_number = ?, last_log_index = ? WHERE chain_id = ? AND job_id = ?`
 		args = []any{total, log.BlockNumber, log.LogIndex, chainID, event.EntityID}
-	case "DeliverySet":
+	case "DeliverySubmitted":
 		query = `UPDATE chain_job_financials SET delivery_hash = ?, last_block_number = ?, last_log_index = ? WHERE chain_id = ? AND job_id = ?`
 		args = []any{event.Payload["deliveryHash"], log.BlockNumber, log.LogIndex, chainID, event.EntityID}
+	case "AdvanceRepaid":
+		query = `UPDATE chain_job_financials SET advance_status = 'Repaid', last_block_number = ?, last_log_index = ? WHERE chain_id = ? AND job_id = ?`
+		args = []any{log.BlockNumber, log.LogIndex, chainID, event.EntityID}
 	case "JobSettled":
-		query = `UPDATE chain_job_financials SET settlement_advance_repaid_atomic = ?, operator_net_atomic = ?, advance_status = CASE WHEN ? = '0' THEN advance_status ELSE 'Repaid' END, last_block_number = ?, last_log_index = ? WHERE chain_id = ? AND job_id = ?`
-		args = []any{event.Payload["advanceRepaidAtomic"], event.Payload["operatorNetAtomic"], event.Payload["advanceRepaidAtomic"], log.BlockNumber, log.LogIndex, chainID, event.EntityID}
+		query = `UPDATE chain_job_financials SET settlement_advance_repaid_atomic = ?, operator_net_atomic = ?, last_block_number = ?, last_log_index = ? WHERE chain_id = ? AND job_id = ?`
+		args = []any{event.Payload["advanceRepaidAtomic"], event.Payload["operatorNetAtomic"], log.BlockNumber, log.LogIndex, chainID, event.EntityID}
 	case "AdvanceWrittenOff":
 		query = `UPDATE chain_job_financials SET advance_status = 'WrittenOff', bond_slashed_atomic = ?, reserve_used_atomic = ?, socialized_atomic = ?, last_block_number = ?, last_log_index = ? WHERE chain_id = ? AND job_id = ?`
 		args = []any{event.Payload["bondSlashedAtomic"], event.Payload["reserveUsedAtomic"], event.Payload["socializedAtomic"], log.BlockNumber, log.LogIndex, chainID, event.EntityID}

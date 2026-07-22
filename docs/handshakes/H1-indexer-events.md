@@ -41,8 +41,8 @@ All addresses and hashes are lowercase `0x` hex. Every USDC amount is a base-10 
 6-decimal atomic units: `"25000000"` means 25.00 USDC. JSON numbers are never used for token
 amounts because Solidity `uint256` exceeds JavaScript's safe integer range.
 
-For the six job lifecycle events, `entityId` is the bytes32 chain job ID stored locally as the
-lowercase `0x` value in `jobs.vault_job_id`. For `RateUpdated`, `entityId` is instead the
+For the seven job lifecycle events, `entityId` is the bytes32 chain job ID stored locally as the
+lowercase `0x` value in `jobs.vault_job_id`. For `RateChanged`, `entityId` is instead the
 organization address shown in the mapping below.
 
 ## 3. Frozen event mapping
@@ -52,21 +52,24 @@ organization address shown in the mapping below.
 | `JobVault.JobFunded(jobId, amount)` | `JobFunded` | `jobId` | `amountAtomic` |
 | `FloatPool.AdvanceIssued(jobId, org, principal, fee, rateBps)` | `AdvanceIssued` | `jobId` | `org`, `principalAtomic`, `feeAtomic`, `rateBps` |
 | `JobVault.ExpenseRecorded(jobId, amount, receiptHash)` | `ExpenseRecorded` | `jobId` | `amountAtomic`, `receiptHash` |
-| `JobVault.DeliverySubmitted(jobId, deliveryHash)` | `DeliverySet` | `jobId` | `deliveryHash` |
+| `JobVault.DeliverySubmitted(jobId, deliveryHash)` | `DeliverySubmitted` | `jobId` | `deliveryHash` |
 | `JobVault.JobSettled(jobId, advanceRepaid, operatorNet)` | `JobSettled` | `jobId` | `advanceRepaidAtomic`, `operatorNetAtomic` |
+| `FloatPool.AdvanceRepaid(jobId, principal, fee, toReserve)` | `AdvanceRepaid` | `jobId` | `principalAtomic`, `feeAtomic`, `toReserveAtomic` |
 | `FloatPool.AdvanceWrittenOff(jobId, bondSlashed, reserveUsed, socialized)` | `AdvanceWrittenOff` | `jobId` | `bondSlashedAtomic`, `reserveUsedAtomic`, `socializedAtomic` |
-| `FloatPool.RateChanged(org, newRateBps)` | `RateUpdated` | `org` | `org`, `rateBps` |
+| `FloatPool.RateChanged(org, newRateBps)` | `RateChanged` | `org` | `org`, `rateBps` |
 
-The two deliberate renames are load-bearing: raw `DeliverySubmitted` becomes `DeliverySet`, and
-raw `RateChanged` becomes `RateUpdated`. Downstream code must never depend on the Solidity names.
+Normalized `kind` values match the frozen Solidity event names exactly. During a successful
+settlement with an open advance, the pool emits `AdvanceRepaid` and `RateChanged` before control
+returns to the vault and it emits `JobSettled`; canonical `(blockNumber, logIndex)` ordering
+preserves that waterfall sequence.
 
-`AuditAnchor.JobAnchored` is retained in the raw `chain_logs` table but is outside the seven-event
+`AuditAnchor.JobAnchored` is retained in the raw `chain_logs` table but is outside the eight-event
 H1 freeze. Adding an audit-domain normalized event is additive and requires an H1 version bump.
 
 ## 4. SQLite handoff
 
 - `chain_logs` is the immutable raw receipt and replay guard.
-- `chain_events` is the seven-event H1 stream consumed by the runtime and future SSE layer.
+- `chain_events` is the eight-event H1 stream consumed by the runtime and future SSE layer.
 - `chain_job_financials` and `chain_org_rates` are deterministic projections rebuilt from H1.
 - `chain_cursors` records the next inclusive Arc block to scan.
 - `reconciliation_alerts` records local-ledger/chain mismatches for the dashboard flag.
@@ -74,12 +77,17 @@ H1 freeze. Adding an audit-domain normalized event is additive and requires an H
 For the MVP ledger comparison, local `jobs.quote_usdc` is the expected funded amount and must
 equal the chain projection's `funded_amount_atomic` after conversion to 6-decimal atomic units.
 
+`AdvanceRepaid` owns the projection transition to `advance_status = Repaid`. Its principal, fee
+and reserve-cut breakdown remains in the normalized event payload; the projection already holds
+the issued principal/fee, while `JobSettled` owns the vault-level total repaid and operator net.
+This keeps the two events observable without counting the same repayment twice.
+
 No consumer writes these tables. The indexer owns them as one deep module; consumers read the
 stable H1 stream or projections instead of re-decoding contract logs.
 
 ## 5. Golden fixture
 
 `daemon/internal/indexer/testdata/h1-spine-logs.json` is the cross-team fixture. It contains all
-seven events deliberately shuffled; a conforming implementation must emit them in chain order,
-project 25.00 USDC funded, 12.50 principal, 0.25 fee, 12.75 repaid, 12.25 operator net, and a
-55% rate, and produce the same result when the fixture is replayed.
+eight events deliberately shuffled; a conforming implementation must emit them in chain order,
+project 25.00 USDC funded, 12.50 principal, 0.25 fee, 12.75 repaid, 12.25 operator net and a
+55% rate, emit a 0.05 reserve cut in `AdvanceRepaid`, and produce the same result on replay.

@@ -89,7 +89,7 @@ func TestSyncOnceOrdersProjectsAndReplaysAllH1Events(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.RawLogs != 7 || result.Events != 7 || result.NextBlock != 107 {
+	if result.RawLogs != 8 || result.Events != 8 || result.NextBlock != 107 {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 	if len(source.calls) != 3 {
@@ -109,9 +109,21 @@ func TestSyncOnceOrdersProjectsAndReplaysAllH1Events(t *testing.T) {
 		}
 		kinds = append(kinds, kind)
 	}
-	wantKinds := []string{"JobFunded", "AdvanceIssued", "ExpenseRecorded", "DeliverySet", "JobSettled", "AdvanceWrittenOff", "RateUpdated"}
+	wantKinds := []string{"JobFunded", "AdvanceIssued", "ExpenseRecorded", "DeliverySubmitted", "AdvanceRepaid", "RateChanged", "JobSettled", "AdvanceWrittenOff"}
 	if !reflect.DeepEqual(kinds, wantKinds) {
 		t.Fatalf("kinds = %v, want %v", kinds, wantKinds)
+	}
+	var repaymentPayload string
+	if err := st.DB().QueryRowContext(ctx, `SELECT payload_json FROM chain_events WHERE kind = 'AdvanceRepaid'`).Scan(&repaymentPayload); err != nil {
+		t.Fatal(err)
+	}
+	var repayment map[string]string
+	if err := json.Unmarshal([]byte(repaymentPayload), &repayment); err != nil {
+		t.Fatal(err)
+	}
+	wantRepayment := map[string]string{"principalAtomic": "12500000", "feeAtomic": "250000", "toReserveAtomic": "50000"}
+	if !reflect.DeepEqual(repayment, wantRepayment) {
+		t.Fatalf("AdvanceRepaid payload = %v, want %v", repayment, wantRepayment)
 	}
 
 	var funded, principal, fee, expenses, repaid, operatorNet, status string
@@ -213,11 +225,11 @@ func TestSyncOnceFailsClosedBeforeOffendingChunk(t *testing.T) {
 	if err := st.DB().QueryRow(`SELECT next_block_number FROM chain_cursors WHERE chain_id = ?`, testChain).Scan(&next); err != nil {
 		t.Fatal(err)
 	}
-	if next != 106 {
-		t.Fatalf("cursor = %d, want 106 after the last fully committed chunk", next)
+	if next != 103 {
+		t.Fatalf("cursor = %d, want 103 after the last fully committed chunk", next)
 	}
 	var later int
-	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM chain_logs WHERE block_number >= 106`).Scan(&later); err != nil {
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM chain_logs WHERE block_number >= 103`).Scan(&later); err != nil {
 		t.Fatal(err)
 	}
 	if later != 0 {
