@@ -10,7 +10,7 @@ export default function JobsPage() {
         sub="Lifecycle, task graph, budgets, advance card, settlement."
       />
       <Card className="flex items-center gap-3">
-        <Package size={20} weight="duotone" color='var(--color-muted)' />
+        <Package size={20} weight="regular" color='var(--color-muted)' />
         <p className="m-0 text-sm" style={{ color: 'var(--color-muted)' }}>
           Job detail arrives with V7. The Overview carries the live demo spine.
         </p>

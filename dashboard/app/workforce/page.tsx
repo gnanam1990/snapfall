@@ -10,7 +10,7 @@ export default function WorkforcePage() {
         sub="Brain, Workers, Funding, Billing. Roles, permissions, current task, limits."
       />
       <Card className="flex items-center gap-3">
-        <UsersThree size={20} weight="duotone" color='var(--color-muted)' />
+        <UsersThree size={20} weight="regular" color='var(--color-muted)' />
         <p className="m-0 text-sm" style={{ color: 'var(--color-muted)' }}>
           Employee detail pages land alongside the daemon runtime.
         </p>

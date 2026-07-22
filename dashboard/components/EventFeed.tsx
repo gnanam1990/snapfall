@@ -18,16 +18,16 @@ import type { FinancialEvent, EventCategory } from '@/lib/types';
 import { formatUsdc, relativeTime } from '@/lib/format';
 import IconChip from './IconChip';
 
-const CAT: Record<EventCategory, { icon: Icon; tint: string }> = {
-  Float: { icon: Lightning, tint: 'var(--color-accent)' },
-  Finance: { icon: CreditCard, tint: 'var(--sky)' },
-  Approval: { icon: ShieldWarning, tint: 'var(--warn)' },
-  Job: { icon: Package, tint: 'var(--pos)' },
-  Intake: { icon: Tray, tint: 'var(--color-faint)' },
-  Task: { icon: ListChecks, tint: 'var(--color-muted)' },
-  Agent: { icon: Robot, tint: 'var(--color-muted)' },
-  Action: { icon: CursorClick, tint: 'var(--sky)' },
-  Audit: { icon: ClipboardText, tint: 'var(--color-muted)' },
+const CAT: Record<EventCategory, Icon> = {
+  Float: Lightning,
+  Finance: CreditCard,
+  Approval: ShieldWarning,
+  Job: Package,
+  Intake: Tray,
+  Task: ListChecks,
+  Agent: Robot,
+  Action: CursorClick,
+  Audit: ClipboardText,
 };
 
 export default function EventFeed({ events }: { events: FinancialEvent[] }) {
@@ -37,7 +37,7 @@ export default function EventFeed({ events }: { events: FinancialEvent[] }) {
   return (
     <div className="flex flex-col">
       {events.map((e, i) => {
-        const { icon, tint } = CAT[e.category];
+        const icon = CAT[e.category];
         return (
           <motion.div
             key={e.seq}
@@ -47,7 +47,7 @@ export default function EventFeed({ events }: { events: FinancialEvent[] }) {
             style={{ borderTop: i === 0 ? 'none' : '1px solid var(--color-border)' }}
           >
             <span className="mt-0.5">
-              <IconChip icon={icon} tint={tint} size="md" />
+              <IconChip icon={icon} size="md" />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline justify-between gap-2">

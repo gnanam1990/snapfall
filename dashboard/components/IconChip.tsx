@@ -1,32 +1,29 @@
 import type { Icon } from '@phosphor-icons/react';
 
-/** HQ icon tile: Phosphor duotone glyph on a tinted gradient with a soft tinted ring.
- *  The gradient + ring + duotone layering is what makes these read rich instead of wiry. */
+/** Quiet icon chip: flat neutral square, hairline border, muted monochrome glyph.
+ *  No gradients, no tints, no glows - color belongs to data, not decoration. */
 export default function IconChip({
   icon: Glyph,
-  tint,
   size = 'md',
 }: {
   icon: Icon;
-  tint: string;
   size?: 'sm' | 'md' | 'lg';
 }) {
-  const px = size === 'lg' ? 44 : size === 'md' ? 34 : 30;
-  const glyph = size === 'lg' ? 24 : size === 'md' ? 18 : 16;
+  const px = size === 'lg' ? 40 : size === 'md' ? 32 : 28;
+  const glyph = size === 'lg' ? 20 : size === 'md' ? 16 : 14;
   return (
     <span
       className="flex flex-none items-center justify-center"
       style={{
         width: px,
         height: px,
-        borderRadius: px * 0.32,
-        color: tint,
-        background: `linear-gradient(135deg, color-mix(in srgb, ${tint} 22%, var(--color-card)), color-mix(in srgb, ${tint} 7%, var(--color-card)))`,
-        border: `1px solid color-mix(in srgb, ${tint} 28%, transparent)`,
-        boxShadow: `0 2px 8px color-mix(in srgb, ${tint} 18%, transparent)`,
+        borderRadius: 8,
+        color: 'var(--color-muted)',
+        background: 'color-mix(in srgb, var(--color-text) 4%, transparent)',
+        border: '1px solid var(--color-border)',
       }}
     >
-      <Glyph size={glyph} weight="duotone" />
+      <Glyph size={glyph} weight="regular" />
     </span>
   );
 }

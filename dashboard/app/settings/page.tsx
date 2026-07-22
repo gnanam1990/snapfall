@@ -10,7 +10,7 @@ export default function SettingsPage() {
         sub="Models, integrations, policies, wallet and chain, global freeze."
       />
       <Card className="flex items-center gap-3">
-        <HandPalm size={20} weight="duotone" color='var(--neg)' />
+        <HandPalm size={20} weight="regular" color='var(--color-muted)' />
         <p className="m-0 text-sm" style={{ color: 'var(--color-muted)' }}>
           Includes the global kill switch: stop new tasks, signatures, and advances within 1s.
         </p>

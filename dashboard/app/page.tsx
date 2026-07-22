@@ -65,13 +65,13 @@ export default function OverviewPage() {
           <span className="whitespace-nowrap">
             Capital in a snap
             <span className="inline-icon" style={inlineIcon}>
-              <Lightning size={28} weight="duotone" color="var(--color-accent)" />
+              <Lightning size={26} weight="regular" color="var(--color-text)" />
             </span>
           </span>
           <br />
           settlement in a waterfall
           <span className="inline-icon" style={{ ...inlineIcon, marginLeft: 6 }}>
-            <Waves size={28} weight="duotone" color="var(--sky)" />
+            <Waves size={26} weight="regular" color="var(--color-text)" />
           </span>
         </motion.h1>
         <motion.p
@@ -103,13 +103,13 @@ export default function OverviewPage() {
           </motion.div>
 
           <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <StatCard index={3} label="Pool TVL" icon={Bank} tint="var(--color-accent)"
+            <StatCard index={3} label="Pool TVL" icon={Bank}
               value={formatUsdc(pool.tvlUsdc)} sub="USDC · seeded by demo LPs" />
-            <StatCard index={4} label="Utilization" icon={Gauge} tint="var(--sky)"
+            <StatCard index={4} label="Utilization" icon={Gauge}
               value={formatBps(pool.utilizationBps)} sub="drawn / TVL · cap 80%" />
-            <StatCard index={5} label="Fees accrued" icon={Coins} tint="var(--pos)"
+            <StatCard index={5} label="Fees accrued" icon={Coins}
               value={formatUsdc(pool.feesAccruedUsdc)} sub={`USDC · reserve ${formatUsdc(pool.reserveUsdc)}`} />
-            <StatCard index={6} label="Pending approvals" icon={BellRinging} tint="var(--warn)"
+            <StatCard index={6} label="Pending approvals" icon={BellRinging}
               value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
           </div>
 

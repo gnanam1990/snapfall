@@ -4,21 +4,18 @@ import type { Icon } from '@phosphor-icons/react';
 import { motion } from 'framer-motion';
 import { fadeUp } from '@/lib/motion';
 import Card from './Card';
-import IconChip from './IconChip';
 
 export default function StatCard({
   label,
   value,
   sub,
-  icon,
-  tint = 'var(--color-accent)',
+  icon: Glyph,
   index = 0,
 }: {
   label: string;
   value: React.ReactNode;
   sub?: string;
   icon: Icon;
-  tint?: string;
   index?: number;
 }) {
   return (
@@ -41,7 +38,7 @@ export default function StatCard({
               </div>
             ) : null}
           </div>
-          <IconChip icon={icon} tint={tint} size="lg" />
+          <Glyph size={18} weight="regular" color="var(--color-faint)" />
         </div>
       </Card>
     </motion.div>

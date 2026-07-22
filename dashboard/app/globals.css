@@ -59,9 +59,7 @@ body {
   padding: 0;
   font-family: var(--font-body), sans-serif;
   color: var(--color-text);
-  background:
-    radial-gradient(900px 420px at 85% -10%, var(--bg-glow), transparent 60%),
-    var(--color-login-bg);
+  background: var(--color-login-bg);
   -webkit-font-smoothing: antialiased;
   transition: background 0.3s, color 0.3s;
 }
@@ -121,7 +119,6 @@ h1, h2, h3 { font-family: var(--font-heading), sans-serif; }
 .ring-track { fill: none; stroke: var(--ring-track); stroke-width: 9; }
 .ring-arc {
   fill: none; stroke: var(--color-accent); stroke-width: 9; stroke-linecap: round;
-  filter: drop-shadow(0 0 6px rgba(115, 66, 226, 0.45));
   transition: stroke-dasharray 0.1s linear;
 }
 .ring-center { position: absolute; top: 44px; left: 0; right: 0; }

@@ -50,7 +50,7 @@ export default function ThemeToggle() {
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="flex"
           >
-            {theme === 'dark' ? <Sun size={18} weight="duotone" /> : <MoonStars size={18} weight="duotone" />}
+            {theme === 'dark' ? <Sun size={18} weight="regular" /> : <MoonStars size={18} weight="regular" />}
           </motion.span>
         )}
       </AnimatePresence>

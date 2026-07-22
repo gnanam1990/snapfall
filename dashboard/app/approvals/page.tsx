@@ -10,7 +10,7 @@ export default function ApprovalsPage() {
         sub="Approve, reject, or request a cheaper alternative. The rejection beat lives here."
       />
       <Card className="flex items-center gap-3">
-        <ShieldWarning size={20} weight="duotone" color='var(--warn)' />
+        <ShieldWarning size={20} weight="regular" color='var(--color-muted)' />
         <p className="m-0 text-sm" style={{ color: 'var(--color-muted)' }}>
           The approvals inbox arrives with V8, wired to the H2 approval lifecycle.
         </p>

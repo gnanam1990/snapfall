@@ -10,7 +10,7 @@ export default function AuditPage() {
         sub="The receipt: revenue, advance, fee, expenses, margin, hashes, explorer links."
       />
       <Card className="flex items-center gap-3">
-        <ClipboardText size={20} weight="duotone" color='var(--pos)' />
+        <ClipboardText size={20} weight="regular" color='var(--color-muted)' />
         <p className="m-0 text-sm" style={{ color: 'var(--color-muted)' }}>
           The receipt view is comprehensible without reading raw transactions (FR-UI-005).
         </p>
