@@ -36,8 +36,13 @@ Flags: `--db` (default `snapfall.db`), `--manifests`, `--beats`, `--heartbeat-ms
 - [x] manifest loader validates `manifests/*.yaml` (FR-ORG-006)
 - [x] typed bus + outbox table wired
 
-Not yet: orchestrator/task DAG, action broker, sandbox, policy engine, treasury signer, memory
-service, egress proxy, chain indexer. Those are the rest of workstream B.
+The Anandan H1 chain indexer now has a standalone polling command, seven-event decoder,
+transactional SQLite projection/cursor, and local-ledger reconciliation. It is not yet registered
+as a worker in the main daemon; keeping the first integration behind `cmd/indexer` avoids a
+cross-workstream change to the supervisor while H1 is under review.
+
+Not yet: orchestrator/task DAG, action broker, sandbox, policy engine, real treasury signer,
+memory service, egress proxy, and wiring the indexer into the main daemon.
 
 ## Chain indexer — read before writing it
 
@@ -57,11 +62,27 @@ carry the *same* timestamp. Two consequences for the indexer:
 The same rule already governs the contracts (see the deadline/window logic there) — the
 indexer must agree with them, or replay after a restart will not reproduce the same ordering.
 
+Run one bounded H1 backfill after exporting the deployment addresses listed in
+`../deployments/README.md`:
+
+```bash
+cd daemon
+go run ./cmd/indexer --once --deployment ../deployments/arc-testnet.json --db snapfall.db
+```
+
+Without `--once`, the command polls continuously. It verifies `eth_chainId` before reading logs,
+requests bounded block ranges, and commits each raw log, normalized H1 event, financial projection
+and next `(blockNumber, logIndex)` cursor in one SQLite transaction. Replaying an inclusive range
+is safe by `(chainId, transactionHash, logIndex)`.
+
 ## Layout
 
 ```
 cmd/snapfall/          entry point: validate manifests -> open store -> start supervisor
+cmd/indexer/           A2/A3 Arc poller + A4 reconciliation runner
 internal/agents/       manifest loader + FR-ORG-006 validation; HeartbeatWorker (the dummy)
+internal/chaincfg/      A1 deployment/config loader; resolves addresses from env
+internal/indexer/       H1 RPC adapter, decoder, projection, cursor, reconciliation
 internal/store/        SQLite (WAL), event log, transactional outbox
 internal/events/       typed bus + outbox publisher
 internal/supervisor/   worker lifecycle, restart-with-backoff, health

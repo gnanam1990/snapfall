@@ -1,0 +1,5 @@
+[
+  {"type":"event","name":"AdvanceIssued","anonymous":false,"inputs":[{"name":"jobId","type":"bytes32","indexed":true},{"name":"org","type":"address","indexed":true},{"name":"principal","type":"uint256","indexed":false},{"name":"fee","type":"uint256","indexed":false},{"name":"rateBps","type":"uint16","indexed":false}]},
+  {"type":"event","name":"AdvanceWrittenOff","anonymous":false,"inputs":[{"name":"jobId","type":"bytes32","indexed":true},{"name":"bondSlashed","type":"uint256","indexed":false},{"name":"reserveUsed","type":"uint256","indexed":false},{"name":"socialized","type":"uint256","indexed":false}]},
+  {"type":"event","name":"RateChanged","anonymous":false,"inputs":[{"name":"org","type":"address","indexed":true},{"name":"newRateBps","type":"uint16","indexed":false}]}
+]
