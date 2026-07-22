@@ -125,17 +125,18 @@ h1, h2, h3 { font-family: var(--font-heading), sans-serif; }
 .beat-flywheel { color: var(--color-text); }
 
 /* ── F2 Score Ring ── */
-.ring-wrap { position: relative; width: 120px; flex: none; text-align: center; }
-.ring-wrap.bump .ring-svg { animation: ringbump 0.5s ease; }
-@keyframes ringbump { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.07); } }
-.ring-svg { width: 120px; height: 120px; }
-.ring-track { fill: none; stroke: var(--ring-track); stroke-width: 9; }
+.ring-wrap { width: 128px; flex: none; text-align: center; }
+.ring-figure { position: relative; width: 104px; height: 104px; margin: 0 auto; }
+.ring-figure.bump { animation: ringbump 0.5s ease; }
+@keyframes ringbump { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.06); } }
+.ring-svg { width: 100%; height: 100%; display: block; }
+.ring-track { fill: none; stroke: var(--ring-track); stroke-width: 8; }
 .ring-arc {
-  fill: none; stroke: var(--color-accent); stroke-width: 9; stroke-linecap: round;
+  fill: none; stroke: var(--color-accent); stroke-width: 8; stroke-linecap: round;
   transition: stroke-dasharray 0.1s linear;
 }
-.ring-center { position: absolute; top: 44px; left: 0; right: 0; }
-.ring-pct { font-family: var(--font-heading), sans-serif; font-size: 24px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.ring-lbl { font-size: 9px; color: var(--color-muted); text-transform: uppercase; letter-spacing: 0.04em; }
-.ring-hint { font-size: 11.5px; color: var(--color-muted); margin-top: 2px; }
-.ring-hint b { color: var(--pos); }
+.ring-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.ring-pct { font-family: var(--font-heading), sans-serif; font-size: 23px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ring-cap { margin-top: 8px; font-size: 11.5px; font-weight: 600; color: var(--color-muted); }
+.ring-hint { margin-top: 1px; font-size: 11.5px; color: var(--color-faint); }
+.ring-hint b { color: var(--color-text); font-weight: 700; font-variant-numeric: tabular-nums; }
