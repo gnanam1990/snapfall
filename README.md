@@ -12,7 +12,7 @@ Arc "Programmable Money" Hackathon (Encode x Circle) · Tracks: Agentic Economy 
 ## Layout
 ```
 contracts/   Foundry project: JobVault, FloatPool, AuditAnchor (owner: A)
-daemon/      Local runtime: supervisor, agents, policy engine, indexer (owner: B)
+daemon/      Local runtime: supervisor/agents (owner: B) + chain indexer/integration (Anandan)
 sidecar/     TypeScript x402/Gateway payment sidecar (owner: C)
 dashboard/   Next.js dashboard (owner: C)
 docs/        PRD, ADRs, threat model

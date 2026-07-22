@@ -46,3 +46,70 @@ CREATE TABLE IF NOT EXISTS outbox (                          -- transactional ou
   id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, payload_json TEXT NOT NULL,
   published INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 );
+
+-- H1 chain handoff (A2/A3). Raw receipts, normalized events, projections and the cursor
+-- commit together. Chain ordering is always (block_number, log_index), never timestamp.
+CREATE TABLE IF NOT EXISTS chain_logs (
+  chain_id INTEGER NOT NULL, transaction_hash TEXT NOT NULL, log_index INTEGER NOT NULL,
+  block_number INTEGER NOT NULL, block_hash TEXT NOT NULL, contract_address TEXT NOT NULL,
+  topic0 TEXT NOT NULL, topics_json TEXT NOT NULL, data TEXT NOT NULL,
+  removed INTEGER NOT NULL DEFAULT 0, decoded INTEGER NOT NULL DEFAULT 0,
+  observed_at INTEGER NOT NULL,
+  PRIMARY KEY (chain_id, transaction_hash, log_index)
+);
+
+CREATE INDEX IF NOT EXISTS chain_logs_order_idx
+  ON chain_logs(chain_id, block_number, log_index);
+
+CREATE TABLE IF NOT EXISTS chain_events (
+  chain_id INTEGER NOT NULL, transaction_hash TEXT NOT NULL, log_index INTEGER NOT NULL,
+  block_number INTEGER NOT NULL, contract_address TEXT NOT NULL,
+  kind TEXT NOT NULL, entity_id TEXT NOT NULL, actor TEXT,
+  payload_json TEXT NOT NULL, h1_version TEXT NOT NULL DEFAULT '1.0',
+  PRIMARY KEY (chain_id, transaction_hash, log_index),
+  FOREIGN KEY (chain_id, transaction_hash, log_index)
+    REFERENCES chain_logs(chain_id, transaction_hash, log_index)
+);
+
+CREATE INDEX IF NOT EXISTS chain_events_order_idx
+  ON chain_events(chain_id, block_number, log_index);
+CREATE INDEX IF NOT EXISTS chain_events_entity_idx
+  ON chain_events(chain_id, entity_id, block_number, log_index);
+
+-- The cursor is the NEXT inclusive block to request. A batch commits only after its complete
+-- block range, so empty blocks advance safely and a crash replays from the previous boundary.
+CREATE TABLE IF NOT EXISTS chain_cursors (
+  chain_id INTEGER NOT NULL, stream TEXT NOT NULL,
+  next_block_number INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (chain_id, stream)
+);
+
+CREATE TABLE IF NOT EXISTS chain_job_financials (
+  chain_id INTEGER NOT NULL, job_id TEXT NOT NULL,
+  funded_amount_atomic TEXT,
+  advance_principal_atomic TEXT, advance_fee_atomic TEXT, advance_status TEXT,
+  expense_total_atomic TEXT NOT NULL DEFAULT '0',
+  delivery_hash TEXT,
+  settlement_advance_repaid_atomic TEXT, operator_net_atomic TEXT,
+  bond_slashed_atomic TEXT, reserve_used_atomic TEXT, socialized_atomic TEXT,
+  last_block_number INTEGER NOT NULL, last_log_index INTEGER NOT NULL,
+  PRIMARY KEY (chain_id, job_id)
+);
+
+CREATE TABLE IF NOT EXISTS chain_org_rates (
+  chain_id INTEGER NOT NULL, org_address TEXT NOT NULL, rate_bps INTEGER NOT NULL,
+  last_block_number INTEGER NOT NULL, last_log_index INTEGER NOT NULL,
+  PRIMARY KEY (chain_id, org_address)
+);
+
+CREATE TABLE IF NOT EXISTS reconciliation_alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chain_id INTEGER NOT NULL, job_id TEXT NOT NULL, field TEXT NOT NULL,
+  local_value TEXT, chain_value TEXT, detected_at INTEGER NOT NULL,
+  resolved INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS reconciliation_open_idx
+  ON reconciliation_alerts(chain_id, resolved, job_id);
+CREATE UNIQUE INDEX IF NOT EXISTS reconciliation_active_unique
+  ON reconciliation_alerts(chain_id, job_id, field) WHERE resolved = 0;

@@ -36,8 +36,13 @@ Flags: `--db` (default `snapfall.db`), `--manifests`, `--beats`, `--heartbeat-ms
 - [x] manifest loader validates `manifests/*.yaml` (FR-ORG-006)
 - [x] typed bus + outbox table wired
 
-Not yet: orchestrator/task DAG, action broker, sandbox, policy engine, treasury signer, memory
-service, egress proxy, chain indexer. Those are the rest of workstream B.
+The Anandan H1 chain indexer now has a standalone polling command, eight-event decoder,
+transactional SQLite projection/cursor, and local-ledger reconciliation. It is not yet registered
+as a worker in the main daemon; keeping the first integration behind `cmd/indexer` avoids a
+cross-workstream change to the supervisor while H1 is under review.
+
+Not yet: orchestrator/task DAG, action broker, sandbox, policy engine, real treasury signer,
+memory service, egress proxy, and wiring the indexer into the main daemon.
 
 ## Chain indexer — read before writing it
 
@@ -51,17 +56,36 @@ carry the *same* timestamp. Two consequences for the indexer:
   total; a timestamp sort is not stable across same-timestamp blocks and will silently
   reshuffle events within a block.
 - **Never use `timestamp > lastSeen` as a cursor.** A strict comparison drops every event in a
-  block sharing the previous block's timestamp. The resume cursor must be `(blockNumber,
-  logIndex)`, and any timestamp window must be inclusive at both ends.
+  block sharing the previous block's timestamp. Events remain ordered by `(blockNumber,
+  logIndex)`; the durable polling cursor advances only after a complete block range commits.
 
 The same rule already governs the contracts (see the deadline/window logic there) — the
 indexer must agree with them, or replay after a restart will not reproduce the same ordering.
+
+Run one H1 catch-up after exporting the deployment addresses listed in
+`../deployments/README.md`. For every post-genesis deployment, set its deployment block first;
+this avoids scanning unrelated Arc history:
+
+```bash
+cd daemon
+export SNAPFALL_DEPLOYMENT_BLOCK=<deployment-block>
+go run ./cmd/indexer --once --deployment ../deployments/arc-testnet.json --db snapfall.db
+```
+
+Without `--once`, the command polls continuously. It verifies `eth_chainId` before reading logs,
+requests block ranges bounded by `--chunk-size`, and atomically commits each range's raw logs,
+supported normalized H1 events, financial projections and next-block cursor. Replaying an
+inclusive range is safe by `(chainId, transactionHash, logIndex)`. The command requires an
+explicit `--deployment` path so its behavior does not depend on the process working directory.
 
 ## Layout
 
 ```
 cmd/snapfall/          entry point: validate manifests -> open store -> start supervisor
+cmd/indexer/           A2/A3 Arc poller + A4 reconciliation runner
 internal/agents/       manifest loader + FR-ORG-006 validation; HeartbeatWorker (the dummy)
+internal/chaincfg/      A1 deployment/config loader; resolves addresses from env
+internal/indexer/       H1 RPC adapter, decoder, projection, cursor, reconciliation
 internal/store/        SQLite (WAL), event log, transactional outbox
 internal/events/       typed bus + outbox publisher
 internal/supervisor/   worker lifecycle, restart-with-backoff, health

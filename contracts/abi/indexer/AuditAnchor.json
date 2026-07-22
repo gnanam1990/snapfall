@@ -1,0 +1,3 @@
+[
+  {"type":"event","name":"JobAnchored","anonymous":false,"inputs":[{"name":"jobId","type":"bytes32","indexed":true},{"name":"eventRoot","type":"bytes32","indexed":false},{"name":"paymentReceiptRoot","type":"bytes32","indexed":false},{"name":"deliveryHash","type":"bytes32","indexed":false},{"name":"completedAt","type":"uint64","indexed":false}]}
+]

@@ -1,0 +1,6 @@
+[
+  {"type":"event","name":"JobFunded","anonymous":false,"inputs":[{"name":"jobId","type":"bytes32","indexed":true},{"name":"amount","type":"uint256","indexed":false}]},
+  {"type":"event","name":"ExpenseRecorded","anonymous":false,"inputs":[{"name":"jobId","type":"bytes32","indexed":true},{"name":"amount","type":"uint256","indexed":false},{"name":"receiptHash","type":"bytes32","indexed":false}]},
+  {"type":"event","name":"DeliverySubmitted","anonymous":false,"inputs":[{"name":"jobId","type":"bytes32","indexed":true},{"name":"deliveryHash","type":"bytes32","indexed":false}]},
+  {"type":"event","name":"JobSettled","anonymous":false,"inputs":[{"name":"jobId","type":"bytes32","indexed":true},{"name":"advanceRepaid","type":"uint256","indexed":false},{"name":"operatorNet","type":"uint256","indexed":false}]}
+]
