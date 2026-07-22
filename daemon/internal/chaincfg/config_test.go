@@ -99,6 +99,22 @@ func TestLoadRejectsChainIdentityMismatch(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnsafeExplorerURL(t *testing.T) {
+	path := writeDeployment(t, "")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = []byte(strings.Replace(string(raw), "https://testnet.arcscan.app", "javascript:alert(1)", 1))
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(path, env(validEnv()))
+	if err == nil || !strings.Contains(err.Error(), "explorerUrl") {
+		t.Fatalf("expected explorer URL error, got %v", err)
+	}
+}
+
 func TestRepositoryArcConfigIsResolvable(t *testing.T) {
 	values := validEnv()
 	values["SNAPFALL_JOB_VAULT_ADDRESS"] = values["VAULT"]
