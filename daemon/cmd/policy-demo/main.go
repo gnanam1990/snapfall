@@ -15,23 +15,11 @@ import (
 func main() {
 	// The demo job's policy: 6.00 job budget, 5.00 per-tx hard limit, 10.00 daily,
 	// 0.10 auto-approval threshold, blocked categories per FR-POL-010 defaults.
-	cfg := policy.PolicyConfig{
-		JobBudgetMicros:     6_000_000,
-		PerTxLimitMicros:    5_000_000,
-		DailyCapMicros:      10_000_000,
-		ApprovalAboveMicros: 100_000,
-		MerchantAllowlist: []string{
-			"api.research-data.example",
-			"api.benchmarks.example",
-			"api.defi-signals.example",
-		},
-		MerchantCategories: map[string]string{
-			"api.research-data.example": "business-data",
-			"api.benchmarks.example":    "business-data",
-			"api.defi-signals.example":  "token-trading",
-		},
-		BlockedCategories: []string{"token-trading", "gambling"},
-	}
+	cfg := policy.DemoPolicy()
+	// Extend the canonical demo policy with the fixture-only blocked-category merchant,
+	// so scenario 4/5 can demonstrate FR-POL-010 without polluting DemoPolicy itself.
+	cfg.MerchantAllowlist = append(cfg.MerchantAllowlist, "api.defi-signals.example")
+	cfg.MerchantCategories["api.defi-signals.example"] = "token-trading"
 
 	type scenario struct {
 		title  string
@@ -56,17 +44,17 @@ func main() {
 		{
 			title:  "1. The 0.04 company profile (demo auto-approve beat, AT-02)",
 			state:  policy.SpendState{},
-			intent: mk(40_000, "api.research-data.example", "competitor company profile"),
+			intent: mk(40_000, policy.DemoMerchantProfile, "competitor company profile"),
 		},
 		{
 			title:  "2. The 4.00 premium dataset (demo escalation beat, AT-03) — THE ON-SCREEN REASON",
 			state:  policy.SpendState{JobCommittedMicros: 40_000, DailySpentMicros: 40_000},
-			intent: mk(4_000_000, "api.research-data.example", "premium market dataset"),
+			intent: mk(4_000_000, policy.DemoMerchantProfile, "premium market dataset"),
 		},
 		{
 			title:  "3. The 0.06 benchmark alternative after rejection (AT-04)",
 			state:  policy.SpendState{JobCommittedMicros: 40_000, DailySpentMicros: 40_000},
-			intent: mk(60_000, "api.benchmarks.example", "benchmark summary (cheaper source)"),
+			intent: mk(60_000, policy.DemoMerchantBenchmark, "benchmark summary (cheaper source)"),
 		},
 		{
 			title:  "4. Token-trading merchant, well within every budget (FR-POL-010)",

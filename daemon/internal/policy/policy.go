@@ -103,6 +103,41 @@ type SpendState struct {
 	DailySpentMicros int64
 }
 
+// Validate rejects an incomplete or self-contradictory policy AT LOAD TIME, so a
+// misconfigured daemon fails at startup instead of silently denying every payment at
+// the first intent (Step-2 follow-up B). Evaluate keeps its own per-call guards as
+// defense in depth; this is the early, loud version of the same rule.
+func (c PolicyConfig) Validate() error {
+	if c.JobBudgetMicros <= 0 {
+		return fmt.Errorf("policy config: job_budget must be positive (unset does not mean unlimited)")
+	}
+	if c.PerTxLimitMicros <= 0 {
+		return fmt.Errorf("policy config: per_tx_limit must be positive (unset does not mean unlimited)")
+	}
+	if c.DailyCapMicros <= 0 {
+		return fmt.Errorf("policy config: daily_cap must be positive (unset does not mean unlimited)")
+	}
+	if c.ApprovalAboveMicros < 0 {
+		return fmt.Errorf("policy config: approval_above must not be negative")
+	}
+	if len(c.MerchantAllowlist) == 0 {
+		return fmt.Errorf("policy config: merchant allowlist is empty; every payment would be denied")
+	}
+	// A blocked category that no merchant maps to is legal (blocklists name the bad, not
+	// the known); an allowlisted merchant mapped to a blocked category is a contradiction
+	// worth failing on — it can never transact.
+	blocked := make(map[string]bool, len(c.BlockedCategories))
+	for _, b := range c.BlockedCategories {
+		blocked[b] = true
+	}
+	for _, m := range c.MerchantAllowlist {
+		if cat, ok := c.MerchantCategories[m]; ok && blocked[cat] {
+			return fmt.Errorf("policy config: merchant %q is allowlisted but categorized %q, which is blocked — it can never transact", m, cat)
+		}
+	}
+	return nil
+}
+
 // DailyWindowStartUTC pins the daily-cumulative window definition: the window
 // containing `now` starts at midnight UTC of now's UTC date. Timezone-independent —
 // 03:30 IST and 22:00 UTC the previous evening share a window.
