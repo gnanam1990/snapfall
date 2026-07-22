@@ -43,7 +43,43 @@ const (
 	TypeWorkerReport   Type = "worker.report"
 	TypeWorkerProgress Type = "worker.progress"
 	TypeWorkerFailure  Type = "worker.failure"
+
+	// QA-worker → Brain (G9). A distinct type from TypeWorkerReport: a draft and a
+	// verdict are different speech acts, and the DeliveryReady transition listens
+	// only to this one.
+	TypeQAVerdict Type = "worker.qa_verdict"
 )
+
+// ── G9 shared vocabulary. Lives here so workers and QA can both name these
+//    without depending on each other (THE LAW's import shape). ──
+
+// Claim is one assertion in a deliverable, with the sources backing it.
+// An empty Sources list is exactly what QA's unsupported-claim check hunts.
+type Claim struct {
+	Text    string   `json:"text"`
+	Sources []string `json:"sources"`
+}
+
+// Deliverable is the structured draft a worker submits for QA review.
+type Deliverable struct {
+	Title   string   `json:"title"`
+	Summary string   `json:"summary"`
+	Claims  []Claim  `json:"claims"`
+	Sources []string `json:"sources"`
+}
+
+// QAVerdict is the QA-worker's review result (payload of TypeQAVerdict).
+//
+// HONESTY CONTRACT (same discipline as the compliance step, PRD §5.1): a verdict is
+// EVIDENCE OF REVIEW, NOT A GUARANTEE. QA can produce false negatives — an unsupported
+// claim it fails to catch still ships. Disclaimer carries that sentence verbatim and
+// every surface that renders a verdict must show it.
+type QAVerdict struct {
+	Passed     bool     `json:"passed"`
+	Reasons    []string `json:"reasons"`
+	Checked    int      `json:"checked_claims"`
+	Disclaimer string   `json:"disclaimer"`
+}
 
 // Envelope is the message. Everything that moves between roles moves in one of these.
 type Envelope struct {

@@ -36,7 +36,12 @@ type JobMemory struct {
 	Confirmations  []Confirmation `json:"confirmations"`
 	EscrowState    string         `json:"escrow_state"`
 	Report         string         `json:"report,omitempty"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	// G9: the QA trail — every bounce reason, the revision count, and the
+	// evidence-not-guarantee disclaimer surfaced with any verdict.
+	QANotes       []string  `json:"qa_notes,omitempty"`
+	QADisclaimer  string    `json:"qa_disclaimer,omitempty"`
+	RevisionCount int       `json:"revision_count,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // MemoryStore owns the directory of per-job files.
