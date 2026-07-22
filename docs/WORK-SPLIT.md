@@ -10,7 +10,7 @@
 
 | # | From → To | Contents | Done when |
 |---|---|---|---|
-| **H1** | Anandan → Gnanam | Indexer event schema written to shared SQLite: `JobFunded, AdvanceIssued, ExpenseRecorded, DeliverySet, JobSettled(advanceRepaid, operatorNet), AdvanceWrittenOff, RateUpdated` | Schema file committed; both sides parse a sample fixture |
+| **H1** | Anandan → Gnanam | Indexer event schema written to shared SQLite: `JobFunded, AdvanceIssued, ExpenseRecorded, DeliverySubmitted, JobSettled(advanceRepaid, operatorNet), AdvanceRepaid, AdvanceWrittenOff, RateChanged` *(names corrected 22 Jul to match the frozen ABI — contracts emit `DeliverySubmitted` and `RateChanged`, not `DeliverySet`/`RateUpdated`; `AdvanceRepaid` added, the pool emits it inside the waterfall)* | Schema file committed; both sides parse a sample fixture |
 | **H2** | Gnanam → Vasanth+Anandan | REST endpoints (jobs, advances, pool, approvals, receipts) + SSE stream schema + approval-decision POST shape | OpenAPI-ish schema committed; dashboard renders a mocked stream |
 | **H3** | Vasanth → Gnanam | Payment sidecar API: `quote(resource)`, `pay(intent, approvalToken)`, `status(paymentId)` — Funding agent is the only consumer | Schema committed; Funding calls a mocked sidecar successfully |
 
@@ -35,8 +35,8 @@ After Friday: schema changes need all-three agreement + version bump. This is wh
 
 ### Phase 3 · Mon 3 – Wed 5 Aug
 - **V10. F1 Live Money Graph.** The "watch the Snapfall" screen: fund → snap → spend droplets → waterfall filling pool-first, operator-second, driven by real SSE events (replayable for rehearsal). *Done when:* a live spine run animates correctly with zero manual triggers. *(1.5d)*
-- **V11. F2 Score Ring.** Advance-rate ring animating 50%→55% on settlement + "next job unlocks 13.75" line, value read from chain via H2. *Done when:* the ring updates from the real RateUpdated event. *(0.5d)*
-- **V12. Seed + reset scripts.** One command: demo org, funded customer wallet, 100 USDC pool seed, clean state. *Done when:* reset → full spine → reset → full spine, twice in a row, no manual fixes. *(0.5d)*
+- **V11. F2 Score Ring.** Advance-rate ring animating 50%→55% on settlement + "next job unlocks 13.75" line, value read from chain via H2. *Done when:* the ring updates from the real RateChanged event *(frozen ABI name; was misquoted as RateUpdated)*. *(0.5d)*
+- **V12. Seed + reset scripts.** One command: demo org, funded customer wallet, **150 USDC pool seed** *(was 100 — reverts `CapExceeded`: the 12.50 advance needs TVL ≥ 125 under the 10% per-org exposure cap; 150 also covers the 13.75 second-job beat)*, clean state. *Done when:* reset → full spine → reset → full spine, twice in a row, no manual fixes. *(0.5d)*
 
 **Vasanth total ≈ 12.5d**
 
