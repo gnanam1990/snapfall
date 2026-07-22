@@ -130,6 +130,34 @@ func (b *Brain) Reject(ctx context.Context, jobID, by, reason string) error {
 	return b.Deliver(ctx, e)
 }
 
+// Recover rehydrates Brain's job map from the per-job memory files (G11 / extended
+// AT-10): after a restart, a mid-QA-loop job resumes parked at its recorded stage
+// instead of vanishing from the router's working set. The memory files are the
+// durable truth (G4); this is the read-back.
+func (b *Brain) Recover() error {
+	ids, err := b.memory.List()
+	if err != nil {
+		return fmt.Errorf("recovering brain jobs: %w", err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, id := range ids {
+		jm, err := b.memory.Get(id)
+		if err != nil {
+			return err
+		}
+		if _, exists := b.jobs[id]; exists {
+			continue
+		}
+		b.jobs[id] = &jobState{
+			JobID: id, Scope: jm.Scope, QuoteUSDC: jm.QuoteUSDC,
+			Stage: JobStage(jm.Stage), Worker: jm.AssignedWorker,
+			RevisionCount: jm.RevisionCount, Report: jm.Report,
+		}
+	}
+	return nil
+}
+
 // Job returns Brain's current view of a job.
 func (b *Brain) Job(jobID string) (jobState, bool) {
 	b.mu.Lock()
@@ -146,6 +174,10 @@ func (b *Brain) Job(jobID string) (jobState, bool) {
 func (b *Brain) onOwnerRequest(ctx context.Context, e envelope.Envelope) error {
 	if b.scoper == nil {
 		return fmt.Errorf("no scoper installed")
+	}
+	// G11: a frozen org accepts no new jobs at all.
+	if err := b.frozenErr(e.JobID, ""); err != nil {
+		return err
 	}
 	var req OwnerRequest
 	if err := e.Decode(&req); err != nil {
