@@ -82,11 +82,52 @@ func jsonString(s string) string {
 	}
 	out := string(bytes.TrimRight(buf.Bytes(), "\n"))
 	// Go escapes U+2028/U+2029 unconditionally; JS JSON.stringify emits them literally.
-	// Normalize to the JS behavior so the byte-compat claim holds for every valid
-	// JSON string (review-batch fix; both are valid JSON either way).
-	out = strings.ReplaceAll(out, `\u2028`, "\u2028")
-	out = strings.ReplaceAll(out, `\u2029`, "\u2029")
-	return out
+	// Normalize to the JS behavior so the byte-compat claim holds for every valid JSON
+	// string. A blind ReplaceAll is WRONG (review fix): for the six literal input chars
+	// `\u2028`, the encoder produces `\\u2028`, and replacing the trailing `\u2028` there
+	// would corrupt an escaped backslash into a lone one. Only an ENCODER-GENERATED escape
+	// is converted - distinguished by an ODD run of preceding backslashes.
+	return normalizeLineSeparators(out)
+}
+
+// normalizeLineSeparators converts an encoder-emitted `\u2028`/`\u2029` escape to the
+// literal rune (matching JS), while leaving a `\u2028` that is really an escaped
+// backslash followed by the text "u2028" untouched. Parity of the backslash run is the
+// discriminator: JSON escapes literal backslashes as pairs, so a real `\u` escape is the
+// odd one out.
+func normalizeLineSeparators(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		if s[i] != '\\' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(s) && s[j] == '\\' {
+			j++
+		}
+		run := j - i
+		rest := s[j:]
+		if run%2 == 1 && (strings.HasPrefix(rest, "u2028") || strings.HasPrefix(rest, "u2029")) {
+			// Odd run: the last backslash introduces a real \uXXXX escape. Emit the
+			// escaped-backslash pairs verbatim, then the literal separator rune.
+			b.WriteString(strings.Repeat(`\`, run-1))
+			if rest[4] == '8' {
+				b.WriteRune('\u2028')
+			} else {
+				b.WriteRune('\u2029')
+			}
+			i = j + 5
+			continue
+		}
+		// Even run (all escaped backslashes) or not a separator escape: verbatim.
+		b.WriteString(s[i:j])
+		i = j
+	}
+	return b.String()
 }
 
 // canonicalValue renders one Intent field value deterministically.

@@ -352,6 +352,8 @@ func (b *Brain) onQAVerdict(ctx context.Context, kind string, e envelope.Envelop
 	if kind == "" || kind != qaKind {
 		return fmt.Errorf("verdict refused: worker kind %q is not the registered QA reviewer %q — only QA issues verdicts", kind, qaKind)
 	}
+	// A cheap non-authoritative pre-check for a friendly error; the AUTHORITATIVE gate is
+	// the atomic claim below / in markDeliveryReady (review fix, Anandan #3).
 	if js.Stage != StageQAReview {
 		return fmt.Errorf("verdict refused: job %s is %s, not under QA review", e.JobID, js.Stage)
 	}
@@ -366,10 +368,35 @@ func (b *Brain) onQAVerdict(ctx context.Context, kind string, e envelope.Envelop
 		return fmt.Errorf("verdict refused: missing the evidence-not-guarantee disclaimer")
 	}
 
-	note := "QA PASS"
-	if !v.Passed {
-		note = "QA BOUNCE: " + strings.Join(v.Reasons, " | ")
+	if v.Passed {
+		// markDeliveryReady performs the atomic qa_review -> delivery_ready claim and
+		// records the QA note inside that same winning transition. A concurrent or
+		// retried verdict that lost the claim is refused there and emits no second report.
+		return b.markDeliveryReady(ctx, js, v)
 	}
+
+	// ── The bounce loop, bounded (G9 pin 2). The stage transition is CLAIMED atomically
+	//    under b.mu (review fix, Anandan #3): check qa_review AND move out of it in one
+	//    lock hold, so two concurrent/retried bounces cannot both bump the revision or
+	//    re-assign. The loser sees a stage other than qa_review and is refused. ──
+	b.mu.Lock()
+	if js.Stage != StageQAReview {
+		st := js.Stage
+		b.mu.Unlock()
+		return fmt.Errorf("verdict refused: job %s is %s, not under QA review (already claimed by a concurrent verdict)", e.JobID, st)
+	}
+	js.RevisionCount++
+	rev := js.RevisionCount
+	author := js.Worker
+	escalated := rev > maxRev
+	if escalated {
+		js.Stage = StageEscalated
+	} else {
+		js.Stage = StageRevision
+	}
+	b.mu.Unlock()
+
+	note := "QA BOUNCE: " + strings.Join(v.Reasons, " | ")
 	if err := b.memory.Update(e.JobID, func(jm *JobMemory) {
 		jm.QANotes = append(jm.QANotes, note)
 		jm.QADisclaimer = v.Disclaimer
@@ -377,21 +404,7 @@ func (b *Brain) onQAVerdict(ctx context.Context, kind string, e envelope.Envelop
 		return err
 	}
 
-	if v.Passed {
-		return b.markDeliveryReady(ctx, js, v)
-	}
-
-	// ── The bounce loop, bounded (G9 pin 2). ──
-	b.mu.Lock()
-	js.RevisionCount++
-	rev := js.RevisionCount
-	author := js.Worker
-	b.mu.Unlock()
-
-	if rev > maxRev {
-		b.mu.Lock()
-		js.Stage = StageEscalated
-		b.mu.Unlock()
+	if escalated {
 		if err := b.memory.Update(e.JobID, func(jm *JobMemory) {
 			jm.Stage = string(StageEscalated)
 			jm.RevisionCount = rev
@@ -414,9 +427,7 @@ func (b *Brain) onQAVerdict(ctx context.Context, kind string, e envelope.Envelop
 		return err
 	}
 
-	b.mu.Lock()
-	js.Stage = StageRevision
-	b.mu.Unlock()
+	// Stage is already StageRevision from the atomic claim above; persist and bounce.
 	if err := b.memory.Update(e.JobID, func(jm *JobMemory) {
 		jm.Stage = string(StageRevision)
 		jm.RevisionCount = rev
@@ -430,7 +441,17 @@ func (b *Brain) onQAVerdict(ctx context.Context, kind string, e envelope.Envelop
 // markDeliveryReady is the single assignment site for StageDeliveryReady — called
 // exclusively from onQAVerdict's pass branch, pinned by a source-scan test.
 func (b *Brain) markDeliveryReady(ctx context.Context, js *jobState, v envelope.QAVerdict) error {
+	// Atomic claim (review fix, Anandan #3): the qa_review -> delivery_ready transition
+	// is the point where a duplicate delivery report could be emitted. Verify the job is
+	// STILL in qa_review AND move it out, under a single lock hold. A concurrent or
+	// retried passing verdict that lost the race sees a non-qa_review stage and is
+	// refused here — so exactly one delivery report is ever produced.
 	b.mu.Lock()
+	if js.Stage != StageQAReview {
+		st := js.Stage
+		b.mu.Unlock()
+		return fmt.Errorf("delivery-ready refused: job %s is %s, not under QA review (already claimed by a concurrent verdict)", js.JobID, st)
+	}
 	js.Stage = StageDeliveryReady
 	draft := js.Draft
 	b.mu.Unlock()
@@ -441,10 +462,14 @@ func (b *Brain) markDeliveryReady(ctx context.Context, js *jobState, v envelope.
 			raw = string(enc)
 		}
 	}
+	// The QA PASS note is recorded inside the winning transition (not before the claim),
+	// so a refused duplicate verdict leaves no note or report behind.
 	if err := b.memory.Update(js.JobID, func(jm *JobMemory) {
 		jm.Stage = string(StageDeliveryReady)
 		jm.CompletionPct = 100
 		jm.Report = raw
+		jm.QANotes = append(jm.QANotes, "QA PASS")
+		jm.QADisclaimer = v.Disclaimer
 	}); err != nil {
 		return err
 	}

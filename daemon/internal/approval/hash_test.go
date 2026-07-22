@@ -205,6 +205,37 @@ func TestCanonicalWire_LineSeparatorsMatchJS(t *testing.T) {
 	}
 }
 
+// Review fix (Anandan #2, the second vector): a purpose containing the LITERAL six
+// characters backslash-u-2-0-2-8 (NOT the U+2028 rune) must survive canonicalization
+// intact. Go's encoder renders the backslash as `\\`, producing `\\u2028`; the old blind
+// ReplaceAll rewrote the trailing escape into a raw separator, diverging from JS
+// JSON.stringify("...\\u2028..."). Written with Go escapes so the vector is unambiguous.
+func TestCanonicalWire_LiteralBackslashUEscapePreserved(t *testing.T) {
+	const literalSeq = "\\u2028" // six chars: backslash, u, 2, 0, 2, 8 — verified below
+	if len(literalSeq) != 6 || literalSeq[0] != '\\' || literalSeq[1] != 'u' {
+		t.Fatalf("vector is not the six literal chars: %q (len %d)", literalSeq, len(literalSeq))
+	}
+	in := vectorIntent()
+	in.Purpose = "before" + literalSeq + "after"
+
+	c := CanonicalWire(in)
+	// JS escapes the backslash: the canonical form carries `\\u2028` (escaped backslash +
+	// literal u2028), never a raw U+2028 rune.
+	if !strings.Contains(c, `before\\u2028after`) {
+		t.Fatalf("literal backslash-u2028 not preserved as \\\\u2028 (JS-incompatible):\n%q", c)
+	}
+	if strings.ContainsRune(c, '\u2028') {
+		t.Fatalf("a raw U+2028 rune leaked from a literal-escape input — corruption:\n%q", c)
+	}
+
+	// The literal escape and the real rune are distinct inputs and MUST hash differently.
+	rune2028 := vectorIntent()
+	rune2028.Purpose = "before\u2028after"
+	if WireHash(in) == WireHash(rune2028) {
+		t.Fatal("literal backslash-u2028 and the real U+2028 rune hash identically — lossy")
+	}
+}
+
 // The wire canonical form matches H3 §3.3's shape exactly: 14 keys, lexicographic,
 // no whitespace. Golden vector printed for cross-checking against Vasanth's JS side.
 func TestCanonicalWire_ShapeAndGoldenVector(t *testing.T) {

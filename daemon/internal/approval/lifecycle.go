@@ -98,15 +98,11 @@ func (g Grant) GrantedAt() time.Time { return g.grantedAt }
 // Empty reports whether this grant was forged outside the lifecycle (zero value).
 func (g Grant) Empty() bool { return g.requestID == "" }
 
-// NewGrantForTest builds a populated Grant for tests in OTHER packages (funding's
-// boundary tests). Named *ForTest so its purpose is unmistakable; production Grants
-// are minted only inside Execute, after the gates.
-func NewGrantForTest(requestID, jobID string, amountMicros int64, merchant string) Grant {
-	return Grant{
-		intent:    Intent{JobID: jobID, AmountMicros: amountMicros, Merchant: merchant},
-		requestID: requestID,
-	}
-}
+// There is deliberately NO exported constructor for a populated Grant. A Grant with
+// real payment data can be minted ONLY inside Execute, after every gate. Tests that
+// need a legitimate Grant (including tests in other packages) obtain one by driving a
+// real approved lifecycle flow and capturing what the Executor receives — never a
+// production-reachable shortcut, which would be a second door past the gates.
 
 // Executor performs the approved action — for the demo spine, the Funding-agent call.
 // It receives an approval-minted Grant, never a bare Intent or policy Decision.

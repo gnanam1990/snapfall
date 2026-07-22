@@ -4,12 +4,68 @@ package funding_test
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
+	"github.com/gnanam1990/snapfall/daemon/internal/policy"
+	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
+
+// mintRealGrant produces a legitimate Grant the only way one can exist: by driving a
+// real approved lifecycle flow and capturing what the Executor is handed. There is no
+// production constructor to shortcut this — that is the point of the capability boundary.
+func mintRealGrant(t *testing.T) approval.Grant {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "grant.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	clock := func() time.Time { return time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC) }
+	l := approval.New(st, clock)
+	l.Policy = func() (policy.PolicyConfig, string) { return policy.DemoPolicy(), "pol_7" }
+	l.Spend = func(string) policy.SpendState { return policy.SpendState{} }
+
+	// $0.04 at an allowlisted merchant, below the 0.10 auto-approve threshold.
+	in := approval.Intent{
+		IntentID:     "pi_grant",
+		OrgID:        "org_demo",
+		JobID:        "job_x",
+		TaskID:       "task_1",
+		AgentID:      "due-diligence",
+		Merchant:     policy.DemoMerchantProfile,
+		Resource:     "GET /v1/company-profile",
+		AmountMicros: 40_000,
+		Purpose:      "company profile",
+		Nonce:        "0x" + strings.Repeat("cd", 32),
+		ExpiresAt:    clock().Add(5 * time.Minute),
+	}
+	res, err := l.Submit(ctx, in)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if res.Decision.Outcome != policy.AutoApprove {
+		t.Fatalf("intent did not auto-approve (outcome %s) — cannot mint a grant", res.Decision.Outcome)
+	}
+	var g approval.Grant
+	if err := l.Execute(ctx, res.Request.Intent, res.Request.ID, func(_ context.Context, grant approval.Grant) error {
+		g = grant
+		return nil
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if g.Empty() {
+		t.Fatal("captured grant is empty — the lifecycle did not mint it")
+	}
+	return g
+}
 
 // The sole mutating entry point demands approval.Grant. Reflection over the FULL
 // method set: any new method added to the Agent must be classified here, so a
@@ -57,7 +113,7 @@ func TestFunding_RefusesForgedEmptyGrant(t *testing.T) {
 // not many — belt-and-suspenders atop the lifecycle's exactly-once.
 func TestFunding_RefusesGrantReplay(t *testing.T) {
 	agent := funding.New()
-	g := approval.NewGrantForTest("req_1", "job_x", 4_000_000, "api.m.example")
+	g := mintRealGrant(t)
 
 	if err := agent.Execute(context.Background(), g); err != nil {
 		t.Fatalf("first execute: %v", err)
