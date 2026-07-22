@@ -71,9 +71,36 @@ type Request struct {
 	ExecutedAt time.Time
 }
 
+// Grant is the capability Execute mints when — and only when — every gate has passed:
+// hash bound, state approved, unexpired, policy version current, never executed.
+//
+// Every field is unexported. A Grant forged outside this package (`approval.Grant{}`)
+// is EMPTY: it names no amount, no merchant, no job — there is no money movement it
+// could describe. The data needed to act can only enter a Grant here, post-gate. Any
+// Funding-side entry point that demands a Grant therefore cannot be reached with a bare
+// policy.Decision, an expired approval, or nothing at all. This is the execution-side
+// twin of AT-16: the unsafe call is unexpressible, not merely checked.
+type Grant struct {
+	intent    Intent
+	requestID string
+	grantedAt time.Time
+}
+
+// Intent returns the exact intent that was approved and re-verified.
+func (g Grant) Intent() Intent { return g.intent }
+
+// RequestID names the approval record this grant was minted from.
+func (g Grant) RequestID() string { return g.requestID }
+
+// GrantedAt is when the execution gate passed.
+func (g Grant) GrantedAt() time.Time { return g.grantedAt }
+
+// Empty reports whether this grant was forged outside the lifecycle (zero value).
+func (g Grant) Empty() bool { return g.requestID == "" }
+
 // Executor performs the approved action — for the demo spine, the Funding-agent call.
-// The lifecycle counts on it being invoked ONLY through Execute.
-type Executor func(ctx context.Context, in Intent) error
+// It receives an approval-minted Grant, never a bare Intent or policy Decision.
+type Executor func(ctx context.Context, g Grant) error
 
 // Lifecycle wires policy evaluation, approval state, and execution binding together.
 type Lifecycle struct {
@@ -294,7 +321,8 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 		"request_id": req.ID, "intent_hash": req.IntentHash,
 	})
 
-	if err := exec(ctx, in); err != nil {
+	grant := Grant{intent: in, requestID: req.ID, grantedAt: req.ExecutedAt}
+	if err := exec(ctx, grant); err != nil {
 		// The claim stands (no retry without a fresh intent) — mirrors the sidecar's
 		// conservative posture: never risk a double-spend to save a retry.
 		l.appendEvent(ctx, req.JobID, "payment.failed", map[string]any{

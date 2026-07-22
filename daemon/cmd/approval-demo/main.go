@@ -50,10 +50,11 @@ func main() {
 	l.Spend = func(string) policy.SpendState { return policy.SpendState{} }
 
 	executed := 0
-	executor := func(_ context.Context, in approval.Intent) error {
+	executor := func(_ context.Context, g approval.Grant) error {
 		executed++
-		fmt.Printf("   >>> EXECUTOR INVOKED (call %d): %s USDC -> %s\n",
-			executed, policy.FormatUSDC(in.AmountMicros), in.Merchant)
+		in := g.Intent()
+		fmt.Printf("   >>> EXECUTOR INVOKED (call %d, grant from %s): %s USDC -> %s\n",
+			executed, g.RequestID(), policy.FormatUSDC(in.AmountMicros), in.Merchant)
 		return nil
 	}
 
@@ -133,4 +134,20 @@ func main() {
 		panic(err)
 	}
 	fmt.Printf("\n   executor invocations total: %d (hop 3 + the untampered AT-05 intent)\n", executed)
+
+	// ── The event log: every hop above, recorded in order in the real store. ──
+	banner("EVENT LOG — SELECT seq, kind, entity_id FROM events ORDER BY seq")
+	rows, err := st.DB().Query(`SELECT seq, kind, entity_id FROM events ORDER BY seq`)
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seq int64
+		var kind, entity string
+		if err := rows.Scan(&seq, &kind, &entity); err != nil {
+			panic(err)
+		}
+		fmt.Printf("   %3d  %-22s %s\n", seq, kind, entity)
+	}
 }

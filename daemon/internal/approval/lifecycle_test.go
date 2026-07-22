@@ -40,7 +40,10 @@ func (c *fakeClock) Advance(d time.Duration) { c.now.Add(int64(d)) }
 type countingExecutor struct{ n atomic.Int32 }
 
 func (e *countingExecutor) fn() Executor {
-	return func(context.Context, Intent) error {
+	return func(_ context.Context, g Grant) error {
+		if g.Empty() {
+			panic("executor received a forged/empty grant")
+		}
 		e.n.Add(1)
 		return nil
 	}
