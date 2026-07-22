@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/gnanam1990/snapfall/daemon/internal/explorer"
 )
 
 // LookupEnv is injected so tests can resolve a deployment without mutating process state.
@@ -102,6 +104,9 @@ func (d *Deployment) resolve(base string, lookup LookupEnv) error {
 	}
 	if !strings.HasPrefix(d.Network.RPCURL, "http://") && !strings.HasPrefix(d.Network.RPCURL, "https://") {
 		return fmt.Errorf("rpcUrl must be http(s), got %q", d.Network.RPCURL)
+	}
+	if _, err := explorer.New(d.Network.ExplorerURL); err != nil {
+		return fmt.Errorf("explorerUrl: %w", err)
 	}
 	if d.Network.StartBlockEnv != "" {
 		if v, ok := lookup(d.Network.StartBlockEnv); ok && strings.TrimSpace(v) != "" {

@@ -85,6 +85,7 @@ cmd/snapfall/          entry point: validate manifests -> open store -> start su
 cmd/indexer/           A2/A3 Arc poller + A4 reconciliation runner
 internal/agents/       manifest loader + FR-ORG-006 validation; HeartbeatWorker (the dummy)
 internal/chaincfg/      A1 deployment/config loader; resolves addresses from env
+internal/explorer/      A5 validated transaction/address explorer links for H2 rows
 internal/indexer/       H1 RPC adapter, decoder, projection, cursor, reconciliation
 internal/store/        SQLite (WAL), event log, transactional outbox
 internal/events/       typed bus + outbox publisher
