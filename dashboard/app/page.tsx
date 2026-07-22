@@ -9,6 +9,7 @@ import { fadeUp } from '@/lib/motion';
 import MoneyGraph from '@/components/MoneyGraph';
 import StatCard from '@/components/StatCard';
 import Card, { CardTitle } from '@/components/Card';
+import Reveal from '@/components/Reveal';
 import EventFeed from '@/components/EventFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
@@ -63,13 +64,13 @@ export default function OverviewPage() {
           style={{ fontSize: 'clamp(1.65rem, 4.2vw, 2.7rem)', lineHeight: 1.05, letterSpacing: '-0.01em' }}
         >
           <span className="whitespace-nowrap">
-            Capital in a snap
+            Capital in a <em className="serif-accent">snap</em>
             <span className="inline-icon" style={inlineIcon}>
               <Lightning size={26} weight="regular" color="var(--color-text)" />
             </span>
           </span>
           <br />
-          settlement in a waterfall
+          settlement in a <em className="serif-accent">waterfall</em>
           <span className="inline-icon" style={{ ...inlineIcon, marginLeft: 6 }}>
             <Waves size={26} weight="regular" color="var(--color-text)" />
           </span>
@@ -114,31 +115,31 @@ export default function OverviewPage() {
           </div>
 
           <div className="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr] [&>*]:min-w-0">
-            <motion.div variants={fadeUp} custom={7} initial="hidden" animate="visible">
+            <Reveal>
               <Card>
                 <CardTitle>Recent financial events</CardTitle>
                 <EventFeed events={events} />
               </Card>
-            </motion.div>
+            </Reveal>
             <div className="grid content-start gap-4 [&>*]:min-w-0">
-              <motion.div variants={fadeUp} custom={8} initial="hidden" animate="visible">
+              <Reveal delay={100}>
                 <Card>
                   <CardTitle>Workforce</CardTitle>
                   <WorkforceStrip agents={snap.workforce} />
                 </Card>
-              </motion.div>
-              <motion.div variants={fadeUp} custom={9} initial="hidden" animate="visible">
+              </Reveal>
+              <Reveal delay={200}>
                 <Card>
                   <CardTitle>Open advances</CardTitle>
                   <AdvancesTable advances={advances} />
                 </Card>
-              </motion.div>
-              <motion.div variants={fadeUp} custom={10} initial="hidden" animate="visible">
+              </Reveal>
+              <Reveal delay={300}>
                 <Card>
                   <CardTitle>Active jobs</CardTitle>
                   <ActiveJobs jobs={snap.activeJobs} />
                 </Card>
-              </motion.div>
+              </Reveal>
             </div>
           </div>
         </>

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
-import { List, X, ArrowSquareOut } from '@phosphor-icons/react';
+import { X, ArrowSquareOut } from '@phosphor-icons/react';
 import Logo from './Logo';
 import ThemeToggle from './ThemeToggle';
 import { EASE_IN, EASE_OUT } from '@/lib/motion';
@@ -28,8 +28,11 @@ export default function Navbar() {
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));
 
   return (
-    <header className="relative z-20">
-      <nav className="mx-auto flex max-w-[1280px] items-center justify-between px-5 py-4 sm:px-8 sm:py-5">
+    <header className="sticky top-0 z-20 px-5 pb-2 pt-4 sm:px-8">
+      <nav
+        className="mx-auto flex max-w-[1232px] items-center justify-between rounded-full py-2.5 pl-5 pr-2.5"
+        style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-card)' }}
+      >
         {/* left: brand */}
         <Link href="/" className="flex items-center gap-2.5" style={{ color: 'var(--color-text)' }}>
           <Logo size={26} />
@@ -80,15 +83,17 @@ export default function Navbar() {
           </motion.a>
         </div>
 
-        {/* mobile: theme toggle + hamburger */}
+        {/* mobile: theme toggle + animated hamburger */}
         <div className="flex items-center gap-2 md:hidden">
           <ThemeToggle />
           <button
             aria-label={open ? 'Close menu' : 'Open menu'}
             onClick={() => setOpen((o) => !o)}
-            style={{ color: 'var(--color-text)', background: 'none', border: 'none', padding: 4 }}
+            className="relative flex h-10 w-10 items-center justify-center"
+            style={{ color: 'var(--color-text)', background: 'none', border: 'none' }}
           >
-            {open ? <X size={24} weight="bold" /> : <List size={24} weight="bold" />}
+            <span className="hamburger-line" style={{ transform: open ? 'rotate(45deg)' : 'translateY(-4px)' }} />
+            <span className="hamburger-line" style={{ transform: open ? 'rotate(-45deg)' : 'translateY(4px)' }} />
           </button>
         </div>
       </nav>

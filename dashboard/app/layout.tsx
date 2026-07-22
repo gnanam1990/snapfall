@@ -1,10 +1,11 @@
 import './globals.css';
 import type { Metadata } from 'next';
-import { Inter, Inter_Tight } from 'next/font/google';
+import { Inter, Inter_Tight, Instrument_Serif } from 'next/font/google';
 import Navbar from '@/components/Navbar';
 
 /* Self-hosted at build time via next/font: zero runtime font fetches (demo-safe).
-   Inter Tight ExtraBold stands in for the spec's "Helvetica Now Display Bold". */
+   Inter Tight ExtraBold stands in for the spec's "Helvetica Now Display Bold";
+   Instrument Serif italic is the editorial accent face for hero keywords. */
 const heading = Inter_Tight({
   subsets: ['latin'],
   weight: ['700', '800'],
@@ -15,6 +16,12 @@ const body = Inter({
   weight: ['300', '400', '500', '600', '700', '800', '900'],
   variable: '--font-body',
 });
+const serif = Instrument_Serif({
+  subsets: ['latin'],
+  weight: '400',
+  style: 'italic',
+  variable: '--font-serif',
+});
 
 export const metadata: Metadata = {
   title: 'Snapfall',
@@ -23,7 +30,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${heading.variable} ${body.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${heading.variable} ${body.variable} ${serif.variable}`} suppressHydrationWarning>
       <body>
         {/* Theme boot: runs before paint so a stored/system dark preference never flashes light. */}
         <script

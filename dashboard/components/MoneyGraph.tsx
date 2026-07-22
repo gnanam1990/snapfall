@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FinancialEvent, PoolStats } from '@/lib/types';
 import { formatUsdc } from '@/lib/format';
 import Card, { CardTitle } from './Card';
+import Logo from './Logo';
 import ScoreRing from './ScoreRing';
 
 /**
@@ -153,6 +154,9 @@ export default function MoneyGraph({
     <Card className="overflow-hidden">
       <div className="flex items-start justify-between gap-4">
         <div>
+          <span className="mb-3 block" style={{ color: 'var(--color-faint)' }}>
+            <Logo size={26} />
+          </span>
           <CardTitle>Live Money Graph</CardTitle>
           <div className={`mg-beat${beat ? ' show' : ''} beat-${beat?.kind ?? 'none'}`}>
             {beat?.label ?? 'watch the money move'}
