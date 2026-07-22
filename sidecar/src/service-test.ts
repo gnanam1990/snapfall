@@ -229,6 +229,42 @@ async function main() {
     const nap = await api('POST', '/v1/pay', { intent: napIntent, approvalToken: makeToken(napIntent) });
     check('403 INTENT_NOT_APPROVED', nap.status === 403 && nap.json?.error?.code === 'INTENT_NOT_APPROVED', `HTTP ${nap.status} ${nap.json?.error?.code}`);
 
+    // ── Review-fix coverage ──────────────────────────────────────────────
+
+    // 11. Expired approval (the window already elapsed).
+    console.log('\n11. expired approval rejected');
+    const expIntent = makeIntent(profileUrl, accept, { expiresAt: new Date(Date.now() - 1000).toISOString() });
+    const exp = await api('POST', '/v1/pay', { intent: expIntent, approvalToken: makeToken(expIntent) });
+    check('410 APPROVAL_EXPIRED', exp.status === 410 && exp.json?.error?.code === 'APPROVAL_EXPIRED', `HTTP ${exp.status} ${exp.json?.error?.code}`);
+
+    // 11b. Unparseable expiresAt must fail closed (NaN would otherwise never expire).
+    console.log('\n11b. unparseable expiresAt fails closed');
+    const nanIntent = makeIntent(profileUrl, accept, { expiresAt: 'not-a-timestamp' });
+    const nan = await api('POST', '/v1/pay', { intent: nanIntent, approvalToken: makeToken(nanIntent) });
+    check('410 on unparseable expiry', nan.status === 410 && nan.json?.error?.code === 'APPROVAL_EXPIRED', `HTTP ${nan.status} ${nan.json?.error?.code}`);
+
+    // 12. approvedAmount mismatch between token and intent.
+    console.log('\n12. approved-amount mismatch rejected');
+    const amtIntent = makeIntent(profileUrl, accept);
+    const amtToken = makeToken(amtIntent, H2_SECRET, { approvedAmount: '99999' });
+    const amt = await api('POST', '/v1/pay', { intent: amtIntent, approvalToken: amtToken });
+    check('409 APPROVED_AMOUNT_MISMATCH', amt.status === 409 && amt.json?.error?.code === 'APPROVED_AMOUNT_MISMATCH', `HTTP ${amt.status} ${amt.json?.error?.code}`);
+
+    // 13. Pre-sign failures carry a NULL paymentId (no record exists to resolve).
+    console.log('\n13. pre-sign error envelope carries null paymentId');
+    check('null paymentId on a pre-sign failure', amt.json?.error?.paymentId === null, JSON.stringify(amt.json?.error?.paymentId));
+
+    // 14. A completed payment replays as 200; there is no stuck-SIGNED 200 path
+    //     (that intersection is the store-durability test below).
+    console.log('\n14. completed payment replays as 200');
+    const rp = await api('POST', '/v1/pay', { intent, approvalToken: token });
+    check('replay of a DELIVERED record is 200', rp.status === 200 && rp.json?.idempotentReplay === true, `HTTP ${rp.status}`);
+
+    // 15. Malformed quote URL is a 400, not a 502.
+    console.log('\n15. malformed quote URL is a client error');
+    const badq = await api('POST', '/v1/quote', { resource: 'not a url', chainId: CHAIN_ID });
+    check('400 BAD_REQUEST on malformed URL', badq.status === 400 && badq.json?.error?.code === 'BAD_REQUEST', `HTTP ${badq.status} ${badq.json?.error?.code}`);
+
     console.log(
       failures === 0
         ? '\nH3 sidecar green: quote -> approve -> pay -> status, with every gate holding.\n'

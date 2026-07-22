@@ -55,7 +55,7 @@ Reaching `pay` requires **both** a loopback socket on this host **and** the secr
   "error": {
     "code": "STRING_ENUM",          // stable, see §2.4
     "message": "human-readable, safe to log",
-    "paymentId": "pay_… | null",    // ALWAYS present once a durable record exists for the nonce (§4)
+    "paymentId": "pay_… | null",    // non-null ONLY when a durable record exists (§4); null for pre-sign failures
     "retriable": false,             // true only for transient transport/facilitator faults
     "details": { }                  // optional, code-specific (e.g. quoted, reserved, sellerReason)
   }
@@ -115,22 +115,29 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
 { "intent": { /* ApprovedIntent — §3.1 */ }, "approvalToken": { /* §3.2 */ } }
 ```
 
-**Execution order (normative; the first failure short-circuits).** No signature is produced before step 8.
+> **Reconciled with the implementation (review, 22 Jul).** The earlier draft wrote a
+> `RECEIVED` record *before* validation. The implementation instead persists nothing
+> until every pre-sign check passes, then write-aheads a `SIGNED` record. That is the
+> ratified behavior: **pre-sign failures persist no record**, so their error envelope
+> carries `paymentId: null` (a non-null id that `status` would 404 on is worse than
+> none). `paymentId` is non-null in an error envelope ONLY when a durable record exists
+> — i.e. an idempotency mismatch on an existing record, or a post-write-ahead fault.
+
+**Execution order (normative; the first failure short-circuits).** No signature is produced before step 7.
 1. Bearer auth → `401 UNAUTHENTICATED`.
 2. Shape/type validation of `intent` + `approvalToken` → `400 BAD_REQUEST`.
-3. **Durable idempotency lookup by `idempotencyNonce`** (§4.2): if a record exists, return it (`idempotentReplay:true`) or `409 PAYMENT_IN_PROGRESS`; never re-execute.
-4. **Write-ahead** a durable `RECEIVED` record keyed by `idempotencyNonce` (with the precomputed `paymentId`, §4.1) and acquire the per-nonce lock. From here the error envelope always carries `paymentId`.
-5. Approval HMAC verify (§3.4) → `401 APPROVAL_TOKEN_INVALID`.
-6. Recompute `intentHash(intent)` and compare to `approvalToken.intentHash` → `409 INTENT_HASH_MISMATCH` (**AT-05, hash defense**). Also enforce `approvalToken.decision == intent.decision`, `approvalToken.approvedAmount == intent.amount`, `approvalToken.expiresAt == intent.expiresAt`.
-7. Decision gate (Gate 1): `intent.decision ∈ {AUTO_APPROVE, HUMAN_APPROVED}` → else `403 INTENT_NOT_APPROVED`. Expiry: `now < intent.expiresAt` → else `410 APPROVAL_EXPIRED`.
-8. **Probe the resource exactly once** to obtain the live `accept`. Then, **before signing**, assert against the approved intent (**AT-05, live-equality defense**):
+3. **Durable idempotency lookup by `idempotencyNonce`** (§4.2): if a record exists and is `DELIVERED`/terminal, return it (`idempotentReplay:true`); if it exists but is unresolved (`SIGNED`/`SUBMITTED` after a crash) → `409 PAYMENT_IN_PROGRESS` (reconcile via `status`, never a `200` that reads as success); if an in-flight lock is held → `409 PAYMENT_IN_PROGRESS`. Never re-execute.
+4. Approval HMAC verify (§3.4) → `401 APPROVAL_TOKEN_INVALID` (`paymentId: null`).
+5. Recompute `intentHash(intent)` and compare to `approvalToken.intentHash` → `409 INTENT_HASH_MISMATCH` (**AT-05, hash defense**). Also enforce `approvalToken.decision == intent.decision`, `approvalToken.approvedAmount == intent.amount`, `approvalToken.expiresAt == intent.expiresAt`. (all `paymentId: null`)
+6. Decision gate (Gate 1): `intent.decision ∈ {AUTO_APPROVE, HUMAN_APPROVED}` → else `403 INTENT_NOT_APPROVED`. Expiry: `now < intent.expiresAt` AND `intent.expiresAt` parses to a finite instant → else `410 APPROVAL_EXPIRED` (an unparseable timestamp fails closed).
+7. **Probe the resource exactly once** to obtain the live `accept`. Then, **before signing**, assert against the approved intent (**AT-05, live-equality defense**):
    - `accept.network == intent.network` else `422 NO_MATCHING_NETWORK`
    - `accept.payTo == intent.merchant` else `409 MERCHANT_CHANGED`
    - `accept.asset == intent.asset` else `409 ASSET_CHANGED`
    - `accept.amount == intent.amount` else `409 PRICE_CHANGED`
    - `BigInt(accept.amount) <= BigInt(intent.maxAmount)` else `402 PRICE_EXCEEDS_RESERVED` (Gate 2; `details:{quoted,reserved}`)
-9. Persist `SIGNED` (write-ahead), then sign the EIP-3009 authorization **against that exact validated `accept`** with the deterministic `authNonce` (§4.4). Do **not** re-probe.
-10. Submit `X-PAYMENT`; on seller `200` → `DELIVERED`; on seller non-200 → `PAYMENT_REJECTED`; on transport failure after submit → `RECONCILING` (non-terminal, `FACILITATOR_ERROR`, `retriable:true`).
+8. **Write-ahead** a durable `SIGNED` record keyed by `idempotencyNonce` (with the precomputed `paymentId`, §4.1). From here the error envelope carries `paymentId`. Then sign the EIP-3009 authorization **against that exact validated `accept`** with the deterministic `authNonce` (§4.4). Do **not** re-probe.
+9. Submit `X-PAYMENT`; on seller `200` → `DELIVERED`; on seller non-200 → `PAYMENT_REJECTED`; on transport failure after submit → `RECONCILING` (non-terminal, `FACILITATOR_ERROR`, `retriable:true`).
 
 **Response `200`** (executed or idempotent replay)
 ```json
@@ -265,6 +272,19 @@ Concretely:
 ```
 `decision` and `createdAt` are excluded (decision is bound by equality; `createdAt` is not a term of the deal). `expiresAt` **is** hashed and is also equality-checked between intent and token.
 
+**Canonicalization is exactly JS `JSON.stringify` byte-output (normative — cross-language landmine).** The reference is `JSON.stringify` over an object whose keys are inserted in the sorted order above. Two escaping details bite a Go implementation and MUST be matched:
+- Go's `encoding/json` HTML-escapes `&`, `<`, `>` by default. Disable it: `enc.SetEscapeHTML(false)`. A `resource` query string (`?a=1&b=2`) otherwise diverges.
+- Go **also** escapes U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) even with HTML-escaping off; `JSON.stringify` emits them **literally**. A Go implementation MUST post-process ` `/` ` back to the literal characters. (Gnanam's Go side, `internal/approval/hash.go`, does exactly this, with a test.)
+
+**Golden vectors (pin these byte-exact in a test on both sides).** Both sides must produce the identical `intentHash` for the same intent — a single agreeing case is not enough, so the second vector exercises the escaping path:
+
+| # | intent | expected `intentHash` |
+|---|---|---|
+| GV-1 | the concrete example above (`purpose:"Competitor profile for job_104"`) | _fill from `JSON.stringify` + keccak256; Gnanam to cross-check against Go_ |
+| GV-2 | GV-1 but `purpose:"line1 line2 end"` and `resource:"http://x/v1?a=1&b=2"` | _fill; this is the case that catches the HTML-escape and line-separator divergences_ |
+
+> **AGENDA — H1/H2/H3 session (tonight):** finalize both golden vectors and commit a matching JS test in the sidecar and Go test on Gnanam's side. Without GV-2 the escaping bug ships silently: two implementations that agree on GV-1 can still diverge on any intent whose `purpose`/`resource` contains `&`, `<`, `>`, U+2028, or U+2029, producing an `INTENT_HASH_MISMATCH` that rejects a legitimate payment.
+
 **AT-05 guarantee (two independent pre-sign defenses):**
 1. `merchant/amount/maxAmount/asset/network/resource/nonce` are all inside the hash, so any post-approval change to the intent diverges the hash and `pay` rejects `INTENT_HASH_MISMATCH`.
 2. Independently, `pay` compares the **live** `accept.payTo/amount/asset/network` to the approved intent (§2.2 step 8) and signs against that validated object, so a re-quoting or compromised seller that leaves the intent untouched is still caught by `MERCHANT_CHANGED` / `PRICE_CHANGED` / `ASSET_CHANGED` / `PRICE_EXCEEDS_RESERVED`. Without this step the hash would bind fields the signed transfer never consumes — cosmetic binding. This step is what makes the binding real.
@@ -289,9 +309,10 @@ paymentId = "pay_" + keccak256( utf8( intentHash + "|" + idempotencyNonce ) ).sl
 Inputs are the `0x`-prefixed lowercase hex strings joined by a literal `"|"`; `.slice(2,18)` takes 16 hex chars after the `0x`. It is fully determined by the intent, so **Funding can precompute `paymentId` at reserve time** and always poll `status`, even if a `pay` response is lost to a timeout.
 
 ### 4.2 Replay (no double-pay)
-The sidecar keeps a **durable** record keyed by `idempotencyNonce`, written **before** signing (§2.2 step 4):
-- **First call:** write-ahead `RECEIVED`, execute, advance the record, return `idempotentReplay:false`.
-- **Later call, same nonce + matching `intentHash`:** return the **stored** record, `idempotentReplay:true`, HTTP `200`, **without re-calling execution and without contacting the seller**.
+The sidecar keeps a **durable** record keyed by `idempotencyNonce`, write-ahead as `SIGNED` immediately before signing (§2.2 step 8). The record file is written atomically (temp + rename) and load fails closed on corruption, so the record cannot silently vanish under a crash mid-write.
+- **First call:** all pre-sign checks pass, write-ahead `SIGNED`, sign+submit, advance to `DELIVERED`, return `idempotentReplay:false`.
+- **Later call, same nonce + matching `intentHash`, record `DELIVERED`/terminal:** return the **stored** record, `idempotentReplay:true`, HTTP `200`, **without re-calling execution and without contacting the seller**.
+- **Later call, same nonce, record UNRESOLVED (`SIGNED`/`SUBMITTED` after a crash):** `409 PAYMENT_IN_PROGRESS` (`retriable:true`) — never a `200` that reads as success with `amountPaid:null`. Reconcile via `status`.
 - **Same nonce, different `intentHash`:** `409 INTENT_HASH_MISMATCH` (a nonce may not be reused for different terms).
 
 Because the record is durable and written before signing, a crash between signing and the response cannot cause a second execution: the retry finds the record and reconciles instead of re-signing.
@@ -311,16 +332,16 @@ So even if the durable record were lost and execution somehow repeated, the **sa
 ## 5. Status state machine
 
 ```
- RECEIVED ─▶ APPROVED ─▶ SIGNED ─▶ SUBMITTED ─▶ DELIVERED ─▶ (SETTLED*)
-    │           │           │           │            │
-    └── FAILED  └── FAILED  └── FAILED   └── FAILED   └── RECONCILING* ─▶ SETTLED* | FAILED*
-        EXPIRED     EXPIRED
+ (RECEIVED) ─▶ (APPROVED) ─▶ SIGNED ─▶ SUBMITTED ─▶ DELIVERED ─▶ (SETTLED*)
+                                │           │            │
+                                └── FAILED  └── FAILED   └── RECONCILING* ─▶ SETTLED* | FAILED*
 ```
 `*` = requires a real facilitator; UNIMPLEMENTED in the dry run.
 
 ### 5.1 Meanings
-- **RECEIVED** — durable record written, nonce lock held, nothing validated yet (§2.2 step 4). Makes `status`/`409` queryable immediately.
-- **APPROVED** — token verified, hash bound, decision/expiry OK. Nothing signed.
+> **Reconciled (review):** `RECEIVED`/`APPROVED` are **conceptual only — never persisted**. Validation happens in memory and persists nothing (pre-sign failures leave no record, §2.2). The **first persisted state is `SIGNED`**, write-ahead immediately before signing. `(parenthesized)` states above are logical stages, not stored values.
+- **RECEIVED / APPROVED** — logical pre-sign stages; not written to the store. A failure here returns an error with `paymentId: null`.
+- **SIGNED** — EIP-3009 authorization signed once (deterministic `authNonce`). A key has been used exactly once. **First persisted state.**
 - **SIGNED** — EIP-3009 authorization signed once (deterministic `authNonce`). A key has been used exactly once.
 - **SUBMITTED** — `X-PAYMENT` sent; awaiting seller/facilitator response.
 - **DELIVERED** — seller returned `200` with `{data, receipt}`; goods in hand; `settlement == "NOT_BROADCAST"`. **In the dry run this is the committed-final success state** (see §7).

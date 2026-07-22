@@ -18,7 +18,6 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
 import type { Hex, LocalAccount } from 'viem';
 import {
   loadSigner,
@@ -47,6 +46,11 @@ const H2_SECRET = process.env.H2_APPROVAL_SECRET ?? '';
 const STORE_PATH = process.env.SIDECAR_STORE_PATH ?? '.data/payments.json';
 
 if (!AUTH_TOKEN) throw new Error('SIDECAR_AUTH_TOKEN is not set (>=32-byte secret; see sidecar/.env.example).');
+// The spec (§1.2) requires a >=32-byte secret; enforce it rather than only checking
+// non-empty, so a weak token fails at boot instead of protecting `pay` in name only.
+if (Buffer.byteLength(AUTH_TOKEN, 'utf8') < 32) {
+  throw new Error('SIDECAR_AUTH_TOKEN must be at least 32 bytes (§1.2); refusing to start with a weak bearer secret.');
+}
 if (!H2_SECRET) throw new Error('H2_APPROVAL_SECRET is not set (shared with the approval service).');
 
 const signer: LocalAccount = loadSigner();
@@ -211,6 +215,17 @@ async function handleQuote(body: unknown): Promise<Reply> {
   if (typeof b?.resource !== 'string' || typeof b?.chainId !== 'number') {
     return errorReply(400, 'BAD_REQUEST', 'quote requires { resource: string, chainId: number }');
   }
+  // A malformed URL is a client error (400), not an upstream fault (502) — validate it
+  // here before probeChallenge turns a bad URL into UPSTREAM_UNREACHABLE (spec §2.1).
+  let parsed: URL;
+  try {
+    parsed = new URL(b.resource);
+  } catch {
+    return errorReply(400, 'BAD_REQUEST', `resource is not a valid URL: ${b.resource}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return errorReply(400, 'BAD_REQUEST', `resource must be http(s), got ${parsed.protocol}`);
+  }
   let accept;
   try {
     accept = await probeChallenge(b.resource, b.chainId);
@@ -247,35 +262,57 @@ async function handlePay(body: unknown): Promise<Reply> {
   const existing = store.getByNonce(intent.nonce);
   if (existing) {
     if (existing.intentHash !== intentHash) {
-      return errorReply(409, 'INTENT_HASH_MISMATCH', 'nonce reused for different terms', paymentId);
+      return errorReply(409, 'INTENT_HASH_MISMATCH', 'nonce reused for different terms', existing.paymentId);
     }
-    return { status: 200, json: payResponse(existing, true) };
+    // A COMPLETED payment replays as the stored 200. But a record stuck mid-flight
+    // (SIGNED/SUBMITTED after a crash between the write-ahead and completion) must NOT
+    // return a 200 that reads as success with amountPaid:null — that would tell Funding
+    // the payment is done when its outcome is unknown. Report it as in-progress and
+    // point the caller at `status` to reconcile (review fix).
+    if (existing.state === 'DELIVERED' || TERMINAL.has(existing.state)) {
+      return { status: 200, json: payResponse(existing, true) };
+    }
+    return errorReply(
+      409,
+      'PAYMENT_IN_PROGRESS',
+      `a prior execution for this nonce is unresolved (state ${existing.state}); reconcile via status before retrying`,
+      existing.paymentId,
+      { retriable: true },
+    );
   }
   if (inFlight.has(intent.nonce)) {
-    return errorReply(409, 'PAYMENT_IN_PROGRESS', 'an execution for this nonce is in flight', paymentId, { retriable: true });
+    // No durable record yet (the holder is still pre-write-ahead), so paymentId is not
+    // yet resolvable via status — carry null, consistent with the envelope rule below.
+    return errorReply(409, 'PAYMENT_IN_PROGRESS', 'an execution for this nonce is in flight', null, { retriable: true });
   }
 
   inFlight.add(intent.nonce);
   try {
-    // ── Pre-sign checks. None of these persist a record (H3 §2.2): a failure here means
-    //    nothing was signed, so the Funding agent releases its reservation on the error. ──
+    // ── Pre-sign checks persist NO record (H3 §2.2), so the error envelope carries a
+    //    NULL paymentId: `status` would 404 on the deterministic id, and a non-null id
+    //    that does not resolve is worse than none. The envelope's paymentId is non-null
+    //    ONLY once a durable record exists (review fix — closes the spec/code divergence).
+    //    A failure here means nothing was signed; Funding releases its reservation. ──
     if (token.intentHash !== intentHash) {
-      return errorReply(409, 'INTENT_HASH_MISMATCH', 'approval hash does not match the intent (AT-05)', paymentId);
+      return errorReply(409, 'INTENT_HASH_MISMATCH', 'approval hash does not match the intent (AT-05)', null);
     }
     if (!verifyApproval(H2_SECRET, token)) {
-      return errorReply(401, 'APPROVAL_TOKEN_INVALID', 'approval signature failed verification', paymentId);
+      return errorReply(401, 'APPROVAL_TOKEN_INVALID', 'approval signature failed verification', null);
     }
     if (token.decision !== intent.decision || token.expiresAt !== intent.expiresAt) {
-      return errorReply(401, 'APPROVAL_TOKEN_INVALID', 'approval decision/expiry does not match the intent', paymentId);
+      return errorReply(401, 'APPROVAL_TOKEN_INVALID', 'approval decision/expiry does not match the intent', null);
     }
     if (token.approvedAmount !== intent.amount) {
-      return errorReply(409, 'APPROVED_AMOUNT_MISMATCH', 'approved amount does not match the intent amount', paymentId);
+      return errorReply(409, 'APPROVED_AMOUNT_MISMATCH', 'approved amount does not match the intent amount', null);
     }
-    if (Date.parse(intent.expiresAt) <= Date.now()) {
-      return errorReply(410, 'APPROVAL_EXPIRED', 'the approval window has elapsed', paymentId);
+    // NaN-safe expiry: Date.parse of a malformed timestamp is NaN, and `NaN <= now` is
+    // false, so an unparseable expiresAt would never expire. Fail closed (review fix).
+    const expiresAtMs = Date.parse(intent.expiresAt);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      return errorReply(410, 'APPROVAL_EXPIRED', 'the approval window has elapsed or its timestamp is unparseable', null);
     }
     if (intent.decision !== 'AUTO_APPROVE' && intent.decision !== 'HUMAN_APPROVED') {
-      return errorReply(403, 'INTENT_NOT_APPROVED', `intent is ${intent.decision}; the treasury signs only approved intents`, paymentId);
+      return errorReply(403, 'INTENT_NOT_APPROVED', `intent is ${intent.decision}; the treasury signs only approved intents`, null);
     }
 
     const buyerIntent = toBuyerIntent(intent);
@@ -287,7 +324,7 @@ async function handlePay(body: unknown): Promise<Reply> {
       accept = await probeChallenge(intent.resource, chainId);
       assertAcceptMatchesIntent(accept, buyerIntent);
     } catch (e) {
-      return mapBuyerError(e, paymentId); // pre-sign: still no record persisted
+      return mapBuyerError(e, null); // pre-sign: still no record persisted
     }
 
     // ── Write-ahead the durable record, THEN sign the same validated accept. A crash after
@@ -344,13 +381,8 @@ function handleStatus(paymentId: string): Reply {
 function bearerOk(req: IncomingMessage): boolean {
   const h = req.headers['authorization'];
   if (typeof h !== 'string' || !h.startsWith('Bearer ')) return false;
-  return constantTimeEqualsRaw(h.slice(7), AUTH_TOKEN);
-}
-function constantTimeEqualsRaw(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) return false;
-  return timingSafeEqual(ba, bb);
+  // Reuse the shared h3.constantTimeEquals rather than a second local copy (review fix).
+  return constantTimeEquals(h.slice(7), AUTH_TOKEN);
 }
 
 function readBody(req: IncomingMessage): Promise<unknown> {

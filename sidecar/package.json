@@ -11,6 +11,7 @@
     "service": "tsx src/service.ts",
     "demo:loop": "tsx src/demo-loop.ts",
     "service:test": "tsx src/service-test.ts",
+    "store:test": "tsx src/store-test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

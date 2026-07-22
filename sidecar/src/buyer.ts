@@ -218,6 +218,12 @@ export function assertAcceptMatchesIntent(accept: AcceptOption, intent: Approved
  * This is the only place a key is used, and it is reached only past the guards above.
  * `nonce` is supplied by H3 (deterministic) or defaults to a fresh random one.
  */
+/** Cap on how long a signed authorization stays valid, regardless of what the seller
+ *  asks for. The authorization is a bearer instrument once signed; a hostile seller
+ *  requesting `maxTimeoutSeconds: 10_years` should not get a decade-lived signature.
+ *  Amount and payee are already bound, so this bounds only the time window. */
+const MAX_AUTH_LIFETIME_SECONDS = 3600; // 1 hour
+
 async function signAuthorization(
   account: LocalAccount,
   accept: AcceptOption,
@@ -225,12 +231,13 @@ async function signAuthorization(
   nonce?: Hex,
 ): Promise<PaymentPayload> {
   const now = Math.floor(Date.now() / 1000);
+  const lifetime = Math.min(Math.max(0, accept.maxTimeoutSeconds), MAX_AUTH_LIFETIME_SECONDS);
   const authorization = {
     from: account.address,
     to: accept.payTo as Address,
     value: accept.amount,
     validAfter: '0',
-    validBefore: String(now + accept.maxTimeoutSeconds),
+    validBefore: String(now + lifetime),
     nonce: nonce ?? freshNonce(),
   };
 
