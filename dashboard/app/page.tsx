@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Zap, Waves, Landmark, Gauge, Coins, BellRing } from 'lucide-react';
+import { Lightning, Waves, Bank, Gauge, Coins, BellRinging } from '@phosphor-icons/react';
 import type { OverviewSnapshot, PoolStats, OpenAdvance, FinancialEvent, StreamMessage } from '@/lib/types';
 import { formatUsdc, formatBps } from '@/lib/format';
 import { fadeUp } from '@/lib/motion';
@@ -64,11 +64,15 @@ export default function OverviewPage() {
         >
           <span className="whitespace-nowrap">
             Capital in a snap
-            <Zap size={26} style={{ ...inlineIcon, color: 'var(--color-accent)' }} />
+            <span className="inline-icon" style={inlineIcon}>
+              <Lightning size={28} weight="duotone" color="var(--color-accent)" />
+            </span>
           </span>
           <br />
           settlement in a waterfall
-          <Waves size={26} style={{ ...inlineIcon, marginLeft: 6, color: 'var(--sky)' }} />
+          <span className="inline-icon" style={{ ...inlineIcon, marginLeft: 6 }}>
+            <Waves size={28} weight="duotone" color="var(--sky)" />
+          </span>
         </motion.h1>
         <motion.p
           variants={fadeUp}
@@ -99,13 +103,13 @@ export default function OverviewPage() {
           </motion.div>
 
           <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <StatCard index={3} label="Pool TVL" icon={Landmark} tint="var(--color-accent)"
+            <StatCard index={3} label="Pool TVL" icon={Bank} tint="var(--color-accent)"
               value={formatUsdc(pool.tvlUsdc)} sub="USDC · seeded by demo LPs" />
             <StatCard index={4} label="Utilization" icon={Gauge} tint="var(--sky)"
               value={formatBps(pool.utilizationBps)} sub="drawn / TVL · cap 80%" />
             <StatCard index={5} label="Fees accrued" icon={Coins} tint="var(--pos)"
               value={formatUsdc(pool.feesAccruedUsdc)} sub={`USDC · reserve ${formatUsdc(pool.reserveUsdc)}`} />
-            <StatCard index={6} label="Pending approvals" icon={BellRing} tint="var(--warn)"
+            <StatCard index={6} label="Pending approvals" icon={BellRinging} tint="var(--warn)"
               value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
           </div>
 

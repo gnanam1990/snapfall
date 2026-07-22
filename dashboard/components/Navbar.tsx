@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Menu, X, ExternalLink } from 'lucide-react';
+import { List, X, ArrowSquareOut } from '@phosphor-icons/react';
 import Logo from './Logo';
 import ThemeToggle from './ThemeToggle';
 import { EASE_IN, EASE_OUT } from '@/lib/motion';
@@ -76,7 +76,7 @@ export default function Navbar() {
             className="flex items-center gap-1.5 whitespace-nowrap rounded-full px-5 py-2.5 text-sm font-semibold text-white transition-shadow hover:shadow-[var(--shadow-accent)]"
             style={{ background: 'var(--color-accent)' }}
           >
-            Explorer <ExternalLink size={14} />
+            Explorer <ArrowSquareOut size={14} weight="bold" />
           </motion.a>
         </div>
 
@@ -88,7 +88,7 @@ export default function Navbar() {
             onClick={() => setOpen((o) => !o)}
             style={{ color: 'var(--color-text)', background: 'none', border: 'none', padding: 4 }}
           >
-            {open ? <X size={24} /> : <Menu size={24} />}
+            {open ? <X size={24} weight="bold" /> : <List size={24} weight="bold" />}
           </button>
         </div>
       </nav>
@@ -134,7 +134,7 @@ export default function Navbar() {
                   className="flex h-10 w-10 items-center justify-center rounded-full"
                   style={{ background: 'color-mix(in srgb, var(--color-text) 10%, transparent)', border: 'none', color: 'var(--color-text)' }}
                 >
-                  <X size={20} />
+                  <X size={20} weight="bold" />
                 </motion.button>
               </div>
               <div className="mx-6 h-px" style={{ background: 'color-mix(in srgb, var(--color-text) 12%, transparent)' }} />
@@ -164,7 +164,7 @@ export default function Navbar() {
                   className="flex w-full items-center justify-center gap-1.5 rounded-full py-3.5 text-[0.95rem] font-semibold text-white"
                   style={{ background: 'var(--color-accent)' }}
                 >
-                  Arc Explorer <ExternalLink size={14} />
+                  Arc Explorer <ArrowSquareOut size={14} weight="bold" />
                 </a>
                 <span
                   className="flex w-full items-center justify-center gap-2 rounded-full py-3.5 text-[0.95rem] font-medium"

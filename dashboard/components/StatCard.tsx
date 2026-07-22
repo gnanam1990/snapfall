@@ -1,22 +1,23 @@
 'use client';
 
-import type { LucideIcon } from 'lucide-react';
+import type { Icon } from '@phosphor-icons/react';
 import { motion } from 'framer-motion';
 import { fadeUp } from '@/lib/motion';
 import Card from './Card';
+import IconChip from './IconChip';
 
 export default function StatCard({
   label,
   value,
   sub,
-  icon: Icon,
+  icon,
   tint = 'var(--color-accent)',
   index = 0,
 }: {
   label: string;
   value: React.ReactNode;
   sub?: string;
-  icon: LucideIcon;
+  icon: Icon;
   tint?: string;
   index?: number;
 }) {
@@ -40,12 +41,7 @@ export default function StatCard({
               </div>
             ) : null}
           </div>
-          <span
-            className="flex h-10 w-10 flex-none items-center justify-center rounded-xl"
-            style={{ background: `color-mix(in srgb, ${tint} 14%, var(--color-card))`, color: tint }}
-          >
-            <Icon size={19} />
-          </span>
+          <IconChip icon={icon} tint={tint} size="lg" />
         </div>
       </Card>
     </motion.div>

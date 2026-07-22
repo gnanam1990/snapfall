@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Moon, Sun } from 'lucide-react';
+import { MoonStars, Sun } from '@phosphor-icons/react';
 
 const KEY = 'snapfall-theme';
 type Theme = 'light' | 'dark';
@@ -50,7 +50,7 @@ export default function ThemeToggle() {
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="flex"
           >
-            {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            {theme === 'dark' ? <Sun size={18} weight="duotone" /> : <MoonStars size={18} weight="duotone" />}
           </motion.span>
         )}
       </AnimatePresence>

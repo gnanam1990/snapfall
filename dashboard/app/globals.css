@@ -68,6 +68,9 @@ body {
 
 h1, h2, h3 { font-family: var(--font-heading), sans-serif; }
 
+/* inline hero icons: Tailwind preflight makes svg display:block; these must flow with text */
+.inline-icon svg { display: inline; vertical-align: middle; }
+
 /* live pulse dot */
 .dot-live { width: 8px; height: 8px; border-radius: 999px; background: var(--pos); animation: pulse 1.8s infinite; }
 @keyframes pulse {

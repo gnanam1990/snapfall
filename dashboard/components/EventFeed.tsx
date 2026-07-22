@@ -2,31 +2,32 @@
 
 import { motion } from 'framer-motion';
 import {
-  Zap,
+  Lightning,
   CreditCard,
-  ShieldAlert,
-  PackageCheck,
-  Inbox,
+  ShieldWarning,
+  Package,
+  Tray,
   ListChecks,
-  Bot,
-  MousePointerClick,
-  FileCheck,
-  ExternalLink,
-  type LucideIcon,
-} from 'lucide-react';
+  Robot,
+  CursorClick,
+  ClipboardText,
+  ArrowSquareOut,
+  type Icon,
+} from '@phosphor-icons/react';
 import type { FinancialEvent, EventCategory } from '@/lib/types';
 import { formatUsdc, relativeTime } from '@/lib/format';
+import IconChip from './IconChip';
 
-const CAT: Record<EventCategory, { icon: LucideIcon; tint: string }> = {
-  Float: { icon: Zap, tint: 'var(--color-accent)' },
+const CAT: Record<EventCategory, { icon: Icon; tint: string }> = {
+  Float: { icon: Lightning, tint: 'var(--color-accent)' },
   Finance: { icon: CreditCard, tint: 'var(--sky)' },
-  Approval: { icon: ShieldAlert, tint: 'var(--warn)' },
-  Job: { icon: PackageCheck, tint: 'var(--pos)' },
-  Intake: { icon: Inbox, tint: 'var(--color-faint)' },
+  Approval: { icon: ShieldWarning, tint: 'var(--warn)' },
+  Job: { icon: Package, tint: 'var(--pos)' },
+  Intake: { icon: Tray, tint: 'var(--color-faint)' },
   Task: { icon: ListChecks, tint: 'var(--color-muted)' },
-  Agent: { icon: Bot, tint: 'var(--color-muted)' },
-  Action: { icon: MousePointerClick, tint: 'var(--sky)' },
-  Audit: { icon: FileCheck, tint: 'var(--color-muted)' },
+  Agent: { icon: Robot, tint: 'var(--color-muted)' },
+  Action: { icon: CursorClick, tint: 'var(--sky)' },
+  Audit: { icon: ClipboardText, tint: 'var(--color-muted)' },
 };
 
 export default function EventFeed({ events }: { events: FinancialEvent[] }) {
@@ -36,7 +37,7 @@ export default function EventFeed({ events }: { events: FinancialEvent[] }) {
   return (
     <div className="flex flex-col">
       {events.map((e, i) => {
-        const { icon: Icon, tint } = CAT[e.category];
+        const { icon, tint } = CAT[e.category];
         return (
           <motion.div
             key={e.seq}
@@ -45,11 +46,8 @@ export default function EventFeed({ events }: { events: FinancialEvent[] }) {
             className="flex items-start gap-3 py-3"
             style={{ borderTop: i === 0 ? 'none' : '1px solid var(--color-border)' }}
           >
-            <span
-              className="mt-0.5 flex h-8 w-8 flex-none items-center justify-center rounded-lg"
-              style={{ background: `color-mix(in srgb, ${tint} 14%, var(--color-card))`, color: tint }}
-            >
-              <Icon size={15} />
+            <span className="mt-0.5">
+              <IconChip icon={icon} tint={tint} size="md" />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline justify-between gap-2">
@@ -74,7 +72,7 @@ export default function EventFeed({ events }: { events: FinancialEvent[] }) {
                       className="inline-flex items-center gap-0.5 font-medium"
                       style={{ color: 'var(--sky)' }}
                     >
-                      explorer <ExternalLink size={11} />
+                      explorer <ArrowSquareOut size={11} weight="bold" />
                     </a>
                   </>
                 ) : null}
