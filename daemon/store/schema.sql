@@ -76,12 +76,11 @@ CREATE INDEX IF NOT EXISTS chain_events_order_idx
 CREATE INDEX IF NOT EXISTS chain_events_entity_idx
   ON chain_events(chain_id, entity_id, block_number, log_index);
 
--- The cursor is the NEXT inclusive chain position to request. Empty scanned blocks therefore
--- advance safely without inventing a timestamp or losing same-timestamp events.
+-- The cursor is the NEXT inclusive block to request. A batch commits only after its complete
+-- block range, so empty blocks advance safely and a crash replays from the previous boundary.
 CREATE TABLE IF NOT EXISTS chain_cursors (
   chain_id INTEGER NOT NULL, stream TEXT NOT NULL,
-  next_block_number INTEGER NOT NULL, next_log_index INTEGER NOT NULL DEFAULT 0,
-  updated_at INTEGER NOT NULL,
+  next_block_number INTEGER NOT NULL, updated_at INTEGER NOT NULL,
   PRIMARY KEY (chain_id, stream)
 );
 

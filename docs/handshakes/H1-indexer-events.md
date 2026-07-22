@@ -10,8 +10,10 @@ chain edge; every downstream caller consumes the normalized names below.
 ## 1. Ordering, cursor and idempotency
 
 - Canonical order is `(blockNumber, logIndex)`. Timestamps MUST NOT order or resume the stream.
-- The durable resume cursor is `(nextBlockNumber, nextLogIndex)`. It advances in the same
-  SQLite transaction as the raw log, normalized event and financial projection.
+- The durable resume cursor is `nextBlockNumber`, the next inclusive block to request. It advances
+  only after a complete block range, in the same SQLite transaction as that range's raw logs,
+  supported normalized events and financial projections. A crash therefore replays from the
+  previous committed block boundary.
 - A raw log is unique by `(chainId, transactionHash, logIndex)`. Replaying an inclusive block
   range therefore produces no duplicate normalized events or financial effects.
 - Arc finality is deterministic on inclusion. The deployment config nevertheless carries a
@@ -39,6 +41,10 @@ All addresses and hashes are lowercase `0x` hex. Every USDC amount is a base-10 
 6-decimal atomic units: `"25000000"` means 25.00 USDC. JSON numbers are never used for token
 amounts because Solidity `uint256` exceeds JavaScript's safe integer range.
 
+For the six job lifecycle events, `entityId` is the bytes32 chain job ID stored locally as the
+lowercase `0x` value in `jobs.vault_job_id`. For `RateUpdated`, `entityId` is instead the
+organization address shown in the mapping below.
+
 ## 3. Frozen event mapping
 
 | Raw contract event | Normalized `kind` | `entityId` | Payload |
@@ -62,8 +68,11 @@ H1 freeze. Adding an audit-domain normalized event is additive and requires an H
 - `chain_logs` is the immutable raw receipt and replay guard.
 - `chain_events` is the seven-event H1 stream consumed by the runtime and future SSE layer.
 - `chain_job_financials` and `chain_org_rates` are deterministic projections rebuilt from H1.
-- `chain_cursors` records the next Arc position to scan.
+- `chain_cursors` records the next inclusive Arc block to scan.
 - `reconciliation_alerts` records local-ledger/chain mismatches for the dashboard flag.
+
+For the MVP ledger comparison, local `jobs.quote_usdc` is the expected funded amount and must
+equal the chain projection's `funded_amount_atomic` after conversion to 6-decimal atomic units.
 
 No consumer writes these tables. The indexer owns them as one deep module; consumers read the
 stable H1 stream or projections instead of re-decoding contract logs.

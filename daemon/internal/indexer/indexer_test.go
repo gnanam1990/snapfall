@@ -180,6 +180,25 @@ func TestSyncOnceRejectsWrongRPCNetworkBeforeReadingLogs(t *testing.T) {
 	}
 }
 
+func TestSyncOnceRejectsLogFromUnconfiguredContract(t *testing.T) {
+	st := openStore(t)
+	logs := fixtureLogs(t)
+	logs[0].Address = "0x4444444444444444444444444444444444444444"
+	source := &fakeSource{head: 106, logs: logs[:1]}
+	idx := newTestIndexer(t, st, source)
+
+	if _, err := idx.SyncOnce(context.Background()); err == nil {
+		t.Fatal("expected unconfigured contract failure")
+	}
+	var count int
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM chain_logs`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("committed %d logs from a batch containing an unconfigured contract", count)
+	}
+}
+
 func TestSyncOnceFailsClosedBeforeOffendingChunk(t *testing.T) {
 	st := openStore(t)
 	logs := fixtureLogs(t)

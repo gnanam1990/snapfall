@@ -62,11 +62,12 @@ type Result struct {
 
 // Indexer hides the complete H1 implementation behind SyncOnce.
 type Indexer struct {
-	source        Source
-	store         *store.Store
-	cfg           Config
-	mu            sync.Mutex
-	chainVerified bool
+	source           Source
+	store            *store.Store
+	cfg              Config
+	allowedAddresses map[string]struct{}
+	mu               sync.Mutex
+	chainVerified    bool
 }
 
 // New validates the immutable indexer configuration.
@@ -80,22 +81,22 @@ func New(source Source, st *store.Store, cfg Config) (*Indexer, error) {
 	if len(cfg.Addresses) == 0 {
 		return nil, fmt.Errorf("at least one contract address is required")
 	}
-	seen := make(map[string]bool, len(cfg.Addresses))
+	seen := make(map[string]struct{}, len(cfg.Addresses))
 	for i, address := range cfg.Addresses {
 		normalized, err := normalizeAddress(address)
 		if err != nil {
 			return nil, fmt.Errorf("address %d: %w", i, err)
 		}
-		if seen[normalized] {
+		if _, exists := seen[normalized]; exists {
 			return nil, fmt.Errorf("duplicate contract address %s", normalized)
 		}
-		seen[normalized] = true
+		seen[normalized] = struct{}{}
 		cfg.Addresses[i] = normalized
 	}
 	if cfg.ChunkSize == 0 {
 		cfg.ChunkSize = 2_000
 	}
-	return &Indexer{source: source, store: st, cfg: cfg}, nil
+	return &Indexer{source: source, store: st, cfg: cfg, allowedAddresses: seen}, nil
 }
 
 func normalizeAddress(v string) (string, error) {

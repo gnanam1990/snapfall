@@ -56,24 +56,27 @@ carry the *same* timestamp. Two consequences for the indexer:
   total; a timestamp sort is not stable across same-timestamp blocks and will silently
   reshuffle events within a block.
 - **Never use `timestamp > lastSeen` as a cursor.** A strict comparison drops every event in a
-  block sharing the previous block's timestamp. The resume cursor must be `(blockNumber,
-  logIndex)`, and any timestamp window must be inclusive at both ends.
+  block sharing the previous block's timestamp. Events remain ordered by `(blockNumber,
+  logIndex)`; the durable polling cursor advances only after a complete block range commits.
 
 The same rule already governs the contracts (see the deadline/window logic there) — the
 indexer must agree with them, or replay after a restart will not reproduce the same ordering.
 
-Run one bounded H1 backfill after exporting the deployment addresses listed in
-`../deployments/README.md`:
+Run one H1 catch-up after exporting the deployment addresses listed in
+`../deployments/README.md`. For every post-genesis deployment, set its deployment block first;
+this avoids scanning unrelated Arc history:
 
 ```bash
 cd daemon
+export SNAPFALL_DEPLOYMENT_BLOCK=<deployment-block>
 go run ./cmd/indexer --once --deployment ../deployments/arc-testnet.json --db snapfall.db
 ```
 
 Without `--once`, the command polls continuously. It verifies `eth_chainId` before reading logs,
-requests bounded block ranges, and commits each raw log, normalized H1 event, financial projection
-and next `(blockNumber, logIndex)` cursor in one SQLite transaction. Replaying an inclusive range
-is safe by `(chainId, transactionHash, logIndex)`.
+requests block ranges bounded by `--chunk-size`, and atomically commits each range's raw logs,
+supported normalized H1 events, financial projections and next-block cursor. Replaying an
+inclusive range is safe by `(chainId, transactionHash, logIndex)`. The command requires an
+explicit `--deployment` path so its behavior does not depend on the process working directory.
 
 ## Layout
 

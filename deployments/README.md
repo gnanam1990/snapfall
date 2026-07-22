@@ -15,8 +15,10 @@ SNAPFALL_TREASURY_ADDRESS
 SNAPFALL_CUSTOMER_ADDRESS
 ```
 
-`ARC_TESTNET_RPC` optionally overrides the canonical public RPC. Set
-`SNAPFALL_DEPLOYMENT_BLOCK` after deployment so the first backfill does not start at genesis.
+`ARC_TESTNET_RPC` optionally overrides the canonical public RPC. For a post-genesis deployment,
+`SNAPFALL_DEPLOYMENT_BLOCK` is required operationally: set it to the deployment transaction's
+block before the first indexer run so catch-up does not start at genesis. Leave it at `0` only
+when the indexed contracts genuinely begin at genesis.
 
 The ABI files under `contracts/abi/indexer/` deliberately contain the event surface needed by
 H1. Transaction-writing callers must use compiler-generated full ABIs from the frozen contracts.

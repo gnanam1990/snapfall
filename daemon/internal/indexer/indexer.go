@@ -64,6 +64,13 @@ func (i *Indexer) SyncOnce(ctx context.Context) (Result, error) {
 			if log.BlockNumber < from || log.BlockNumber > to {
 				return result, fmt.Errorf("RPC returned block %d outside requested range %d..%d", log.BlockNumber, from, to)
 			}
+			address, err := normalizeAddress(log.Address)
+			if err != nil {
+				return result, fmt.Errorf("RPC returned invalid contract address at (%d,%d): %w", log.BlockNumber, log.LogIndex, err)
+			}
+			if _, allowed := i.allowedAddresses[address]; !allowed {
+				return result, fmt.Errorf("RPC returned unconfigured contract address %s at (%d,%d)", address, log.BlockNumber, log.LogIndex)
+			}
 			if log.Removed {
 				return result, fmt.Errorf("removed log at (%d,%d); refusing to advance finalized cursor", log.BlockNumber, log.LogIndex)
 			}
@@ -199,11 +206,10 @@ func (i *Indexer) applyBatch(ctx context.Context, logs []Log, nextBlock uint64) 
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO chain_cursors (chain_id, stream, next_block_number, next_log_index, updated_at)
-		VALUES (?, ?, ?, 0, ?)
+		INSERT INTO chain_cursors (chain_id, stream, next_block_number, updated_at)
+		VALUES (?, ?, ?, ?)
 		ON CONFLICT(chain_id, stream) DO UPDATE SET
 		  next_block_number = excluded.next_block_number,
-		  next_log_index = excluded.next_log_index,
 		  updated_at = excluded.updated_at`,
 		i.cfg.ChainID, cursorStream, nextBlock, time.Now().UTC().UnixMilli()); err != nil {
 		return 0, 0, err

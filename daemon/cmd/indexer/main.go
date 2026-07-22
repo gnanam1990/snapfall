@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,7 +19,7 @@ import (
 )
 
 func main() {
-	deploymentPath := flag.String("deployment", "../deployments/arc-testnet.json", "machine-readable A1 deployment config")
+	deploymentPath := flag.String("deployment", "", "machine-readable A1 deployment config (required)")
 	dbPath := flag.String("db", "snapfall.db", "shared SQLite database")
 	once := flag.Bool("once", false, "sync and reconcile once, then exit")
 	interval := flag.Duration("interval", time.Second, "poll interval")
@@ -32,6 +34,9 @@ func main() {
 }
 
 func run(deploymentPath, dbPath string, once bool, interval time.Duration, chunkSize uint64, log *slog.Logger) error {
+	if strings.TrimSpace(deploymentPath) == "" {
+		return fmt.Errorf("deployment path is required; pass --deployment")
+	}
 	if interval <= 0 {
 		return fmt.Errorf("interval must be positive")
 	}
@@ -42,7 +47,7 @@ func run(deploymentPath, dbPath string, once bool, interval time.Duration, chunk
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	st, err := store.Open(ctx, dbPath)
+	st, mode, err := openWALStore(ctx, dbPath)
 	if err != nil {
 		return err
 	}
@@ -66,6 +71,7 @@ func run(deploymentPath, dbPath string, once bool, interval time.Duration, chunk
 	}
 
 	log.Info("H1 indexer ready", "network", deployment.Network.Name, "chain_id", deployment.Network.ChainID,
+		"database", dbPath, "journal_mode", mode,
 		"start_block", deployment.Network.StartBlock, "confirmation_depth", deployment.Network.ConfirmationDepth)
 	for {
 		result, err := syncer.SyncOnce(ctx)
@@ -98,4 +104,26 @@ func run(deploymentPath, dbPath string, once bool, interval time.Duration, chunk
 		case <-timer.C:
 		}
 	}
+}
+
+func openWALStore(ctx context.Context, dbPath string) (*store.Store, string, error) {
+	if dir := filepath.Dir(dbPath); dir != "." {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return nil, "", fmt.Errorf("creating database directory %s: %w", dir, err)
+		}
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		return nil, "", err
+	}
+	mode, err := st.JournalMode(ctx)
+	if err != nil {
+		st.Close() //nolint:errcheck // preserve the journal-mode failure
+		return nil, "", fmt.Errorf("reading journal mode: %w", err)
+	}
+	if mode != "wal" {
+		st.Close() //nolint:errcheck // startup already failed closed
+		return nil, "", fmt.Errorf("expected WAL journal mode, got %q", mode)
+	}
+	return st, mode, nil
 }
