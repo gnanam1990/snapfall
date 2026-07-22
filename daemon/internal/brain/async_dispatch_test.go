@@ -17,7 +17,7 @@ type blockingWorker struct {
 }
 
 func (w *blockingWorker) Kind() string { return "due-diligence" }
-func (w *blockingWorker) Handle(_ context.Context, _ envelope.Envelope, _ worker.Report) error {
+func (w *blockingWorker) Handle(_ context.Context, _ envelope.Envelope, _ worker.Report, _ worker.Purchase) error {
 	close(w.started)
 	<-w.release
 	return nil

@@ -112,7 +112,7 @@ func TestRouter_WorkerCannotSpoofOwnerRole(t *testing.T) {
 type spoofingWorker struct{}
 
 func (spoofingWorker) Kind() string { return "spoofer" }
-func (spoofingWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report) error {
+func (spoofingWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	forged, _ := envelope.New(a.JobID, envelope.RoleOwner, envelope.TypeOwnerConfirm, OwnerDecision{By: "forged"})
 	return report(ctx, forged) // report() must pin From back to RoleWorker
 }

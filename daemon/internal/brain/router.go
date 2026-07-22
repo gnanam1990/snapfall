@@ -48,6 +48,8 @@ type Brain struct {
 	// freezeReg is the G11 kill switch (nil = ungated); orgID scopes org-level checks.
 	freezeReg *freeze.Registry
 	orgID     string
+	// purchaser routes worker spend requests through policy+approval (nil = refused).
+	purchaser Purchaser
 	// beforeFreezeCheck is a TEST-ONLY hook (nil in production) invoked at worker-start,
 	// immediately before the freeze gate — it lets a test engage a freeze deterministically
 	// in the dispatch->start window to pin that "begins" means worker-start (decision #3).
@@ -165,6 +167,56 @@ func (b *Brain) Deliver(ctx context.Context, e envelope.Envelope) error {
 	}
 	log.Debug("routing", "from", string(e.From), "type", string(e.Type))
 	return h(ctx, e)
+}
+
+// Purchaser is Brain's handle to the deterministic policy+approval pipeline for worker
+// purchase requests. The daemon wires a concrete one (backed by approval.Lifecycle);
+// nil = purchases refused. Set via SetPurchaser, like the funding pointer and freeze
+// registry — Brain holds it, workers never see it.
+type Purchaser interface {
+	// Decide runs policy + approval for one JOB-STAMPED intent and returns the structured
+	// outcome. The jobID/agentKind on the intent are applied by Brain, not the worker.
+	Decide(ctx context.Context, intent PurchaseIntent) (worker.PurchaseOutcome, error)
+}
+
+// PurchaseIntent is a worker's purchase request AFTER Brain has stamped the job and the
+// worker's identity — the fields a worker cannot forge are set here by the closure.
+type PurchaseIntent struct {
+	JobID           string
+	AgentKind       string
+	Merchant        string
+	Resource        string
+	AmountMicros    int64
+	MaxAmountMicros int64
+	Purpose         string
+}
+
+// SetPurchaser wires the policy+approval pipeline Brain routes worker spends through.
+func (b *Brain) SetPurchaser(p Purchaser) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.purchaser = p
+}
+
+// purchaseFor builds the SPEND capability a Worker receives — the mirror of workerReportFor.
+// Brain BINDS the jobID and worker kind in this closure; the worker's PurchaseRequest has
+// no jobID field, so a worker cannot spend against another job's budget or spend as another
+// agent — the cross-job/cross-agent refusal is structural, not a runtime check.
+func (b *Brain) purchaseFor(kind, jobID string) worker.Purchase {
+	return func(ctx context.Context, req worker.PurchaseRequest) (worker.PurchaseOutcome, error) {
+		b.mu.Lock()
+		p := b.purchaser
+		b.mu.Unlock()
+		if p == nil {
+			return worker.PurchaseOutcome{}, fmt.Errorf("no purchaser wired: worker %q cannot spend on job %s", kind, jobID)
+		}
+		return p.Decide(ctx, PurchaseIntent{
+			JobID: jobID, AgentKind: kind,
+			Merchant: req.Merchant, Resource: req.Resource,
+			AmountMicros: req.AmountMicros, MaxAmountMicros: req.MaxAmountMicros,
+			Purpose: req.Purpose,
+		})
+	}
 }
 
 // workerReportFor builds the single outbound capability a Worker receives. It pins
@@ -308,5 +360,5 @@ func (b *Brain) runTask(ctx context.Context, jobID, kind string, bounceReasons [
 
 	// Synchronous in Phase 1/2: the worker runs inline and reports through the one
 	// kind-stamped callback it is handed.
-	return w.Handle(ctx, assignment, b.workerReportFor(kind, jobID))
+	return w.Handle(ctx, assignment, b.workerReportFor(kind, jobID), b.purchaseFor(kind, jobID))
 }

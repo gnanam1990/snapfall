@@ -104,7 +104,7 @@ func TestAT09_FreezeMidQALoopWithholdsReassignment(t *testing.T) {
 type freezeMidLoopQA struct{ b *Brain }
 
 func (freezeMidLoopQA) Kind() string { return qa.Kind }
-func (w freezeMidLoopQA) Handle(ctx context.Context, a envelope.Envelope, report worker.Report) error {
+func (w freezeMidLoopQA) Handle(ctx context.Context, a envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	w.b.mu.Lock()
 	reg := w.b.freezeReg
 	w.b.mu.Unlock()
@@ -248,7 +248,7 @@ func TestAT09_FreezeInDispatchWindowStopsWorker(t *testing.T) {
 type windowWorker struct{ ran *atomic.Bool }
 
 func (windowWorker) Kind() string { return "due-diligence" }
-func (w windowWorker) Handle(context.Context, envelope.Envelope, worker.Report) error {
+func (w windowWorker) Handle(context.Context, envelope.Envelope, worker.Report, worker.Purchase) error {
 	w.ran.Store(true)
 	return nil
 }

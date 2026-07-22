@@ -19,16 +19,58 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
 )
 
-// Report is the ONLY outbound channel a Worker has. Brain constructs it; it delivers to
-// Brain and nowhere else. A worker holding this can say things TO BRAIN — that is all.
+// Report is the ONLY outbound channel a Worker has for saying things. Brain constructs it;
+// it delivers to Brain and nowhere else. A worker holding this can say things TO BRAIN.
 type Report func(ctx context.Context, e envelope.Envelope) error
+
+// Purchase is the Brain-mediated capability to SPEND — the mirror of Report. Brain binds
+// the job and the worker's identity in the closure (never supplied by the worker), routes
+// the request through the deterministic policy+approval pipeline, and returns the
+// structured decision INTACT. A worker holding this can propose a spend TO BRAIN; it never
+// touches keys and cannot spend against another job's budget (there is no jobID to supply).
+type Purchase func(ctx context.Context, req PurchaseRequest) (PurchaseOutcome, error)
+
+// PurchaseRequest is a worker's structured proposal to buy a source. Note the ABSENCE of a
+// jobID: the worker cannot target another job — Brain stamps that in the closure.
+type PurchaseRequest struct {
+	Merchant        string `json:"merchant"`
+	Resource        string `json:"resource"`
+	AmountMicros    int64  `json:"amount_micros"`
+	MaxAmountMicros int64  `json:"max_amount_micros"`
+	Purpose         string `json:"purpose"`
+}
+
+// PurchaseOutcome is the structured result. The policy decision REASON flows back intact
+// (FR-BLK-001) so the worker can ADAPT (AT-04): "denied, find cheaper" vs "needs approval"
+// vs "expired" are distinguishable, never one opaque error.
+type PurchaseOutcome struct {
+	Decision string `json:"decision"` // AUTO_APPROVE | HUMAN_APPROVAL_REQUIRED | DENY
+	Reason   string `json:"reason"`   // human-readable structured reason
+	Code     string `json:"code"`     // machine-readable reason code (e.g. per-tx-limit)
+	// Status is the execution outcome. Until the sidecar client (F2) + merchant identity
+	// (F4) land, an APPROVED purchase returns "approved-pending-integration" with no data
+	// and no receipt — NEVER a fabricated buy.
+	Status  string           `json:"status"` // delivered | approved-pending-integration | denied | needs-approval | expired
+	Data    []byte           `json:"data,omitempty"`
+	Receipt *PurchaseReceipt `json:"receipt,omitempty"`
+}
+
+// PurchaseReceipt is the provenance one real purchase leaves — folded into the report so
+// Billing joins EXACTLY on ReceiptHash (JobVault.recordExpense) rather than jobId+amount.
+type PurchaseReceipt struct {
+	Merchant     string `json:"merchant"`
+	AmountAtomic string `json:"amount_atomic"`
+	ReceiptHash  string `json:"receipt_hash"` // bytes32 0x-hex
+	PaymentID    string `json:"payment_id"`
+}
 
 // Worker executes exactly one assignment and reports back.
 type Worker interface {
 	// Kind names the worker slot, e.g. "due-diligence".
 	Kind() string
-	// Handle runs one assignment. Everything it wants the world to know goes through report.
-	Handle(ctx context.Context, assignment envelope.Envelope, report Report) error
+	// Handle runs one assignment. It says things through report and spends through
+	// purchase — the only two ways it can affect the world, both Brain-mediated.
+	Handle(ctx context.Context, assignment envelope.Envelope, report Report, purchase Purchase) error
 }
 
 // ── The Phase-1 stub DD worker ─────────────────────────────────────────────
@@ -58,7 +100,7 @@ func (StubDD) Kind() string { return "due-diligence" }
 // exactly one planted unsupported claim; a revision assignment (BounceReasons set)
 // always produces the corrected draft with every claim sourced. Rule-based reviewer +
 // scripted revision = the bounce happens exactly once, on every take, no LLM variance.
-func (StubDD) Handle(ctx context.Context, assignment envelope.Envelope, report Report) error {
+func (StubDD) Handle(ctx context.Context, assignment envelope.Envelope, report Report, _ Purchase) error {
 	var a Assignment
 	if err := assignment.Decode(&a); err != nil {
 		return err

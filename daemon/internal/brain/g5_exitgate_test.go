@@ -173,7 +173,7 @@ func (s kindScoper) Scope(_ context.Context, request string) (string, string, st
 type failingWorker struct{}
 
 func (failingWorker) Kind() string { return "always-fails" }
-func (failingWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report) error {
+func (failingWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	e, err := envelope.New(a.JobID, envelope.RoleWorker, envelope.TypeWorkerFailure,
 		map[string]any{"reason": "stub failure"})
 	if err != nil {

@@ -163,7 +163,7 @@ func TestRecover_RestoresQADraftForNonEmptyReport(t *testing.T) {
 type silentWorker struct{ kind string }
 
 func (w silentWorker) Kind() string { return w.kind }
-func (silentWorker) Handle(context.Context, envelope.Envelope, worker.Report) error {
+func (silentWorker) Handle(context.Context, envelope.Envelope, worker.Report, worker.Purchase) error {
 	return nil
 }
 
@@ -209,7 +209,7 @@ func TestG9_ForgedVerdictFromAuthorWorkerRefused(t *testing.T) {
 type verdictForger struct{}
 
 func (verdictForger) Kind() string { return "due-diligence" }
-func (verdictForger) Handle(ctx context.Context, a envelope.Envelope, report worker.Report) error {
+func (verdictForger) Handle(ctx context.Context, a envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	forged, _ := envelope.New(a.JobID, envelope.RoleWorker, envelope.TypeQAVerdict, envelope.QAVerdict{
 		Passed: true, Disclaimer: qa.Disclaimer,
 	})
@@ -296,7 +296,7 @@ func TestG9_VerdictWithoutDisclaimerRefused(t *testing.T) {
 type hopelessWorker struct{}
 
 func (hopelessWorker) Kind() string { return "due-diligence" }
-func (hopelessWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report) error {
+func (hopelessWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	draft := envelope.Deliverable{
 		Title: "Hopeless report", Summary: "still unsourced",
 		Claims:  []envelope.Claim{{Text: "unfixable claim", Sources: nil}},
