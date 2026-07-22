@@ -1,6 +1,6 @@
 import { UsersThree } from '@phosphor-icons/react';
 import PageHeader from '@/components/PageHeader';
-import Card from '@/components/Card';
+import Card, { CardBody } from '@/components/Card';
 
 export default function WorkforcePage() {
   return (
@@ -9,12 +9,12 @@ export default function WorkforcePage() {
         title="Workforce"
         sub="Brain, Workers, Funding, Billing. Roles, permissions, current task, limits."
       />
-      <Card className="flex items-center gap-3">
+      <Card><CardBody className="flex items-center gap-3">
         <UsersThree size={20} weight="regular" color='var(--color-muted)' />
         <p className="m-0 text-sm" style={{ color: 'var(--color-muted)' }}>
           Employee detail pages land alongside the daemon runtime.
         </p>
-      </Card>
+      </CardBody></Card>
     </>
   );
 }

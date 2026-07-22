@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FinancialEvent, PoolStats } from '@/lib/types';
 import { formatUsdc } from '@/lib/format';
-import Card, { CardTitle } from './Card';
-import Logo from './Logo';
+import Card, { CardHeader, Well } from './Card';
 import ScoreRing from './ScoreRing';
 
 /**
@@ -151,21 +150,25 @@ export default function MoneyGraph({
   };
 
   return (
-    <Card className="overflow-hidden">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <span className="mb-3 block" style={{ color: 'var(--color-faint)' }}>
-            <Logo size={26} />
-          </span>
-          <CardTitle>Live Money Graph</CardTitle>
+    <Card>
+      <CardHeader
+        title="Live money graph"
+        meta={
+          <>
+            <span className="dot-live" style={{ width: 6, height: 6 }} /> live · updates in &lt;2s
+          </>
+        }
+      />
+      <div className="p-5">
+        <div className="flex items-center justify-between gap-4">
           <div className={`mg-beat${beat ? ' show' : ''} beat-${beat?.kind ?? 'none'}`}>
             {beat?.label ?? 'watch the money move'}
           </div>
+          <ScoreRing rateBps={pool.orgRateBps} jobPriceUsdc={jobPriceUsdc} />
         </div>
-        <ScoreRing rateBps={pool.orgRateBps} jobPriceUsdc={jobPriceUsdc} />
-      </div>
 
-      <svg viewBox="0 0 960 440" className="mg-svg" role="img" aria-label="Snapfall money flow">
+        <Well className="mt-3 px-2 py-1">
+          <svg viewBox="0 0 960 440" className="mg-svg" role="img" aria-label="Snapfall money flow">
         <defs>
           <filter id="mg-glow" x="-60%" y="-60%" width="220%" height="220%">
             <feGaussianBlur stdDeviation="4" result="b" />
@@ -190,25 +193,27 @@ export default function MoneyGraph({
           </circle>
         ))}
 
-        {/* nodes */}
-        {NODES.map((n) => (
-          <g key={n.id} className="mg-node">
-            <rect
-              x={n.cx - W / 2}
-              y={n.cy - H / 2}
-              width={W}
-              height={H}
-              rx={13}
-              className="mg-box"
-              style={n.accent ? ({ ['--n' as string]: n.accent }) : undefined}
-            />
-            <text x={n.cx} y={n.cy - 6} className="mg-name">{n.name}</text>
-            <text x={n.cx} y={n.cy + 15} className="mg-bal">
-              {balances[n.id] == null ? 'Acme Labs' : `${formatUsdc(balances[n.id] as string)} USDC`}
-            </text>
-          </g>
-        ))}
-      </svg>
+          {/* nodes */}
+          {NODES.map((n) => (
+            <g key={n.id} className="mg-node">
+              <rect
+                x={n.cx - W / 2}
+                y={n.cy - H / 2}
+                width={W}
+                height={H}
+                rx={13}
+                className="mg-box"
+                style={n.accent ? ({ ['--n' as string]: n.accent }) : undefined}
+              />
+              <text x={n.cx} y={n.cy - 6} className="mg-name">{n.name}</text>
+              <text x={n.cx} y={n.cy + 15} className="mg-bal">
+                {balances[n.id] == null ? 'Acme Labs' : `${formatUsdc(balances[n.id] as string)} USDC`}
+              </text>
+            </g>
+          ))}
+        </svg>
+        </Well>
+      </div>
     </Card>
   );
 }

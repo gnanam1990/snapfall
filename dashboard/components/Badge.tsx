@@ -14,14 +14,12 @@ const TINTS: Record<string, string> = {
   Failed: 'var(--neg)',
 };
 
-/** Status pill tinted by state. */
+/** Status as dot + label (the modern register), not a filled pill. */
 export default function Badge({ kind }: { kind: string }) {
   const tint = TINTS[kind] ?? 'var(--color-muted)';
   return (
-    <span
-      className="inline-block rounded-full px-2.5 py-0.5 text-[11.5px] font-semibold"
-      style={{ background: `color-mix(in srgb, ${tint} 14%, var(--color-card))`, color: tint }}
-    >
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12.5px] font-medium" style={{ color: tint }}>
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: tint }} />
       {kind}
     </span>
   );

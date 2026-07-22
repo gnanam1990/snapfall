@@ -8,7 +8,7 @@ import { formatUsdc, formatBps } from '@/lib/format';
 import { fadeUp } from '@/lib/motion';
 import MoneyGraph from '@/components/MoneyGraph';
 import StatCard from '@/components/StatCard';
-import Card, { CardTitle } from '@/components/Card';
+import Card, { CardHeader, CardBody } from '@/components/Card';
 import Reveal from '@/components/Reveal';
 import EventFeed from '@/components/EventFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
@@ -117,27 +117,33 @@ export default function OverviewPage() {
           <div className="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr] [&>*]:min-w-0">
             <Reveal>
               <Card>
-                <CardTitle>Recent financial events</CardTitle>
+                <CardHeader title="Recent financial events" meta={`${events.length} events`} />
                 <EventFeed events={events} />
               </Card>
             </Reveal>
             <div className="grid content-start gap-4 [&>*]:min-w-0">
               <Reveal delay={100}>
                 <Card>
-                  <CardTitle>Workforce</CardTitle>
-                  <WorkforceStrip agents={snap.workforce} />
+                  <CardHeader title="Workforce" meta={`${snap.workforce.length} agents`} />
+                  <CardBody>
+                    <WorkforceStrip agents={snap.workforce} />
+                  </CardBody>
                 </Card>
               </Reveal>
               <Reveal delay={200}>
                 <Card>
-                  <CardTitle>Open advances</CardTitle>
-                  <AdvancesTable advances={advances} />
+                  <CardHeader title="Open advances" meta={advances.length ? `${advances.length} open` : 'none open'} />
+                  <CardBody>
+                    <AdvancesTable advances={advances} />
+                  </CardBody>
                 </Card>
               </Reveal>
               <Reveal delay={300}>
                 <Card>
-                  <CardTitle>Active jobs</CardTitle>
-                  <ActiveJobs jobs={snap.activeJobs} />
+                  <CardHeader title="Active jobs" meta={`${snap.activeJobs.length} active`} />
+                  <CardBody>
+                    <ActiveJobs jobs={snap.activeJobs} />
+                  </CardBody>
                 </Card>
               </Reveal>
             </div>

@@ -5,6 +5,8 @@ import { motion } from 'framer-motion';
 import { fadeUp } from '@/lib/motion';
 import Card from './Card';
 
+/** Metric tile: label row with a bare micro-icon, a big tabular number, quiet context.
+ *  The number owns the tile; nothing decorates it. */
 export default function StatCard({
   label,
   value,
@@ -21,24 +23,24 @@ export default function StatCard({
   return (
     <motion.div variants={fadeUp} custom={index} initial="hidden" animate="visible">
       <Card>
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="text-[12.5px] font-medium" style={{ color: 'var(--color-muted)' }}>
+        <div className="p-5">
+          <div className="flex items-center gap-1.5">
+            <Glyph size={14} weight="regular" color="var(--color-faint)" />
+            <span className="text-[13px] font-medium" style={{ color: 'var(--color-muted)' }}>
               {label}
-            </div>
-            <div
-              className="mt-1.5 text-[26px]"
-              style={{ fontFamily: 'var(--font-heading), sans-serif', letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}
-            >
-              {value}
-            </div>
-            {sub ? (
-              <div className="mt-1 text-xs" style={{ color: 'var(--color-faint)' }}>
-                {sub}
-              </div>
-            ) : null}
+            </span>
           </div>
-          <Glyph size={18} weight="regular" color="var(--color-faint)" />
+          <div
+            className="mt-2 text-[28px] leading-none"
+            style={{ fontFamily: 'var(--font-heading), sans-serif', letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}
+          >
+            {value}
+          </div>
+          {sub ? (
+            <div className="mt-2 text-xs" style={{ color: 'var(--color-faint)' }}>
+              {sub}
+            </div>
+          ) : null}
         </div>
       </Card>
     </motion.div>
