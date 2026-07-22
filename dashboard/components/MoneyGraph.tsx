@@ -58,6 +58,9 @@ interface Drop {
 
 const nodeById = (id: string) => NODES.find((n) => n.id === id)!;
 
+/** Safe atomic parse: malformed stream amounts count as 0 instead of throwing mid-render. */
+const atomic = (s: string | undefined): bigint => (s && /^\d+$/.test(s) ? BigInt(s) : 0n);
+
 export default function MoneyGraph({
   event,
   treasuryUsdc,
@@ -67,9 +70,10 @@ export default function MoneyGraph({
   event: FinancialEvent | null;
   treasuryUsdc: string;
   pool: PoolStats;
-  jobPriceUsdc: string;
+  jobPriceUsdc?: string;
 }) {
   // Balances the graph tracks locally from the event stream (treasury + pool come from props).
+  // Every figure is DERIVED from event amounts - no demo constants (review: PR #9).
   const [escrow, setEscrow] = useState('0');
   const [spent, setSpent] = useState('0');
   const [operatorNet, setOperatorNet] = useState('0');
@@ -78,6 +82,13 @@ export default function MoneyGraph({
 
   const lastSeq = useRef<number>(-1);
   const dropId = useRef(0);
+  const timers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  // Cancel any pending drop-cleanup timers on unmount (review: PR #9).
+  useEffect(() => {
+    const pending = timers.current;
+    return () => pending.forEach(clearTimeout);
+  }, []);
 
   useEffect(() => {
     if (!event || event.seq === lastSeq.current) return;
@@ -88,45 +99,55 @@ export default function MoneyGraph({
       setDrops((cur) => [...cur, ...made]);
       const maxMs = Math.max(...specs.map((s) => (s.begin + s.dur) * 1000)) + 200;
       const ids = new Set(made.map((m) => m.id));
-      setTimeout(() => setDrops((cur) => cur.filter((d) => !ids.has(d.id))), maxMs);
+      const t = setTimeout(() => {
+        timers.current.delete(t);
+        setDrops((cur) => cur.filter((d) => !ids.has(d.id)));
+      }, maxMs);
+      timers.current.add(t);
     };
 
     switch (event.type) {
       case 'job.funded':
-        setEscrow('25000000');
+        // The funded amount IS the escrow; the stream emits this at the start of every cycle.
+        setEscrow(atomic(event.amountUsdc).toString());
         setBeat({ label: 'Customer funds the JobVault', kind: 'fund' });
         spawn([{ pipe: 'fund', kind: 'fund', dur: 1.1, begin: 0 }]);
         break;
       case 'advance.issued':
-        // An advance only exists against a Funded job, so the escrow is full here — pin it,
-        // so the snap reads 25.00 escrowed on every demo loop, not only the first.
-        setEscrow('25000000');
-        setBeat({ label: 'The snap — capital in a snap', kind: 'snap' });
+        setBeat({ label: 'The snap · capital in a snap', kind: 'snap' });
         spawn([{ pipe: 'snap', kind: 'snap', dur: 0.75, begin: 0 }]);
         break;
       case 'payment.delivered':
-        setSpent((s) => (BigInt(s) + BigInt(event.amountUsdc ?? '0')).toString());
-        setBeat({ label: 'Safe spend — x402 auto-approved', kind: 'spend' });
+        setSpent((s) => (atomic(s) + atomic(event.amountUsdc)).toString());
+        setBeat({ label: 'Safe spend · x402 auto-approved', kind: 'spend' });
         spawn([
           { pipe: 'spend', kind: 'spend', dur: 1.0, begin: 0 },
           { pipe: 'spend', kind: 'spend', dur: 1.0, begin: 0.18 },
         ]);
         break;
       case 'approval.rejected':
-        setBeat({ label: 'Owner rejects — the workforce cannot embezzle itself', kind: 'reject' });
+        setBeat({ label: 'Owner rejects · the workforce cannot embezzle itself', kind: 'reject' });
         break;
-      case 'job.accepted':
-        setEscrow('0');
-        setOperatorNet('12250000');
-        setBeat({ label: 'Watch the Snapfall — pool repaid first', kind: 'fall' });
+      case 'job.accepted': {
+        // Waterfall: the event amount is what the pool was repaid; the operator gets the
+        // remainder of the escrow. Both derived, valid for any job size.
+        const repaid = atomic(event.amountUsdc);
+        setEscrow((esc) => {
+          const e = atomic(esc);
+          const net = e > repaid ? e - repaid : 0n;
+          setOperatorNet(net.toString());
+          return '0';
+        });
+        setBeat({ label: 'Watch the Snapfall · pool repaid first', kind: 'fall' });
         // Pool-first: the repay droplet leads, the operator droplet follows.
         spawn([
           { pipe: 'repay', kind: 'fall-pool', dur: 0.9, begin: 0 },
           { pipe: 'operator', kind: 'fall-op', dur: 0.9, begin: 0.7 },
         ]);
         break;
+      }
       case 'rate.updated':
-        setBeat({ label: 'The flywheel — cheaper capital, earned', kind: 'flywheel' });
+        setBeat({ label: 'The flywheel · cheaper capital, earned', kind: 'flywheel' });
         break;
       case 'job.draft.created':
         setEscrow('0');
