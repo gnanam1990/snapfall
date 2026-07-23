@@ -41,6 +41,8 @@ func run(deployment, keyEnv string, args []string) error {
   start-work <jobid32>                            JobVault.startWork (operator; AFTER the advance)
   record-expense <jobid32> <usdc> <receipt32>     JobVault.recordExpense (operator)
   submit-delivery <jobid32> <hash32>              JobVault.submitDelivery (operator)
+  force-advance <jobid32>                         requestAdvance with FIXED gas (estimate bypass) — the
+                                                  deliberate mined-revert demonstrator for receipt discipline
   job-status <jobid32>                            read JobVault state (no key use)
   advance-of <jobid32>                            read FloatPool.openAdvanceOf (no key use)`)
 	}
@@ -161,6 +163,14 @@ func run(deployment, keyEnv string, args []string) error {
 		}
 		r, err := client.Submit(ctx, jv, chain.CalldataSubmitDelivery(id, h))
 		return show("submit-delivery", r, err)
+	case "force-advance":
+		id, err := chain.JobID32(arg(1))
+		if err != nil {
+			return err
+		}
+		fmt.Println("force-advance: bypassing gas estimation — a doomed call (duplicate advance, over-cap) will MINE AND REVERT; that is the point.")
+		r, err := client.SubmitWithGas(ctx, fp, chain.CalldataRequestAdvance(id), 300_000)
+		return show("force-advance", r, err)
 	case "job-status":
 		id, err := chain.JobID32(arg(1))
 		if err != nil {

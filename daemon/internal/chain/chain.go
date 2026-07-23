@@ -101,6 +101,19 @@ func (c *Client) Address() common.Address { return c.addr }
 // Reverted=true and a nil error: the caller MUST branch on it — a revert is not a
 // submission failure and must never be recorded as success.
 func (c *Client) Submit(ctx context.Context, to common.Address, calldata []byte) (Receipt, error) {
+	return c.submit(ctx, to, calldata, 0)
+}
+
+// SubmitWithGas skips gas estimation and submits with a FIXED gas limit. Estimation
+// normally pre-empts a predictable revert before anything is signed (no gas burned) —
+// this bypass exists so the receipt-status discipline can be demonstrated against the
+// real chain: a deliberately doomed call mines, reverts, and must surface as
+// Reverted, never as success. Ops/demo use only.
+func (c *Client) SubmitWithGas(ctx context.Context, to common.Address, calldata []byte, gasLimit uint64) (Receipt, error) {
+	return c.submit(ctx, to, calldata, gasLimit)
+}
+
+func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte, fixedGas uint64) (Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -126,15 +139,18 @@ func (c *Client) Submit(ctx context.Context, to common.Address, calldata []byte)
 	}
 	gasPrice := new(big.Int).SetBytes(common.FromHex(gasPriceHex))
 
-	call := map[string]any{"from": c.addr.Hex(), "to": to.Hex(), "data": "0x" + hex.EncodeToString(calldata)}
-	var gasHex string
-	if err := c.rpc(ctx, "eth_estimateGas", []any{call}, &gasHex); err != nil {
-		// Estimation failing usually means the call would revert; surface it as a
-		// submission failure (nothing was signed, nothing mined).
-		return Receipt{}, fmt.Errorf("gas estimate (the call likely reverts): %w", err)
+	gas := fixedGas
+	if gas == 0 {
+		call := map[string]any{"from": c.addr.Hex(), "to": to.Hex(), "data": "0x" + hex.EncodeToString(calldata)}
+		var gasHex string
+		if err := c.rpc(ctx, "eth_estimateGas", []any{call}, &gasHex); err != nil {
+			// Estimation failing usually means the call would revert; surface it as a
+			// submission failure (nothing was signed, nothing mined).
+			return Receipt{}, fmt.Errorf("gas estimate (the call likely reverts): %w", err)
+		}
+		gas = new(big.Int).SetBytes(common.FromHex(gasHex)).Uint64()
+		gas += gas / 5 // 20% headroom; unused gas is refunded
 	}
-	gas := new(big.Int).SetBytes(common.FromHex(gasHex)).Uint64()
-	gas += gas / 5 // 20% headroom; unused gas is refunded
 
 	tx := types.NewTx(&types.LegacyTx{
 		Nonce: nonce, To: &to, Value: big.NewInt(0),
