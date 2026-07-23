@@ -57,6 +57,10 @@ type JobMemory struct {
 type MemoryStore struct {
 	dir string
 	mu  sync.Mutex
+	// AfterUpdate, when set, observes every successful write with the NEW value —
+	// Brain wires it to the jobs-table projection so no write site can forget to
+	// project. Observers receive a copy and must not call back into the store.
+	AfterUpdate func(JobMemory)
 }
 
 // NewMemoryStore creates the directory if needed.
@@ -118,7 +122,13 @@ func (m *MemoryStore) Update(jobID string, fn func(*JobMemory)) error {
 	if err := os.WriteFile(tmp, raw, 0o640); err != nil {
 		return err
 	}
-	return os.Rename(tmp, m.path(jobID))
+	if err := os.Rename(tmp, m.path(jobID)); err != nil {
+		return err
+	}
+	if m.AfterUpdate != nil {
+		m.AfterUpdate(jm)
+	}
+	return nil
 }
 
 // SetAssignedWorker records which worker kind serves the job.

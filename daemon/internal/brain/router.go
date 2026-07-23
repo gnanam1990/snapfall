@@ -117,6 +117,12 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 
 	b.maxRevisions = 2
 
+	// Every memory write projects into the SQL jobs table (see project.go): the hook
+	// makes projection a property of writing memory, not a call-site obligation.
+	if mem != nil {
+		mem.AfterUpdate = b.projectJob
+	}
+
 	// THE routing table — owner-inbound flows (G3). Worker-inbound flows are NOT here:
 	// they arrive only through the kind-stamped callback a worker was handed at
 	// assignment (deliverFromWorker), so Brain always knows WHICH worker kind is
