@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { formatBps, formatUsdc } from '@/lib/format';
+import { formatBps, formatUsdc, parseAtomicUsdc } from '@/lib/format';
 
 /**
  * F2 Snapfall Score Ring (V11). The advance rate rendered as a felt reward: the number
@@ -53,7 +53,10 @@ export default function ScoreRing({
   const CIRC = 2 * Math.PI * R;
   const dash = CIRC * frac;
 
-  const unlock = jobPriceUsdc ? formatUsdc((BigInt(jobPriceUsdc) * BigInt(displayBps)) / 10_000n) : null;
+  // The stream frame is JSON-validated but not shape-validated: a malformed or
+  // decimal price must omit the hint, never throw during render (review: PR #9).
+  const price = jobPriceUsdc !== undefined ? parseAtomicUsdc(jobPriceUsdc) : null;
+  const unlock = price !== null ? formatUsdc((price * BigInt(displayBps)) / 10_000n) : null;
 
   return (
     <div className="ring-wrap">
