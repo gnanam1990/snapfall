@@ -114,10 +114,34 @@ func (r Reviewer) Review(d envelope.Deliverable) envelope.QAVerdict {
 		}
 	}
 
+	// ── 5. Provisional-state NOTES (G8 QA decision: pass-with-a-visible-note). A stubbed
+	//    compliance screen or provenance still pending payment-path integration is an
+	//    honestly-disclosed provisional state, NOT a defect — QA surfaces it as a note and
+	//    does not bounce (bouncing would block the demo until Circle creds + the sidecar
+	//    client land). It is read and surfaced, never silently ignored. ──
+	var notes []string
+	if d.Compliance != nil && d.Compliance.Stub {
+		notes = append(notes, fmt.Sprintf(
+			"compliance screen is a STUB (provider %q): evidence of the step, not a real screening result — pending Circle credentials",
+			d.Compliance.Provider))
+	}
+	pending := 0
+	for _, p := range d.Provenance {
+		if p.Status == "pending-integration" {
+			pending++
+		}
+	}
+	if pending > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"%d of %d source(s) are pending payment-path integration: provenance not yet settled on-chain (F2/F4)",
+			pending, len(d.Provenance)))
+	}
+
 	return envelope.QAVerdict{
 		Passed:     len(reasons) == 0,
 		Reasons:    reasons,
 		Checked:    len(d.Claims),
+		Notes:      notes,
 		Disclaimer: Disclaimer,
 	}
 }
@@ -134,7 +158,7 @@ type Worker struct {
 func (Worker) Kind() string { return Kind }
 
 // Handle reviews the draft carried in the assignment and reports the verdict.
-func (w Worker) Handle(ctx context.Context, assignment envelope.Envelope, report worker.Report) error {
+func (w Worker) Handle(ctx context.Context, assignment envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	var a worker.Assignment
 	if err := assignment.Decode(&a); err != nil {
 		return err

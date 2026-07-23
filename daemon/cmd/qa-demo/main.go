@@ -54,7 +54,7 @@ func printTrail(mem *brain.MemoryStore, jobID string) {
 type hopelessWorker struct{}
 
 func (hopelessWorker) Kind() string { return "due-diligence" }
-func (hopelessWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report) error {
+func (hopelessWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	draft := envelope.Deliverable{
 		Title: "Hopeless report", Summary: "still unsourced",
 		Claims:  []envelope.Claim{{Text: "unfixable claim", Sources: nil}},

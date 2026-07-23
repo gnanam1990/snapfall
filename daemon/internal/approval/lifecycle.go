@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,60 @@ type Request struct {
 	ExpiresAt  time.Time
 	Executed   bool
 	ExecutedAt time.Time
+	// decided is closed exactly when the request leaves Pending (a human decision, or
+	// expiry marked in Decide). An async waiter (the Purchaser, on HumanApprovalRequired)
+	// selects on it; nil for non-pending or recovered requests (DecisionSignal returns a
+	// closed channel then, so a waiter never blocks forever). Not serialized.
+	decided chan struct{}
+}
+
+// DecisionSignal returns a channel closed when the request leaves Pending. A blocked
+// Purchase selects on this to wake the instant the owner decides — never a poll. Unknown
+// or already-terminal requests return an already-closed channel, so a waiter cannot hang.
+func (l *Lifecycle) DecisionSignal(requestID string) <-chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if req, ok := l.requests[requestID]; ok && req.decided != nil && req.State == StatePending {
+		return req.decided
+	}
+	closed := make(chan struct{})
+	close(closed)
+	return closed
+}
+
+// PendingRequests returns copies of every request awaiting a human decision, oldest
+// first — the H2 approvals inbox (GET /api/v1/approvals) renders exactly this.
+func (l *Lifecycle) PendingRequests() []Request {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []Request
+	for _, req := range l.requests {
+		if req.State == StatePending {
+			out = append(out, *req)
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].CreatedAt.Before(out[b].CreatedAt) })
+	return out
+}
+
+// Snapshot returns a copy of the request for reading its terminal state and reason — the
+// structured decision the Purchaser maps back to the worker. Never the live pointer.
+func (l *Lifecycle) Snapshot(requestID string) (Request, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	req, ok := l.requests[requestID]
+	if !ok {
+		return Request{}, false
+	}
+	return *req, true
+}
+
+// closeDecided closes the pending-decision signal exactly once (caller holds l.mu).
+func closeDecided(req *Request) {
+	if req.decided != nil {
+		close(req.decided)
+		req.decided = nil
+	}
 }
 
 // Grant is the capability Execute mints when — and only when — every gate has passed:
@@ -124,6 +179,11 @@ type Lifecycle struct {
 	// always wires it. Gates: Submit before the nonce claim, Execute before the
 	// write-ahead claim and Grant minting.
 	Freeze *freeze.Registry
+	// Pending, when set, is invoked (outside locks, with a COPY) each time Submit opens a
+	// request that needs a human decision — the owner surface's notification seam: a
+	// dashboard or Telegram wiring renders the approval prompt from exactly this. Tests
+	// drive deterministic owner decisions through it too.
+	Pending func(Request)
 
 	mu       sync.Mutex
 	requests map[string]*Request
@@ -239,6 +299,7 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 		req.DecidedAt = l.clock()
 	case policy.HumanApprovalRequired:
 		req.State = StatePending
+		req.decided = make(chan struct{}) // an async Purchase waits on this
 	}
 
 	// Durable BEFORE visible: the approval.requested event is what recovery rebuilds
@@ -254,6 +315,11 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 	l.mu.Lock()
 	l.requests[req.ID] = req
 	l.mu.Unlock()
+
+	// Notify the owner surface of a request awaiting a human (outside all locks; a copy).
+	if req.State == StatePending && l.Pending != nil {
+		l.Pending(*req)
+	}
 
 	// Return a COPY: mutating the returned struct must never move gate state
 	// (review-batch fix; the map-owned request stays private).
@@ -300,6 +366,7 @@ func (l *Lifecycle) Decide(ctx context.Context, requestID string, kind DecisionK
 		req.State = StateExpired
 		req.DecidedAt = l.clock()
 		req.Reason = "expired before decision"
+		closeDecided(req)
 		if err := l.appendEvent(ctx, req.JobID, "approval.expired", map[string]any{"request_id": req.ID}); err != nil {
 			return nil, err
 		}
@@ -311,6 +378,7 @@ func (l *Lifecycle) Decide(ctx context.Context, requestID string, kind DecisionK
 	req.DecidedBy = by
 	req.Reason = reason
 	req.DecidedAt = l.clock()
+	closeDecided(req) // wake any Purchase blocked on this decision
 
 	if err := l.appendEvent(ctx, req.JobID, "approval."+string(kind), map[string]any{
 		"request_id": req.ID, "by": by, "reason": reason,
@@ -372,6 +440,7 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 
 	if !l.clock().Before(req.ExpiresAt) {
 		req.State = StateExpired
+		closeDecided(req)
 		l.mu.Unlock()
 		return ErrExpired
 	}

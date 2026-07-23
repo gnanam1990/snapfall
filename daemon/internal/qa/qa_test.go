@@ -136,3 +136,30 @@ func TestReview_Deterministic(t *testing.T) {
 		t.Fatalf("same draft, different verdicts:\n%v\n%v", v1, v2)
 	}
 }
+
+// G8 QA decision — pass-with-a-visible-note: a clean report whose compliance screen is a
+// STUB and whose provenance is pending-integration PASSES (those are honestly-disclosed
+// provisional states, not defects) but carries visible notes. It is read and surfaced,
+// never bounced and never silently ignored.
+func TestReview_StubComplianceAndPendingProvenancePassWithNotes(t *testing.T) {
+	d := goodDeliverable()
+	d.Compliance = &envelope.ComplianceResult{
+		Decision: "clear", Confidence: "medium", Provider: "stub", Stub: true,
+		Disclaimer: "evidence, not a guarantee",
+	}
+	d.Provenance = []envelope.SourceProvenance{
+		{Resource: "GET /v1/company-profile", Merchant: "0xabc", AmountAtomic: "40000", Status: "pending-integration"},
+	}
+
+	v := Reviewer{}.Review(d)
+	if !v.Passed {
+		t.Fatalf("stub/pending must NOT bounce (would block the demo): %+v", v)
+	}
+	if len(v.Notes) != 2 {
+		t.Fatalf("expected 2 visible notes (stub compliance + pending provenance), got %v", v.Notes)
+	}
+	joined := strings.Join(v.Notes, " | ")
+	if !strings.Contains(joined, "STUB") || !strings.Contains(joined, "pending payment-path") {
+		t.Errorf("notes do not surface the provisional states visibly: %v", v.Notes)
+	}
+}
