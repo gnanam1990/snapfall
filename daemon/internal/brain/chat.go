@@ -130,6 +130,51 @@ func (b *Brain) Reject(ctx context.Context, jobID, by, reason string) error {
 	return b.Deliver(ctx, e)
 }
 
+// Recover rehydrates Brain's job map from the per-job memory files (G11 / extended
+// AT-10): after a restart, a mid-QA-loop job resumes parked at its recorded stage
+// instead of vanishing from the router's working set. The memory files are the
+// durable truth (G4); this is the read-back.
+func (b *Brain) Recover() error {
+	ids, err := b.memory.List()
+	if err != nil {
+		return fmt.Errorf("recovering brain jobs: %w", err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, id := range ids {
+		jm, err := b.memory.Get(id)
+		if err != nil {
+			return err
+		}
+		if _, exists := b.jobs[id]; exists {
+			continue
+		}
+		js := &jobState{
+			JobID: id, Scope: jm.Scope, QuoteUSDC: jm.QuoteUSDC,
+			Stage: JobStage(jm.Stage), Worker: jm.AssignedWorker,
+			RevisionCount: jm.RevisionCount, Report: jm.Report,
+		}
+		// Restore the QA draft so a job recovered mid-review can still emit a real
+		// delivery report, not an empty one (review fix, Anandan #4.3).
+		if jm.Draft != "" {
+			var d envelope.Deliverable
+			if err := json.Unmarshal([]byte(jm.Draft), &d); err == nil {
+				js.Draft = &d
+			}
+		}
+		b.jobs[id] = js
+	}
+	return nil
+}
+
+// JobCount returns how many jobs are in Brain's working set — the visible effect of
+// Recover() at startup (review fix, Anandan #4.2).
+func (b *Brain) JobCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.jobs)
+}
+
 // Job returns Brain's current view of a job.
 func (b *Brain) Job(jobID string) (jobState, bool) {
 	b.mu.Lock()
@@ -146,6 +191,10 @@ func (b *Brain) Job(jobID string) (jobState, bool) {
 func (b *Brain) onOwnerRequest(ctx context.Context, e envelope.Envelope) error {
 	if b.scoper == nil {
 		return fmt.Errorf("no scoper installed")
+	}
+	// G11: a frozen org accepts no new jobs at all.
+	if err := b.frozenErr(e.JobID, ""); err != nil {
+		return err
 	}
 	var req OwnerRequest
 	if err := e.Decode(&req); err != nil {
@@ -299,8 +348,15 @@ func (b *Brain) onWorkerReport(ctx context.Context, kind string, e envelope.Enve
 		js.Draft = &draft
 		js.Stage = StageQAReview
 		b.mu.Unlock()
+		// Persist the draft JSON alongside the stage (review fix, Anandan #4.3): a crash
+		// in qa_review/revision must recover the actual deliverable, not an empty report.
+		draftJSON := ""
+		if enc, err := json.Marshal(&draft); err == nil {
+			draftJSON = string(enc)
+		}
 		if err := b.memory.Update(e.JobID, func(jm *JobMemory) {
 			jm.Stage = string(StageQAReview)
+			jm.Draft = draftJSON
 		}); err != nil {
 			return err
 		}

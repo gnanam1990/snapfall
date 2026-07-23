@@ -139,6 +139,12 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool) erro
 	}
 	log.Info("store ready", "path", dbPath, "journal_mode", mode, "existing_events", existing)
 
+	// NOTE: Brain.Recover() is implemented and tested at the package level (see
+	// TestRecover_* in internal/brain). It is deliberately NOT wired into the serving path
+	// here: a Brain that recovers, logs a count, and is then discarded is a log line, not
+	// recovery, and would race a second Brain to rebuild the same state. The single
+	// recovery call lands with the async dispatcher that actually serves Brain, in G8.
+
 	// ── Typed bus + outbox publisher ──
 	bus := events.NewBus()
 	bus.SubscribeAll(func(_ context.Context, m events.Message) error {

@@ -5,12 +5,14 @@ package approval
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
 	"github.com/gnanam1990/snapfall/daemon/internal/policy"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
@@ -118,9 +120,37 @@ type Lifecycle struct {
 	// Spend returns the current spend state for a job (caller contract: the daily
 	// window is the UTC calendar day, policy.DailyWindowStartUTC).
 	Spend func(jobID string) policy.SpendState
+	// Freeze is the G11 kill-switch registry. Optional (nil = ungated); the daemon
+	// always wires it. Gates: Submit before the nonce claim, Execute before the
+	// write-ahead claim and Grant minting.
+	Freeze *freeze.Registry
 
 	mu       sync.Mutex
 	requests map[string]*Request
+}
+
+// frozenErr consults the kill switch for this intent's scopes (a non-authoritative
+// fast-fail; the authoritative gate is admitExecution, which is atomic with Engage).
+func (l *Lifecycle) frozenErr(in Intent) error {
+	if l.Freeze == nil {
+		return nil
+	}
+	if e := l.Freeze.Check(in.OrgID, in.JobID, in.AgentID); e != nil {
+		return freeze.Err(e)
+	}
+	return nil
+}
+
+// admitExecution atomically gates AND counts this execution against the freeze registry.
+// The in-flight count now lives in the registry (incremented under the same lock Engage
+// snapshots), so freeze admission and the in-flight transition are one step w.r.t. a
+// concurrent Engage — closing the gap where an admitted payment was reported as
+// zero-in-flight (review fix, Anandan #4.1). With no registry wired, it is a no-op.
+func (l *Lifecycle) admitExecution(in Intent) (func(), error) {
+	if l.Freeze == nil {
+		return func() {}, nil
+	}
+	return l.Freeze.AdmitExecution(in.OrgID, in.JobID, in.AgentID)
 }
 
 // New builds a lifecycle over the given store and clock.
@@ -143,6 +173,13 @@ type SubmitResult struct {
 func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error) {
 	if l.Policy == nil || l.Spend == nil {
 		return SubmitResult{}, fmt.Errorf("lifecycle not wired: Policy and Spend must be set")
+	}
+
+	// ── G11: the kill switch gates intake BEFORE the nonce claim, so a frozen-scope
+	//    submission does not burn its nonce — the same intent submits cleanly after
+	//    the freeze lifts (AT-09 "stops new claims"). ──
+	if err := l.frozenErr(in); err != nil {
+		return SubmitResult{}, err
 	}
 
 	// ── Resolve the active policy version BEFORE the nonce claim, so the durable
@@ -305,6 +342,15 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 		return ErrUnknownRequest
 	}
 
+	// ── G11: no new signature begins in a frozen scope. This sits BEFORE the
+	//    write-ahead claim and the Grant minting: frozen scope -> no Grant -> no
+	//    money (the funding door only opens for a Grant). An execution already past
+	//    this line completes; see the freeze package doc. ──
+	if err := l.frozenErr(req.Intent); err != nil {
+		l.mu.Unlock()
+		return err
+	}
+
 	if InternalHash(in) != req.IntentHash {
 		l.mu.Unlock()
 		return ErrHashMismatch
@@ -341,15 +387,28 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 		return ErrAlreadyExecuted
 	}
 
-	// Write-ahead: claim execution before performing it.
+	// ── ATOMIC freeze admission + claim (review fix, Anandan #4.1). While still holding
+	//    l.mu, gate on the kill switch AND count this execution in-flight in one step
+	//    (the count lives in the registry, incremented under the lock Engage snapshots).
+	//    So the freeze admission and the executed/in-flight transition are atomic w.r.t.
+	//    a concurrent Engage: it either refuses this execution or reports it in-flight —
+	//    never "nothing was in flight" while a payment proceeds. Frozen here -> no claim,
+	//    intent NOT burned. ──
+	release, err := l.admitExecution(req.Intent)
+	if err != nil {
+		l.mu.Unlock()
+		return err
+	}
+
+	// Write-ahead: claim execution before performing it (atomic with the admission above).
 	req.Executed = true
 	req.ExecutedAt = l.clock()
 	l.mu.Unlock()
 
 	// The claim MUST be durable before the executor runs (review-batch fix): a
 	// memory-only claim disappears in a crash and the payment would repeat. If the
-	// append fails, un-claim and abort — the executor has not run, so retrying later
-	// is safe. No durable claim, no execution.
+	// append fails, un-claim, release the in-flight admission, and abort — the executor
+	// has not run, so retrying later is safe. No durable claim, no execution.
 	if err := l.appendEvent(ctx, req.JobID, "payment.executing", map[string]any{
 		"request_id": req.ID, "intent_hash": req.IntentHash,
 	}); err != nil {
@@ -357,8 +416,13 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 		req.Executed = false
 		req.ExecutedAt = time.Time{}
 		l.mu.Unlock()
+		release()
 		return fmt.Errorf("refusing to execute without a durable claim: %w", err)
 	}
+
+	// Release the in-flight admission when the executor returns; a freeze engaged in this
+	// window is recorded with this execution counted, and the owner report says it completed.
+	defer release()
 
 	grant := Grant{intent: in, requestID: req.ID, grantedAt: req.ExecutedAt}
 	if err := exec(ctx, grant); err != nil {
@@ -378,6 +442,84 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 		return fmt.Errorf("execution COMPLETED but the executed-event append failed (claim is durable; no replay risk): %w", err)
 	}
 	return nil
+}
+
+// Recover rebuilds the request map from the event log (G11 / extended AT-10).
+//
+// Before this existed, a restart LOST approved-but-unexecuted requests while their
+// nonces stayed burned — the intent could neither execute nor resubmit. Replay folds
+// the approval events in sequence order:
+//
+//	approval.requested        -> request opened (full intent + initial state)
+//	approval.approve/reject/
+//	approval.request_alternative -> decision applied
+//	approval.expired          -> expired
+//	payment.executing         -> EXECUTED (the write-ahead claim IS the claim: a crash
+//	                             after it must never re-execute, so replay honors it)
+//
+// Call once at boot, before serving. Idempotent over the same log.
+func (l *Lifecycle) Recover(ctx context.Context) error {
+	rows, err := l.st.DB().QueryContext(ctx, `SELECT kind, payload_json FROM events
+		WHERE kind IN ('approval.requested','approval.approve','approval.reject',
+		               'approval.request_alternative','approval.expired','payment.executing')
+		ORDER BY seq`)
+	if err != nil {
+		return fmt.Errorf("recovering approvals: %w", err)
+	}
+	defer rows.Close()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	for rows.Next() {
+		var kind, payload string
+		if err := rows.Scan(&kind, &payload); err != nil {
+			return err
+		}
+		var p struct {
+			RequestID  string `json:"request_id"`
+			IntentHash string `json:"intent_hash"`
+			State      string `json:"state"`
+			Intent     Intent `json:"intent"`
+			DecidedBy  string `json:"decided_by"`
+			By         string `json:"by"`
+			Reason     string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(payload), &p); err != nil {
+			return fmt.Errorf("corrupt approval event: %w", err)
+		}
+		if p.RequestID == "" {
+			continue
+		}
+
+		switch kind {
+		case "approval.requested":
+			req := &Request{
+				ID: p.RequestID, JobID: p.Intent.JobID, IntentHash: p.IntentHash,
+				Intent: p.Intent, State: State(p.State), DecidedBy: p.DecidedBy,
+				ExpiresAt: p.Intent.ExpiresAt,
+			}
+			l.requests[p.RequestID] = req
+		case "approval.approve", "approval.reject", "approval.request_alternative":
+			if req, ok := l.requests[p.RequestID]; ok {
+				req.State = map[string]State{
+					"approval.approve":             StateApproved,
+					"approval.reject":              StateRejected,
+					"approval.request_alternative": StateAlternativeRequested,
+				}[kind]
+				req.DecidedBy, req.Reason = p.By, p.Reason
+			}
+		case "approval.expired":
+			if req, ok := l.requests[p.RequestID]; ok {
+				req.State = StateExpired
+			}
+		case "payment.executing":
+			if req, ok := l.requests[p.RequestID]; ok {
+				req.Executed = true
+			}
+		}
+	}
+	return rows.Err()
 }
 
 // Request returns a snapshot of one request.

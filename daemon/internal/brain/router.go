@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
+	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
 	"github.com/gnanam1990/snapfall/daemon/internal/logging"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
@@ -44,6 +45,31 @@ type Brain struct {
 	qaKind string
 	// maxRevisions bounds the QA bounce loop (G9 pin 2). Exhausted -> escalate to owner.
 	maxRevisions int
+	// freezeReg is the G11 kill switch (nil = ungated); orgID scopes org-level checks.
+	freezeReg *freeze.Registry
+	orgID     string
+}
+
+// SetFreeze wires the kill-switch registry and the org identity it checks against.
+func (b *Brain) SetFreeze(r *freeze.Registry, orgID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.freezeReg = r
+	b.orgID = orgID
+}
+
+// frozenErr consults the kill switch for a job/agent in this org.
+func (b *Brain) frozenErr(jobID, agentKind string) error {
+	b.mu.Lock()
+	r, org := b.freezeReg, b.orgID
+	b.mu.Unlock()
+	if r == nil {
+		return nil
+	}
+	if e := r.Check(org, jobID, agentKind); e != nil {
+		return freeze.Err(e)
+	}
+	return nil
 }
 
 // New wires a Brain. The funding agent pointer is handed here and nowhere else.
@@ -181,6 +207,17 @@ func (b *Brain) assign(ctx context.Context, jobID, kind string, bounceReasons []
 	}
 	if js == nil {
 		return fmt.Errorf("unknown job %s", jobID)
+	}
+
+	// ── G11: THE task chokepoint. Every dispatch flows through here (pinned by the
+	//    source-scan test), so one gate stops all new tasks. Withheld dispatches are
+	//    recorded — a frozen job fails loudly, never silently. ──
+	if err := b.frozenErr(jobID, kind); err != nil {
+		_, _ = b.store.Append(ctx, store.Event{
+			Kind: "task.withheld", EntityID: jobID, Actor: "brain",
+			Payload: map[string]any{"worker_kind": kind, "reason": err.Error()},
+		})
+		return err
 	}
 
 	assignment, err := envelope.New(jobID, envelope.RoleBrain, envelope.TypeAssignment,
