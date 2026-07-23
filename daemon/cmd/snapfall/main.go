@@ -264,6 +264,19 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 	api.Generate = func(gctx context.Context, jobID string) (billing.Record, error) {
 		return br.GenerateInvoice(gctx, jobID, "owner-request")
 	}
+	// The customer surface — the settlement principal's half of the fall: per-job
+	// accept credentials, enforced per request on every customer route. The chain call
+	// itself stops honestly at settlement.pending_chain until the deployment lands.
+	api.MintAccept = br.MintAcceptCredential
+	api.VerifyAccept = br.VerifyAcceptCredential
+	api.Accept = br.AcceptDelivery
+	api.JobState = func(jobID string) (string, bool) {
+		js, ok := br.Job(jobID)
+		if !ok {
+			return "", false
+		}
+		return string(js.Stage), true
+	}
 	if err := sup.Register(workerFunc{name: "owner-api", fn: func(wctx context.Context) error {
 		return api.Run(wctx, apiAddr)
 	}}); err != nil {
