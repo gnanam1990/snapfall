@@ -43,9 +43,14 @@ type JobMemory struct {
 	// Draft is the author's deliverable under QA, persisted as JSON so a crash during
 	// qa_review/revision recovers the actual content — without it, recovery would emit an
 	// EMPTY delivery report (review fix, Anandan #4.3). Cleared once the report is sealed.
-	Draft         string    `json:"draft,omitempty"`
-	RevisionCount int       `json:"revision_count,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	Draft         string `json:"draft,omitempty"`
+	RevisionCount int    `json:"revision_count,omitempty"`
+	// VaultJobID is the bytes32 chain identity of this job — the join key Billing and
+	// the settlement observer use. NO PRODUCER EXISTS today (the fourth face of the
+	// chain gap: on-chain job creation never happens); it stays empty for real jobs
+	// until the chain-write path lands. Tests set it directly.
+	VaultJobID string    `json:"vault_job_id,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // MemoryStore owns the directory of per-job files.

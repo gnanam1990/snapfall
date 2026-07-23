@@ -40,6 +40,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -157,6 +158,26 @@ type Set struct {
 	Alerts         []Alert        `json:"alerts,omitempty"`
 }
 
+// ErrUnknownJob is returned when invoicing is asked for a job the daemon never touched.
+var ErrUnknownJob = errors.New("unknown job")
+
+// Record is one generation, as durably recorded (the billing.invoice event payload).
+// Regeneration is APPEND-ONLY VERSIONED (H2 §4): every generation appends a new Record
+// with a monotonic per-job Version and replaces nothing — a partial invoice becomes
+// complete as a later version, prior versions are the audit trail, and two generations
+// can never leave two conflicting records claiming to be THE invoice.
+type Record struct {
+	Version int     `json:"version"`
+	Trigger string  `json:"trigger"` // "owner-request" | "settlement-observed"
+	Owner   Invoice `json:"owner"`
+	// Customer is recorded durably but served by NO daemon route — the copy-serving
+	// seam (H2 §4.2) is undecided; the owner reviewing it via the owner surface is not
+	// the customer receiving it.
+	Customer       Invoice        `json:"customer"`
+	Reconciliation Reconciliation `json:"reconciliation"`
+	Alerts         []Alert        `json:"alerts,omitempty"`
+}
+
 // Agent formats invoices. It is constructed at wiring and handed to Brain alone;
 // the import-graph law tests in boundary_test.go pin what it can and cannot reach.
 type Agent struct {
@@ -176,6 +197,10 @@ func New(st *store.Store, chainID uint64, now func() time.Time) *Agent {
 	}
 	return &Agent{st: st, chainID: chainID, now: now}
 }
+
+// ChainID reports which chain this agent reads — the settlement observer scopes its
+// chain_events scan to the same chain the invoices are built from.
+func (a *Agent) ChainID() uint64 { return a.chainID }
 
 // Invoice builds both copies for one job from its chain record.
 func (a *Agent) Invoice(ctx context.Context, req Request) (Set, error) {

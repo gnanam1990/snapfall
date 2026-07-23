@@ -20,6 +20,7 @@ import (
 
 	"github.com/gnanam1990/snapfall/daemon/internal/agents"
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
+	"github.com/gnanam1990/snapfall/daemon/internal/billing"
 	"github.com/gnanam1990/snapfall/daemon/internal/brain"
 	"github.com/gnanam1990/snapfall/daemon/internal/config"
 	"github.com/gnanam1990/snapfall/daemon/internal/discovery"
@@ -55,6 +56,10 @@ func (f discoveryFinder) Find(ctx context.Context, need string, maxAmountMicros 
 	}
 	return out, nil
 }
+
+// arcTestnetChainID matches deployments/arc-testnet.json ("chainId": 5042002) and the
+// indexer fixtures — the one chain this build's invoices and settlement observer read.
+const arcTestnetChainID = uint64(5_042_002)
 
 func main() {
 	var (
@@ -255,8 +260,35 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 	// The H2 owner API (docs/handshakes/H2-owner-api.md): the SSE stream + the approval
 	// endpoints — the surface the reject-and-adapt beat is decided through.
 	api := ownerapi.New(life, st, log)
+	// H2 §4.1: the owner-request invoice trigger routes through Brain's single site.
+	api.Generate = func(gctx context.Context, jobID string) (billing.Record, error) {
+		return br.GenerateInvoice(gctx, jobID, "owner-request")
+	}
 	if err := sup.Register(workerFunc{name: "owner-api", fn: func(wctx context.Context) error {
 		return api.Run(wctx, apiAddr)
+	}}); err != nil {
+		return err
+	}
+
+	// H2 §4: the settlement-observed invoice trigger. HONEST STATE: this worker has
+	// never had anything to observe — no deployment means no JobSettled rows and nothing
+	// writes jobs' vault ids (the chain gap) — but it runs so settlement day needs no
+	// daemon change. Proven against seeded rows in the brain tests.
+	if err := sup.Register(workerFunc{name: "settlement-observer", fn: func(wctx context.Context) error {
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-wctx.Done():
+				return nil
+			case <-tick.C:
+				if n, err := br.ObserveSettlementsOnce(wctx); err != nil {
+					log.Warn("settlement observation failed", "err", err)
+				} else if n > 0 {
+					log.Info("settlement-observed invoices generated", "count", n)
+				}
+			}
+		}
 	}}); err != nil {
 		return err
 	}
@@ -342,6 +374,11 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	life.Spend = func(string) policy.SpendState { return policy.SpendState{} }
 	life.Freeze = reg
 	br.SetPurchaser(purchasing.New(life, st, purchasing.RealClock{}, orgID, 5*time.Minute))
+
+	// G12 Billing: the read-side invoice formatter over the shared store's chain rows
+	// (arc-testnet chainId 5042002, deployments/arc-testnet.json). Brain alone holds the
+	// pointer; GenerateInvoice is its single pinned invocation site.
+	br.SetBilling(billing.New(st, arcTestnetChainID, nil))
 
 	// Serve pin 2: task lifetimes bound to the daemon root — SIGTERM wakes blocked tasks
 	// and refuses new dispatches; in-flight executions complete past their claim.
