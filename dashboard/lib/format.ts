@@ -2,6 +2,14 @@
  *  malformed frame and must not throw on the render path (review: PR #8 HIGH). */
 const ATOMIC_RE = /^\d+$/;
 
+/** The shared safe atomic parser: canonical atomic USDC in, bigint out, null for
+ *  anything malformed (decimal, hex, garbage). useEventStream validates JSON, not
+ *  shape, so render-path callers must treat null as "omit" - never feed a raw stream
+ *  string to BigInt(), which throws (review: PR #9). */
+export function parseAtomicUsdc(atomic: string): bigint | null {
+  return ATOMIC_RE.test(atomic) ? BigInt(atomic) : null;
+}
+
 /** Format atomic USDC (6dp) for humans: "12500000" -> "12.50".
  *  Tolerant by design: a malformed amount renders as-is instead of crashing the page;
  *  the H2 wire invariant (amounts are atomic integer strings) is validated, not assumed. */
@@ -11,11 +19,13 @@ export function formatUsdc(atomic: string | bigint): string {
     v = atomic;
   } else if (atomic === '') {
     v = 0n;
-  } else if (ATOMIC_RE.test(atomic)) {
-    v = BigInt(atomic);
   } else {
-    // Visible-but-safe fallback for a bad frame (e.g. "12.50", hex, garbage).
-    return String(atomic);
+    const parsed = parseAtomicUsdc(atomic);
+    if (parsed === null) {
+      // Visible-but-safe fallback for a bad frame (e.g. "12.50", hex, garbage).
+      return String(atomic);
+    }
+    v = parsed;
   }
   const whole = v / 1_000_000n;
   const frac = (v % 1_000_000n).toString().padStart(6, '0').slice(0, 2);

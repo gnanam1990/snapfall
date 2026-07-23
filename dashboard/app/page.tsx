@@ -1,15 +1,28 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import { motion } from 'framer-motion';
+import { Lightning, Waves, Bank, Gauge, Coins, BellRinging } from '@phosphor-icons/react';
 import type { OverviewSnapshot, PoolStats, OpenAdvance, FinancialEvent, StreamMessage } from '@/lib/types';
 import { formatUsdc, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
-import TreasuryHero from '@/components/TreasuryHero';
+import { fadeUp } from '@/lib/motion';
+import MoneyGraph from '@/components/MoneyGraph';
 import StatCard from '@/components/StatCard';
+import Card, { CardHeader, CardBody } from '@/components/Card';
+import Reveal from '@/components/Reveal';
 import EventFeed from '@/components/EventFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
 import ActiveJobs from '@/components/ActiveJobs';
+
+const inlineIcon: React.CSSProperties = {
+  display: 'inline',
+  verticalAlign: 'middle',
+  position: 'relative',
+  top: -2,
+  margin: '0 4px',
+};
 
 export default function OverviewPage() {
   const [snap, setSnap] = useState<OverviewSnapshot | null>(null);
@@ -29,7 +42,7 @@ export default function OverviewPage() {
       setTreasury(msg.treasuryUsdc);
       setPool(msg.pool);
       setAdvances(msg.openAdvances);
-      setEvents((prev) => [msg.event, ...prev].slice(0, 14));
+      setEvents((prev) => [msg.event, ...prev].slice(0, 12));
       // Jobs and approvals stream too, so acceptance is visible everywhere (review: PR #8).
       const { activeJobs, pendingApprovals } = msg;
       if (activeJobs || pendingApprovals !== undefined) {
@@ -48,64 +61,106 @@ export default function OverviewPage() {
 
   const status = useEventStream('/api/events/stream', onMessage);
 
-  if (!snap || !pool) {
-    return (
-      <>
-        <div className="topbar">
-          <h1 className="page-title">Overview</h1>
-        </div>
-        <div className="loading">Connecting to the daemon event stream…</div>
-      </>
-    );
-  }
-
   return (
     <>
-      <div className="topbar">
-        <div>
-          <h1 className="page-title">Overview</h1>
-          <p className="page-sub">One founder, a workforce that finances itself.</p>
-        </div>
-        {status === 'live' ? (
-          <span className="badge-live">demo replay · updates in &lt;2s</span>
-        ) : (
-          <span className="badge-live badge-reconnecting">reconnecting…</span>
-        )}
+      {/* hero: the brand line in the template's inline-icon heading treatment */}
+      <div className="pb-7 pt-4 text-left sm:pt-7">
+        <motion.h1
+          variants={fadeUp}
+          custom={0}
+          initial="hidden"
+          animate="visible"
+          className="m-0"
+          style={{ fontSize: 'clamp(1.65rem, 4.2vw, 2.7rem)', lineHeight: 1.05, letterSpacing: '-0.01em' }}
+        >
+          <span className="whitespace-nowrap">
+            Capital in a <em className="serif-accent">snap</em>
+            <span className="inline-icon" style={inlineIcon}>
+              <Lightning size={26} weight="regular" color="var(--color-text)" />
+            </span>
+          </span>
+          <br />
+          settlement in a <em className="serif-accent">waterfall</em>
+          <span className="inline-icon" style={{ ...inlineIcon, marginLeft: 6 }}>
+            <Waves size={26} weight="regular" color="var(--color-text)" />
+          </span>
+        </motion.h1>
+        <motion.p
+          variants={fadeUp}
+          custom={1}
+          initial="hidden"
+          animate="visible"
+          className="mb-0 mt-3 max-w-[560px]"
+          style={{ color: 'var(--color-muted)', lineHeight: 1.65, fontSize: 'clamp(0.9rem, 2.2vw, 1.05rem)' }}
+        >
+          One founder. A workforce that can&apos;t embezzle itself. A business that gets cheaper to run
+          every time it delivers.
+        </motion.p>
       </div>
 
-      <TreasuryHero treasuryUsdc={treasury} orgRateBps={pool.orgRateBps} />
-
-      <div className="grid cols-4 mt">
-        <StatCard label="Pool TVL" value={<>{formatUsdc(pool.tvlUsdc)} <span className="u">USDC</span></>} sub="seeded by demo LPs" />
-        <StatCard label="Utilization" value={formatBps(pool.utilizationBps)} sub="drawn / TVL · cap 80%" />
-        <StatCard
-          label="Fees accrued"
-          value={<>{formatUsdc(pool.feesAccruedUsdc)} <span className="u">USDC</span></>}
-          sub={`first-loss reserve ${formatUsdc(pool.reserveUsdc)}`}
-        />
-        <StatCard label="Pending approvals" value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
-      </div>
-
-      <div className="grid cols-2 mt">
-        <div className="card">
-          <p className="card-title">Recent financial events</p>
-          <EventFeed events={events} />
+      {!snap || !pool ? (
+        <div className="py-20 text-center text-sm" style={{ color: 'var(--color-muted)' }}>
+          Connecting to the daemon event stream…
         </div>
-        <div className="grid" style={{ gap: 16, alignContent: 'start' }}>
-          <div className="card">
-            <p className="card-title">Workforce</p>
-            <WorkforceStrip agents={snap.workforce} />
+      ) : (
+        <>
+          <motion.div variants={fadeUp} custom={2} initial="hidden" animate="visible">
+            <MoneyGraph
+              event={events[0] ?? null}
+              treasuryUsdc={treasury}
+              pool={pool}
+              jobPriceUsdc={snap.activeJobs[0]?.priceUsdc}
+              streamStatus={status}
+            />
+          </motion.div>
+
+          <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <StatCard index={3} label="Pool TVL" icon={Bank}
+              value={formatUsdc(pool.tvlUsdc)} sub="USDC · seeded by demo LPs" />
+            <StatCard index={4} label="Utilization" icon={Gauge}
+              value={formatBps(pool.utilizationBps)} sub="drawn / TVL · cap 80%" />
+            <StatCard index={5} label="Fees accrued" icon={Coins}
+              value={formatUsdc(pool.feesAccruedUsdc)} sub={`USDC · reserve ${formatUsdc(pool.reserveUsdc)}`} />
+            <StatCard index={6} label="Pending approvals" icon={BellRinging}
+              value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
           </div>
-          <div className="card">
-            <p className="card-title">Open advances</p>
-            <AdvancesTable advances={advances} />
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr] [&>*]:min-w-0">
+            <Reveal>
+              <Card>
+                <CardHeader title="Recent financial events" meta={`${events.length} events`} />
+                <EventFeed events={events} />
+              </Card>
+            </Reveal>
+            <div className="grid content-start gap-4 [&>*]:min-w-0">
+              <Reveal delay={100}>
+                <Card>
+                  <CardHeader title="Workforce" meta={`${snap.workforce.length} agents`} />
+                  <CardBody>
+                    <WorkforceStrip agents={snap.workforce} />
+                  </CardBody>
+                </Card>
+              </Reveal>
+              <Reveal delay={200}>
+                <Card>
+                  <CardHeader title="Open advances" meta={advances.length ? `${advances.length} open` : 'none open'} />
+                  <CardBody>
+                    <AdvancesTable advances={advances} />
+                  </CardBody>
+                </Card>
+              </Reveal>
+              <Reveal delay={300}>
+                <Card>
+                  <CardHeader title="Active jobs" meta={`${snap.activeJobs.length} active`} />
+                  <CardBody>
+                    <ActiveJobs jobs={snap.activeJobs} />
+                  </CardBody>
+                </Card>
+              </Reveal>
+            </div>
           </div>
-          <div className="card">
-            <p className="card-title">Active jobs</p>
-            <ActiveJobs jobs={snap.activeJobs} />
-          </div>
-        </div>
-      </div>
+        </>
+      )}
     </>
   );
 }
