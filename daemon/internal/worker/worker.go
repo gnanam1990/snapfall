@@ -36,13 +36,12 @@ type Worker interface {
 // Assignment is the payload Brain sends with TypeAssignment.
 type Assignment struct {
 	Scope string `json:"scope"`
-}
-
-// DDReport is the payload the stub DD worker sends back with TypeWorkerReport.
-type DDReport struct {
-	Summary  string   `json:"summary"`
-	Findings []string `json:"findings"`
-	Complete bool     `json:"complete"`
+	// BounceReasons is non-empty when this assignment is a REVISION: QA bounced the
+	// prior draft and these are its reasons (G9). Deterministic workers key their
+	// revision behavior off this.
+	BounceReasons []string `json:"bounce_reasons,omitempty"`
+	// Draft carries the deliverable under review when the assignee is the QA worker.
+	Draft *envelope.Deliverable `json:"draft,omitempty"`
 }
 
 // StubDD is the scripted due-diligence worker for the Sun-26 exit gate. Real source
@@ -53,7 +52,12 @@ type StubDD struct{}
 // Kind implements Worker.
 func (StubDD) Kind() string { return "due-diligence" }
 
-// Handle produces a canned report for the assigned scope: one progress update, then the report.
+// Handle produces a draft for the assigned scope: one progress update, then the draft.
+//
+// SCRIPTED-MODE DETERMINISM (the demo's QA beat): the FIRST draft always contains
+// exactly one planted unsupported claim; a revision assignment (BounceReasons set)
+// always produces the corrected draft with every claim sourced. Rule-based reviewer +
+// scripted revision = the bounce happens exactly once, on every take, no LLM variance.
 func (StubDD) Handle(ctx context.Context, assignment envelope.Envelope, report Report) error {
 	var a Assignment
 	if err := assignment.Decode(&a); err != nil {
@@ -69,15 +73,30 @@ func (StubDD) Handle(ctx context.Context, assignment envelope.Envelope, report R
 		return err
 	}
 
-	final, err := envelope.New(assignment.JobID, envelope.RoleWorker, envelope.TypeWorkerReport, DDReport{
+	draft := envelope.Deliverable{
+		Title:   "Due-diligence report",
 		Summary: "Stub due-diligence report for: " + a.Scope,
-		Findings: []string{
-			"corporate registry entry located (stub)",
-			"no adverse media found (stub)",
-			"beneficial ownership chain resolved (stub)",
+		Claims: []envelope.Claim{
+			{Text: "corporate registry entry located", Sources: []string{"registry:acme-2201"}},
+			{Text: "no adverse media found", Sources: []string{"media-scan:2026-07"}},
+			{Text: "beneficial ownership chain resolved", Sources: []string{"registry:acme-2201", "filing:bo-114"}},
 		},
-		Complete: true,
-	})
+		Sources: []string{"registry:acme-2201", "media-scan:2026-07", "filing:bo-114"},
+	}
+	if len(a.BounceReasons) == 0 {
+		// First draft: the PLANTED unsupported claim (the demo's QA-bounce beat).
+		draft.Claims = append(draft.Claims, envelope.Claim{
+			Text: "target's customer churn is 40% annually", Sources: nil,
+		})
+	} else {
+		// Revision: the claim returns with its source attached.
+		draft.Claims = append(draft.Claims, envelope.Claim{
+			Text: "target's customer churn is 40% annually", Sources: []string{"filing:churn-2026"},
+		})
+		draft.Sources = append(draft.Sources, "filing:churn-2026")
+	}
+
+	final, err := envelope.New(assignment.JobID, envelope.RoleWorker, envelope.TypeWorkerReport, draft)
 	if err != nil {
 		return err
 	}

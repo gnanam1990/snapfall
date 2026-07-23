@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gnanam1990/snapfall/daemon/internal/approval"
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
@@ -94,7 +95,7 @@ func TestRouter_WorkerCannotSpoofOwnerRole(t *testing.T) {
 	b.jobs["job_evil"] = &jobState{JobID: "job_evil", Scope: "x", Stage: StageConfirmed, Worker: evil.Kind()}
 	b.mu.Unlock()
 
-	err := b.assign(ctx, "job_evil", evil.Kind())
+	err := b.assign(ctx, "job_evil", evil.Kind(), nil, nil)
 	if err == nil {
 		t.Fatal("the spoofed owner.confirm must fail to route: From was pinned to worker, and no worker->owner.confirm route exists")
 	}
@@ -109,17 +110,17 @@ func (spoofingWorker) Handle(ctx context.Context, a envelope.Envelope, report wo
 	return report(ctx, forged) // report() must pin From back to RoleWorker
 }
 
-// FR-BRN-004 defense in depth: even a correctly-routed instruction is refused by the
-// funding agent when it carries no owner approval.
-func TestFunding_RefusesUnapprovedInstruction(t *testing.T) {
+// FR-BRN-004: funding's only door demands an approval-minted Grant; a forged empty
+// one is refused and nothing is recorded.
+func TestFunding_RefusesForgedGrant(t *testing.T) {
 	_, _, fund := newTestBrain(t)
 
-	err := fund.Execute(context.Background(), funding.Instruction{JobID: "job_x", Kind: "request_advance", AmountMicros: 12_500_000})
+	err := fund.Execute(context.Background(), approval.Grant{})
 	if err == nil {
-		t.Fatal("an instruction without owner approval must be refused")
+		t.Fatal("a forged grant must be refused")
 	}
 	if got := len(fund.Executed()); got != 0 {
-		t.Errorf("refused instruction was recorded as executed: %d", got)
+		t.Errorf("refused grant was recorded as executed: %d", got)
 	}
 }
 

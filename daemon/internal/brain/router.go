@@ -40,6 +40,10 @@ type Brain struct {
 	routes  map[routeKey]handler
 	jobs    map[string]*jobState
 	scoper  Scoper
+	// qaKind is the registered QA worker's kind ("" = no QA slot; Phase-1 flow).
+	qaKind string
+	// maxRevisions bounds the QA bounce loop (G9 pin 2). Exhausted -> escalate to owner.
+	maxRevisions int
 }
 
 // New wires a Brain. The funding agent pointer is handed here and nowhere else.
@@ -53,21 +57,34 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 		jobs:    make(map[string]*jobState),
 	}
 
-	// THE routing table — the complete set of flows in the system (G3).
-	// Owner→Brain and Worker→Brain are the only inbound edges; everything else
-	// (Brain→Worker assignment, Brain→Funding instruction) is an action Brain
-	// takes as a CONSEQUENCE of routing, not an edge someone else can invoke.
+	b.maxRevisions = 2
+
+	// THE routing table — owner-inbound flows (G3). Worker-inbound flows are NOT here:
+	// they arrive only through the kind-stamped callback a worker was handed at
+	// assignment (deliverFromWorker), so Brain always knows WHICH worker kind is
+	// speaking — a stamp the worker cannot forge, because the closure applies it.
 	b.routes = map[routeKey]handler{
 		{envelope.RoleOwner, envelope.TypeOwnerRequest}: b.onOwnerRequest,
 		{envelope.RoleOwner, envelope.TypeOwnerConfirm}: b.onOwnerConfirm,
 		{envelope.RoleOwner, envelope.TypeOwnerReject}:  b.onOwnerReject,
-
-		{envelope.RoleWorker, envelope.TypeWorkerProgress}: b.onWorkerProgress,
-		{envelope.RoleWorker, envelope.TypeWorkerReport}:   b.onWorkerReport,
-		{envelope.RoleWorker, envelope.TypeWorkerFailure}:  b.onWorkerFailure,
 	}
 	return b
 }
+
+// RegisterQAWorker plugs the QA slot in and activates the G9 review loop: from now on
+// every author draft is routed through QA before DeliveryReady (FR-QA-001).
+func (b *Brain) RegisterQAWorker(w worker.Worker) error {
+	if err := b.RegisterWorker(w); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.qaKind = w.Kind()
+	b.mu.Unlock()
+	return nil
+}
+
+// SetMaxRevisions bounds the bounce loop (default 2).
+func (b *Brain) SetMaxRevisions(n int) { b.mu.Lock(); b.maxRevisions = n; b.mu.Unlock() }
 
 // RegisterWorker plugs a worker slot in. Workers are registered BY KIND; Brain picks
 // which kind serves a job — a Worker never chooses its own work (PRD §3).
@@ -105,20 +122,56 @@ func (b *Brain) Deliver(ctx context.Context, e envelope.Envelope) error {
 	return h(ctx, e)
 }
 
-// workerReport builds the single outbound capability a Worker receives (worker.Report).
-// It pins From to RoleWorker regardless of what the worker put in the envelope, so a
-// compromised worker cannot impersonate the owner to reach an owner-only route.
-func (b *Brain) workerReport() worker.Report {
+// workerReportFor builds the single outbound capability a Worker receives. It pins
+// From to RoleWorker AND stamps the worker KIND and JOB Brain assigned — all applied
+// by the closure, none forgeable by the worker. The kind stamp makes "only the
+// registered QA worker can issue a verdict" structural (G9 pin 1); the job stamp stops
+// a worker reporting against a DIFFERENT job by swapping e.JobID (review-batch fix).
+func (b *Brain) workerReportFor(kind, jobID string) worker.Report {
 	return func(ctx context.Context, e envelope.Envelope) error {
+		if e.JobID != jobID {
+			return fmt.Errorf("worker %q reported job %q but was assigned job %q; cross-job report refused", kind, e.JobID, jobID)
+		}
 		e.From = envelope.RoleWorker
-		return b.Deliver(ctx, e)
+		return b.deliverFromWorker(ctx, kind, e)
 	}
 }
 
-// assign dispatches a job's scope to the registered worker of the given kind.
+// deliverFromWorker records and dispatches one worker message with its brain-stamped
+// kind. The complete set of worker-inbound flows is this switch.
+func (b *Brain) deliverFromWorker(ctx context.Context, kind string, e envelope.Envelope) error {
+	ctx = logging.WithJob(ctx, e.JobID)
+
+	if _, err := b.store.Append(ctx, store.Event{
+		Kind:     "brain.msg." + string(e.Type),
+		EntityID: e.JobID,
+		Actor:    string(envelope.RoleWorker) + ":" + kind,
+		Payload:  e,
+	}); err != nil {
+		return fmt.Errorf("recording %s from %s: %w", e.Type, kind, err)
+	}
+
+	switch e.Type {
+	case envelope.TypeWorkerProgress:
+		return b.onWorkerProgress(ctx, e)
+	case envelope.TypeWorkerReport:
+		return b.onWorkerReport(ctx, kind, e)
+	case envelope.TypeQAVerdict:
+		return b.onQAVerdict(ctx, kind, e)
+	case envelope.TypeWorkerFailure:
+		return b.onWorkerFailure(ctx, e)
+	default:
+		logging.From(ctx, b.log).Warn("no worker route", "kind", kind, "type", string(e.Type))
+		return fmt.Errorf("no route for %s from worker kind %s", e.Type, kind)
+	}
+}
+
+// assign dispatches an assignment to the registered worker of the given kind.
+// bounceReasons and draft parameterize the G9 loop: a revision carries the QA
+// reasons back to the author; a QA assignment carries the draft under review.
 // This is Brain acting, not an inbound route — there is no envelope a spoke could
 // send that lands here.
-func (b *Brain) assign(ctx context.Context, jobID, kind string) error {
+func (b *Brain) assign(ctx context.Context, jobID, kind string, bounceReasons []string, draft *envelope.Deliverable) error {
 	b.mu.Lock()
 	w, ok := b.workers[kind]
 	js := b.jobs[jobID]
@@ -131,7 +184,7 @@ func (b *Brain) assign(ctx context.Context, jobID, kind string) error {
 	}
 
 	assignment, err := envelope.New(jobID, envelope.RoleBrain, envelope.TypeAssignment,
-		worker.Assignment{Scope: js.Scope})
+		worker.Assignment{Scope: js.Scope, BounceReasons: bounceReasons, Draft: draft})
 	if err != nil {
 		return err
 	}
@@ -141,11 +194,13 @@ func (b *Brain) assign(ctx context.Context, jobID, kind string) error {
 	}); err != nil {
 		return err
 	}
-	if err := b.memory.SetAssignedWorker(jobID, kind); err != nil {
-		return err
+	if draft == nil {
+		if err := b.memory.SetAssignedWorker(jobID, kind); err != nil {
+			return err
+		}
 	}
 
-	// Synchronous in Phase 1: the worker runs inline and reports through the one
-	// callback it is handed. Phase 2 moves this onto the supervisor.
-	return w.Handle(ctx, assignment, b.workerReport())
+	// Synchronous in Phase 1/2: the worker runs inline and reports through the one
+	// kind-stamped callback it is handed.
+	return w.Handle(ctx, assignment, b.workerReportFor(kind, jobID))
 }
