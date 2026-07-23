@@ -18,7 +18,11 @@ document is the missing half of the done-criterion ("schema committed").
   line with the sidecar's on-host trust posture. **Any non-loopback bind MUST add bearer
   auth first** (a `SNAPFALL_OWNER_TOKEN` env, ≥32 bytes, same rules as the sidecar's
   `SIDECAR_AUTH_TOKEN`). Binding non-loopback without it is a misconfiguration the daemon
-  refuses at startup.
+  refuses at startup — and when the token is set it is **enforced on every request**
+  (`Authorization: Bearer <token>`, constant-time compare, else `401 UNAUTHENTICATED`), on
+  every route including the stream. A token that only gates startup while requests go
+  unauthenticated would be an auth bypass, not auth. `by` on a decision is a recorded
+  label; the bearer token is the authenticated identity when configured.
 
 ## 2. The events stream — ONE stream, TWO sources (decided)
 
