@@ -260,7 +260,7 @@ Worker need = a fuzzy description, embedded and similarity-matched against Circl
 |---|---|
 | Brain (control plane) | Circle CLI + Circle Skills |
 | Funding agent | Circle Agent Wallet spend-policy (outer guard) + deterministic policy engine (inner) |
-| DD-worker discovery + purchases | Circle Agent Marketplace + **Circle's Gateway Nanopayments SDK/facilitator** (`@circle-fin/x402-batching`, agents.circle.com) — **never** the generic x402.org facilitator or another vendor's (Coinbase/Stripe/Cloudflare also implement x402; judges score *Circle's* tools) |
+| DD-worker discovery + purchases | Circle Agent Marketplace *(discovery: **roadmap** — the shipped code embedding-matches against a local stand-in catalog, our own V2 paid API, behind a `Catalog` seam built for the marketplace; no marketplace API is integrated today)* + **Circle's Gateway Nanopayments SDK/facilitator** (`@circle-fin/x402-batching`, agents.circle.com) — **never** the generic x402.org facilitator or another vendor's (Coinbase/Stripe/Cloudflare also implement x402; judges score *Circle's* tools) |
 | Compliance step | Circle Compliance Engine, direct |
 | Billing agent | Arc Explorer + Gateway settlement records |
 | JobVault / FloatPool / Waterfall | **Ours** — Arc supplies sub-second finality + USDC-native gas; the primitive is our own engineering |
@@ -476,7 +476,7 @@ Canonical IDs only; the invented AT-20/AT-21 from the source material are delibe
 | Arc (chain) | All contracts, settlement, explorer | Sub-second finality; USDC-native gas. The primitive (JobVault/FloatPool/waterfall) is our own engineering on top. |
 | Circle CLI + Circle Skills | Brain control plane | Agent-native command interface for the dispatch role. |
 | Circle Agent Wallet | Funding agent outer guard | Spend-policy (allowlists, time-bound limits) enforced at the wallet layer. |
-| Circle Agent Marketplace | Worker service discovery | Embedding similarity match against the catalog. |
+| Circle Agent Marketplace | Worker service discovery | Embedding similarity match against the catalog. **Status: roadmap** — shipped discovery matches a local stand-in catalog (our own V2 paid API) behind a `Catalog` seam; the marketplace slots into that seam, it is not integrated today. |
 | Circle Gateway Nanopayments SDK / facilitator (`@circle-fin/x402-batching`, agents.circle.com) | DD-worker purchases (x402) | **Circle's facilitator only** — never generic x402.org, never another vendor's implementation (AT-18). |
 | Circle Compliance Engine | DD-worker compliance step | Direct integration; folded into the DD-worker as one task step. |
 | Arc Explorer + Gateway settlement records | Billing agent; audit story | Invoice source data; WorkforceRegistry (roadmap) leans on Explorer the same way. |
