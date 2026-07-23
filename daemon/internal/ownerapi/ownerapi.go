@@ -53,6 +53,12 @@ type Server struct {
 	VerifyAccept func(jobID, token string) bool
 	Accept       func(ctx context.Context, jobID string) (string, error)
 	JobState     func(jobID string) (string, bool)
+
+	// ProposeAdvance is the owner-initiated advance trigger (the snap's proposal),
+	// wired to Brain's single site. The proposal lands in THIS API's own approvals
+	// inbox pre-marked for human approval — proposing and approving are two separate
+	// owner actions, on the record.
+	ProposeAdvance func(ctx context.Context, jobID string) (approval.Request, error)
 }
 
 // New builds the server.
@@ -76,6 +82,7 @@ func (s *Server) Handler() http.Handler {
 	owner.HandleFunc("POST /api/v1/jobs/{id}/invoice", s.handleInvoiceGenerate)
 	owner.HandleFunc("GET /api/v1/jobs/{id}/invoice", s.handleInvoiceLatest)
 	owner.HandleFunc("POST /api/v1/jobs/{id}/accept-link", s.handleMintAcceptLink)
+	owner.HandleFunc("POST /api/v1/jobs/{id}/advance", s.handleProposeAdvance)
 
 	root := http.NewServeMux()
 	root.HandleFunc("POST /api/v1/customer/jobs/{id}/accept", s.withCustomerAuth(s.handleCustomerAccept))
