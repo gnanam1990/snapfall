@@ -177,7 +177,12 @@ func (b *Brain) Recover() error {
 		}
 		b.jobs[id] = js
 	}
-	return nil
+	b.mu.Unlock()
+	// Memory wins: rewrite the SQL jobs projection from the recovered memory files, so
+	// any drift or tampering in the derived rows heals at every startup (project.go).
+	err = b.ReprojectJobs(context.Background())
+	b.mu.Lock()
+	return err
 }
 
 // inFlightStages are the worker-active stages: a job here when the process died was
