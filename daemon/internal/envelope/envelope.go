@@ -97,11 +97,11 @@ type ComplianceResult struct {
 // moment two purchases share an amount).
 type SourceProvenance struct {
 	Resource     string `json:"resource"`
-	Merchant     string `json:"merchant"`               // payTo (the F4 merchant-identity seam)
-	AmountAtomic string `json:"amountAtomic"`           // 6dp atomic USDC
-	ReceiptHash  string `json:"receiptHash,omitempty"`  // bytes32 0x-hex; the exact Billing join key
-	PaymentID    string `json:"paymentId,omitempty"`    // sidecar paymentId once real
-	Status       string `json:"status"`                 // "proven" | "pending-integration"
+	Merchant     string `json:"merchant"`              // payTo (the F4 merchant-identity seam)
+	AmountAtomic string `json:"amountAtomic"`          // 6dp atomic USDC
+	ReceiptHash  string `json:"receiptHash,omitempty"` // bytes32 0x-hex; the exact Billing join key
+	PaymentID    string `json:"paymentId,omitempty"`   // sidecar paymentId once real
+	Status       string `json:"status"`                // "proven" | "pending-integration"
 }
 
 // QAVerdict is the QA-worker's review result (payload of TypeQAVerdict).

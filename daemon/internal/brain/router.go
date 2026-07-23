@@ -50,6 +50,12 @@ type Brain struct {
 	orgID     string
 	// purchaser routes worker spend requests through policy+approval (nil = refused).
 	purchaser Purchaser
+	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
+	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
+	// package tests/demos (tasks then detach from the request ctx, as before).
+	rootCtx context.Context
+	// recovered guards Recover() exactly-once per Brain (serve pin 1).
+	recovered bool
 	// beforeFreezeCheck is a TEST-ONLY hook (nil in production) invoked at worker-start,
 	// immediately before the freeze gate — it lets a test engage a freeze deterministically
 	// in the dispatch->start window to pin that "begins" means worker-start (decision #3).
@@ -275,14 +281,26 @@ func (b *Brain) deliverFromWorker(ctx context.Context, kind string, e envelope.E
 // the QA loop (author<->QA) run INLINE via runTask on this same goroutine, so one handle
 // covers the whole interaction and its done channel fires exactly at the terminal state.
 func (b *Brain) dispatchTask(ctx context.Context, jobID, kind string, bounceReasons []string, draft *envelope.Deliverable) error {
+	// SHUTDOWN RULE (serve step): once the daemon root context is cancelled, NO new task
+	// dispatches — the same "stops new claims" posture as the freeze. In-flight tasks are
+	// not aborted here; they complete or return via their own ctx (see taskContext).
+	b.mu.Lock()
+	root := b.rootCtx
+	b.mu.Unlock()
+	if root != nil && root.Err() != nil {
+		return fmt.Errorf("dispatch refused: daemon is shutting down (%w)", root.Err())
+	}
+
 	h := &taskHandle{done: make(chan struct{})}
 	b.mu.Lock()
 	b.tasks[jobID] = h
 	b.mu.Unlock()
 
-	// Detach from the caller's request context so the task is not killed when Confirm()
-	// returns — that decoupling is the whole point of going async.
-	taskCtx := context.WithoutCancel(ctx)
+	// The task context is decoupled from the caller's request (Confirm() returning must
+	// not kill the task) but — when serving — BOUND to the daemon root, so SIGTERM stops
+	// blocked work. Cancellation is never allowed past a payment's write-ahead claim; the
+	// Purchaser shields approval.Execute (see purchasing.execute).
+	taskCtx := b.taskContext(ctx)
 	go func() {
 		err := b.runTask(taskCtx, jobID, kind, bounceReasons, draft)
 		b.mu.Lock()
@@ -291,6 +309,46 @@ func (b *Brain) dispatchTask(ctx context.Context, jobID, kind string, bounceReas
 		close(h.done)
 	}()
 	return nil
+}
+
+// taskContext derives the context a task goroutine runs under. With a root context set
+// (the serving daemon), tasks are children of the DAEMON's lifetime — cancelled on
+// SIGTERM — not of the owner's request. Without one (package tests, demos), the prior
+// behavior holds: detached from the request, never cancelled.
+func (b *Brain) taskContext(req context.Context) context.Context {
+	b.mu.Lock()
+	root := b.rootCtx
+	b.mu.Unlock()
+	if root != nil {
+		return root
+	}
+	return context.WithoutCancel(req)
+}
+
+// SetRootContext binds task goroutines to the daemon's lifetime (the serve step): on
+// SIGTERM, blocked tasks wake and return, new dispatches are refused, and in-flight
+// payment executions still complete past their claim (the shutdown analogue of the
+// freeze in-flight ruling). Call once at serve time, before any dispatch.
+func (b *Brain) SetRootContext(ctx context.Context) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rootCtx = ctx
+}
+
+// WaitTasks blocks until every currently-tracked task goroutine has finished — the
+// shutdown drain. Blocked tasks are woken by root-context cancellation (they return
+// interrupted); an Execute past its claim completes under the Purchaser's shield, so
+// this wait is bounded by real work, not by an owner who never answers.
+func (b *Brain) WaitTasks() {
+	b.mu.Lock()
+	handles := make([]*taskHandle, 0, len(b.tasks))
+	for _, h := range b.tasks {
+		handles = append(handles, h)
+	}
+	b.mu.Unlock()
+	for _, h := range handles {
+		<-h.done
+	}
 }
 
 // AwaitTask blocks until the job's dispatched task reaches its terminal state and returns

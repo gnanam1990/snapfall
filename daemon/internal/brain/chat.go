@@ -136,6 +136,18 @@ func (b *Brain) Reject(ctx context.Context, jobID, by, reason string) error {
 // instead of vanishing from the router's working set. The memory files are the
 // durable truth (G4); this is the read-back.
 func (b *Brain) Recover() error {
+	// EXACTLY-ONCE (serve pin 1): a second Recover on the same Brain is refused, not
+	// silently merged — two replays over the same event log is the double-recovery hazard
+	// flagged on #4. The daemon has one wiring point (pinned by a source-scan test in
+	// cmd/snapfall); this guard makes the per-Brain half structural.
+	b.mu.Lock()
+	if b.recovered {
+		b.mu.Unlock()
+		return fmt.Errorf("brain already recovered: a second Recover would replay state over a live working set")
+	}
+	b.recovered = true
+	b.mu.Unlock()
+
 	ids, err := b.memory.List()
 	if err != nil {
 		return fmt.Errorf("recovering brain jobs: %w", err)

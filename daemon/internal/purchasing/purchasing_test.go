@@ -2,6 +2,7 @@ package purchasing
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -211,5 +212,31 @@ func TestPurchaser_FreezeBetweenDecisionAndExecuteIsRefused(t *testing.T) {
 	}
 	if out.Status != "denied" || out.Code != "execution-refused" {
 		t.Fatalf("freeze between decision and execute was not refused: %+v", out)
+	}
+}
+
+// Serve pin 2: shutdown landing BEFORE the write-ahead claim is a safe refusal — the
+// purchase is interrupted, NOTHING is claimed, and restart has nothing to double-pay.
+// (Whichever select branch wins the decided-vs-cancelled race, the outcome is the same
+// wrapped context error and zero claims — deterministic assertions.) Cancellation PAST the
+// claim is impossible by construction: execute() checks ctx once before the claim and then
+// hands approval.Execute a context.WithoutCancel — no cancellable context exists in scope
+// beyond that line.
+func TestPurchaser_ShutdownBeforeClaimRefusesSafely(t *testing.T) {
+	p, l, _, st := newPurchaser(t)
+	ctx, sigterm := context.WithCancel(context.Background())
+	p.afterSubmit = func(reqID string) {
+		// The owner approves — and shutdown lands in the same instant.
+		l.Decide(context.Background(), reqID, approval.DecideApprove, "gnanam", "ok")
+		sigterm()
+	}
+	_, err := p.Decide(ctx, intent(policy.DemoMerchantProfile, 4_000_000))
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("want an interruption wrapping context.Canceled, got %v", err)
+	}
+	var n int
+	st.DB().QueryRow(`SELECT COUNT(*) FROM events WHERE kind='payment.executing'`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("a write-ahead claim was written for an interrupted purchase (%d) — double-pay hazard on restart", n)
 	}
 }

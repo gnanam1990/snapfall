@@ -122,7 +122,9 @@ func (p *Purchaser) Decide(ctx context.Context, in brain.PurchaseIntent) (worker
 func (p *Purchaser) awaitAndExecute(ctx context.Context, intent approval.Intent, req *approval.Request) (worker.PurchaseOutcome, error) {
 	select {
 	case <-ctx.Done():
-		return worker.PurchaseOutcome{}, ctx.Err()
+		// Shutdown (or caller cancellation) while awaiting the owner: safe interruption —
+		// no claim exists yet; the task ends and restart escalates it (serve pin 3).
+		return worker.PurchaseOutcome{}, fmt.Errorf("purchase interrupted awaiting the owner's decision: %w", ctx.Err())
 	case <-p.life.DecisionSignal(req.ID):
 		// The owner decided (or expiry was marked). Read the terminal state.
 	case <-p.clock.Deadline(req.ExpiresAt):
@@ -160,7 +162,16 @@ func (p *Purchaser) awaitAndExecute(ctx context.Context, intent approval.Intent,
 // the F2-STUB executor: it moves no money and records the pending settlement honestly. A
 // freeze that engaged since the policy decision is refused HERE by the existing gate.
 func (p *Purchaser) execute(ctx context.Context, intent approval.Intent, reqID string, d policy.Decision) (worker.PurchaseOutcome, error) {
-	execErr := p.life.Execute(ctx, intent, reqID, func(ctx context.Context, g approval.Grant) error {
+	// SHUTDOWN RULE (serve pin 2, the freeze in-flight ruling applied to SIGTERM):
+	// cancellation is honored ONLY here, BEFORE the write-ahead claim — a safe refusal
+	// that consumes nothing. Past this check, Execute runs under a shielded context:
+	// cancellation can never abort between the claim and completion, because aborting
+	// there recreates the exact double-pay hazard the in-flight ruling exists to avoid.
+	if err := ctx.Err(); err != nil {
+		return worker.PurchaseOutcome{}, fmt.Errorf("purchase interrupted before execution (no claim written): %w", err)
+	}
+	shielded := context.WithoutCancel(ctx)
+	execErr := p.life.Execute(shielded, intent, reqID, func(ctx context.Context, g approval.Grant) error {
 		// ── THE F2 SEAM ── the sidecar /v1/pay call lands here. Until it does, no money
 		// moves; record the intent to settle so the log is honest, and return success so
 		// the approval is consumed exactly once (the real payer replaces this body in F2).
