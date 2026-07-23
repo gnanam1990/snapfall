@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/gnanam1990/snapfall/daemon/internal/billing"
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
 	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
@@ -50,6 +51,10 @@ type Brain struct {
 	orgID     string
 	// purchaser routes worker spend requests through policy+approval (nil = refused).
 	purchaser Purchaser
+	// billingAgent is the G12 read-side invoice formatter — held by Brain alone, invoked
+	// from the single GenerateInvoice site. invoiceMu serializes version assignment.
+	billingAgent *billing.Agent
+	invoiceMu    sync.Mutex
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).

@@ -9,6 +9,7 @@ package ownerapi
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
+	"github.com/gnanam1990/snapfall/daemon/internal/billing"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
 
@@ -37,6 +39,11 @@ type Server struct {
 	// the outbox publisher (the store is the bus's source of truth; seq gives replay and
 	// Last-Event-ID for free).
 	pollEvery time.Duration
+	// Generate is the invoice-generation seam (H2 §4.1), wired by the daemon to Brain's
+	// GenerateInvoice with the owner-request trigger. Kept as a seam so this package
+	// never holds the billing agent — Brain does, from its single pinned site. Nil until
+	// wired: POST then refuses honestly (503 NOT_WIRED) while reads still work.
+	Generate func(ctx context.Context, jobID string) (billing.Record, error)
 }
 
 // New builds the server.
@@ -53,6 +60,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/approvals", s.handleApprovals)
 	mux.HandleFunc("POST /api/v1/approvals/{id}/decision", s.handleDecision)
 	mux.HandleFunc("GET /api/v1/events/stream", s.handleStream)
+	mux.HandleFunc("POST /api/v1/jobs/{id}/invoice", s.handleInvoiceGenerate)
+	mux.HandleFunc("GET /api/v1/jobs/{id}/invoice", s.handleInvoiceLatest)
 	return s.withAuth(mux)
 }
 
@@ -200,6 +209,62 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 	}
+}
+
+// ── Invoices (H2 §4) ───────────────────────────────────────────────────────
+
+// ownerInvoiceView projects a Record for the wire: version, trigger, the OWNER copy,
+// the reconciliation, and the alerts. The customer copy is deliberately absent — the
+// copy-serving seam is undecided (H2 §4.2), so no daemon route serves it; putting it
+// on this wire "because the owner is trusted anyway" is how an unserved copy quietly
+// becomes a served one.
+func ownerInvoiceView(rec billing.Record) map[string]any {
+	return map[string]any{
+		"version": rec.Version, "trigger": rec.Trigger,
+		"invoice":        rec.Owner,
+		"reconciliation": rec.Reconciliation,
+		"alerts":         rec.Alerts,
+	}
+}
+
+// POST /api/v1/jobs/{id}/invoice — generate now (H2 §4.1): the owner-request trigger.
+func (s *Server) handleInvoiceGenerate(w http.ResponseWriter, r *http.Request) {
+	if s.Generate == nil {
+		writeErr(w, http.StatusServiceUnavailable, "NOT_WIRED", "invoice generation is not wired in this build", nil)
+		return
+	}
+	rec, err := s.Generate(r.Context(), r.PathValue("id"))
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, ownerInvoiceView(rec))
+	case errors.Is(err, billing.ErrUnknownJob):
+		writeErr(w, http.StatusNotFound, "UNKNOWN_JOB", "the daemon has no such job", nil)
+	default:
+		writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+	}
+}
+
+// GET /api/v1/jobs/{id}/invoice — the latest recorded version (H2 §4.2). Never
+// generates: reads the durable billing.invoice log the same way the stream does.
+func (s *Server) handleInvoiceLatest(w http.ResponseWriter, r *http.Request) {
+	var payload string
+	err := s.st.DB().QueryRowContext(r.Context(),
+		`SELECT payload_json FROM events WHERE kind='billing.invoice' AND entity_id=?
+		 ORDER BY seq DESC LIMIT 1`, r.PathValue("id")).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "NO_INVOICE", "no invoice version has been generated for this job", nil)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	var rec billing.Record
+	if err := json.Unmarshal([]byte(payload), &rec); err != nil {
+		writeErr(w, http.StatusInternalServerError, "INTERNAL", "corrupt invoice record", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, ownerInvoiceView(rec))
 }
 
 // ── The events stream (H2 §2) ──────────────────────────────────────────────
