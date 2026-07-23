@@ -89,6 +89,7 @@ func (p *Purchaser) Decide(ctx context.Context, in brain.PurchaseIntent) (worker
 		Purpose:         in.Purpose,
 		Nonce:           nonce,
 		ExpiresAt:       now.Add(p.window),
+		AlternativeTo:   in.AlternativeTo,
 	}
 
 	res, err := p.life.Submit(ctx, intent)
@@ -144,8 +145,9 @@ func (p *Purchaser) awaitAndExecute(ctx context.Context, intent approval.Intent,
 	case approval.StateRejected, approval.StateAlternativeRequested:
 		return worker.PurchaseOutcome{
 			Decision: string(policy.Deny), Status: "denied",
-			Reason: nonEmpty(snap.Reason, "owner declined the purchase"),
-			Code:   "owner-" + string(snap.State),
+			Reason:    nonEmpty(snap.Reason, "owner declined the purchase"),
+			Code:      "owner-" + string(snap.State),
+			RequestID: req.ID, // the anchor a linked alternative's AlternativeTo points at
 		}, nil
 	case approval.StatePending:
 		// We only wake on a decision (which leaves Pending) or the deadline. Still Pending
@@ -188,7 +190,8 @@ func (p *Purchaser) execute(ctx context.Context, intent approval.Intent, reqID s
 	case execErr == nil:
 		return worker.PurchaseOutcome{
 			Decision: decisionLabel(d), Status: "approved-pending-integration",
-			Reason: "approved by policy/owner; money movement pending the F2 sidecar client",
+			Reason:    "approved by policy/owner; money movement pending the F2 sidecar client",
+			RequestID: reqID,
 		}, nil
 	case errors.Is(execErr, approval.ErrExpired):
 		return expiredOutcome(), nil

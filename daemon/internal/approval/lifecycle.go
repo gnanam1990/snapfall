@@ -163,6 +163,11 @@ type Lifecycle struct {
 	// always wires it. Gates: Submit before the nonce claim, Execute before the
 	// write-ahead claim and Grant minting.
 	Freeze *freeze.Registry
+	// Pending, when set, is invoked (outside locks, with a COPY) each time Submit opens a
+	// request that needs a human decision — the owner surface's notification seam: a
+	// dashboard or Telegram wiring renders the approval prompt from exactly this. Tests
+	// drive deterministic owner decisions through it too.
+	Pending func(Request)
 
 	mu       sync.Mutex
 	requests map[string]*Request
@@ -294,6 +299,11 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 	l.mu.Lock()
 	l.requests[req.ID] = req
 	l.mu.Unlock()
+
+	// Notify the owner surface of a request awaiting a human (outside all locks; a copy).
+	if req.State == StatePending && l.Pending != nil {
+		l.Pending(*req)
+	}
 
 	// Return a COPY: mutating the returned struct must never move gate state
 	// (review-batch fix; the map-owned request stays private).

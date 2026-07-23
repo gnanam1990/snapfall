@@ -195,6 +195,9 @@ type PurchaseIntent struct {
 	AmountMicros    int64
 	MaxAmountMicros int64
 	Purpose         string
+	// AlternativeTo carries the worker's causal link to a request-alternative decision
+	// (G7); intake validates it, so a forged value is refused, never trusted.
+	AlternativeTo string
 }
 
 // SetPurchaser wires the policy+approval pipeline Brain routes worker spends through.
@@ -220,7 +223,7 @@ func (b *Brain) purchaseFor(kind, jobID string) worker.Purchase {
 			JobID: jobID, AgentKind: kind,
 			Merchant: req.Merchant, Resource: req.Resource,
 			AmountMicros: req.AmountMicros, MaxAmountMicros: req.MaxAmountMicros,
-			Purpose: req.Purpose,
+			Purpose: req.Purpose, AlternativeTo: req.AlternativeTo,
 		})
 	}
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
 	"github.com/gnanam1990/snapfall/daemon/internal/brain"
 	"github.com/gnanam1990/snapfall/daemon/internal/config"
-	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
 	"github.com/gnanam1990/snapfall/daemon/internal/events"
 	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
@@ -280,7 +279,22 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	}
 	br := brain.New(log, st, mem, funding.New())
 	br.SetScoper(brain.StubScoper{})
-	if err := br.RegisterWorker(buyingDD{}); err != nil {
+	// The G8 adaptive DD worker with its scripted source plan: the \$0.04 profile primary
+	// (auto-approves under DemoPolicy) with the \$0.06 benchmark as the cheaper fallback.
+	// The AT-04 reject-and-adapt beat needs an owner surface to answer the escalation, so
+	// the served one-shot exercises the auto path; the adaptive path is pinned by the
+	// integration tests until the owner surface (dashboard/Telegram) lands.
+	dd := worker.NewAdaptiveDD(worker.StubCompliance{}, []worker.SourceNeed{{
+		Primary: worker.PurchaseRequest{
+			Merchant: policy.DemoMerchantProfile, Resource: "GET /v1/company-profile",
+			AmountMicros: 40_000, MaxAmountMicros: 40_000, Purpose: "company profile source",
+		},
+		Cheaper: &worker.PurchaseRequest{
+			Merchant: policy.DemoMerchantBenchmark, Resource: "GET /v1/benchmark-summary",
+			AmountMicros: 60_000, MaxAmountMicros: 60_000, Purpose: "benchmark summary (cheaper source)",
+		},
+	}}, 1)
+	if err := br.RegisterWorker(dd); err != nil {
 		return nil, err
 	}
 	if err := br.RegisterQAWorker(qa.Worker{}); err != nil {
@@ -316,40 +330,4 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	}
 	log.Info("brain serving", "jobs_recovered", br.JobCount())
 	return br, nil
-}
-
-// buyingDD wraps the scripted StubDD with ONE real source purchase through the
-// Brain-granted Purchase capability — the served binary's first genuine policy decision
-// (the $0.04 auto-approve beat). The adaptive DD loop (AT-04 reject -> cheaper source) is
-// the next G8 step; this is the minimal honest bridge, and it fabricates nothing: the
-// purchase outcome is whatever the real pipeline returns.
-type buyingDD struct{}
-
-func (buyingDD) Kind() string { return "due-diligence" }
-
-func (buyingDD) Handle(ctx context.Context, assignment envelope.Envelope, report worker.Report, purchase worker.Purchase) error {
-	var a worker.Assignment
-	if err := assignment.Decode(&a); err != nil {
-		return err
-	}
-	if len(a.BounceReasons) == 0 { // first draft only; a QA revision re-uses the bought source
-		out, err := purchase(ctx, worker.PurchaseRequest{
-			Merchant: policy.DemoMerchantProfile, Resource: "GET /v1/company-profile",
-			AmountMicros: 40_000, MaxAmountMicros: 40_000,
-			Purpose: "company profile source for " + assignment.JobID,
-		})
-		if err != nil {
-			return fmt.Errorf("source purchase: %w", err)
-		}
-		progress, perr := envelope.New(assignment.JobID, envelope.RoleWorker, envelope.TypeWorkerProgress, map[string]any{
-			"stage": "source-purchase", "decision": out.Decision, "status": out.Status, "reason": out.Reason,
-		})
-		if perr != nil {
-			return perr
-		}
-		if err := report(ctx, progress); err != nil {
-			return err
-		}
-	}
-	return worker.StubDD{}.Handle(ctx, assignment, report, purchase)
 }
