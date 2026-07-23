@@ -146,3 +146,41 @@ func TestAPI_NonLoopbackBindRefusedWithoutToken(t *testing.T) {
 		t.Fatalf("non-loopback bind without token: %v, want refusal", err)
 	}
 }
+
+// Security-review fix: when a token is configured it is ENFORCED on every request —
+// wrong or missing bearer is 401 on every route, and the correct bearer works. A token
+// that only gated startup while requests went unauthenticated was an auth bypass.
+func TestAPI_TokenEnforcedOnEveryRequest(t *testing.T) {
+	t.Setenv("SNAPFALL_OWNER_TOKEN", strings.Repeat("t", 32))
+	s, l := newAPI(t) // captures the token at construction
+	req := submitPending(t, l)
+	h := s.Handler()
+
+	// No bearer -> 401 on both surfaces; nothing is decided.
+	if w, _ := do(t, h, "GET", "/api/v1/approvals", ""); w.Code != 401 {
+		t.Fatalf("approvals without bearer: %d, want 401", w.Code)
+	}
+	body := `{"kind":"approve","by":"gnanam","reason":"ok","intentHash":"` + req.IntentHash + `"}`
+	if w, _ := do(t, h, "POST", "/api/v1/approvals/"+req.ID+"/decision", body); w.Code != 401 {
+		t.Fatalf("decision without bearer: %d, want 401", w.Code)
+	}
+	if snap, _ := l.Snapshot(req.ID); snap.State != approval.StatePending {
+		t.Fatalf("an unauthenticated decision landed: %v", snap.State)
+	}
+
+	// Wrong bearer -> 401. Correct bearer -> the decision lands.
+	r := httptest.NewRequest("POST", "/api/v1/approvals/"+req.ID+"/decision", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer wrong")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 401 {
+		t.Fatalf("wrong bearer: %d, want 401", w.Code)
+	}
+	r = httptest.NewRequest("POST", "/api/v1/approvals/"+req.ID+"/decision", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+strings.Repeat("t", 32))
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("correct bearer: %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+}

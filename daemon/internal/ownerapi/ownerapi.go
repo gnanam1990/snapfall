@@ -8,6 +8,7 @@ package ownerapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
@@ -27,6 +29,10 @@ type Server struct {
 	life *approval.Lifecycle
 	st   *store.Store
 	log  *slog.Logger
+	// token is SNAPFALL_OWNER_TOKEN, captured at construction. When set it is ENFORCED on
+	// every request (bearer auth, constant-time) — not a startup permission slip. When
+	// empty, the posture is loopback-only and Run refuses any non-loopback bind (H2 §1).
+	token string
 	// pollEvery is the SSE reader's cadence over the events table — the same pattern as
 	// the outbox publisher (the store is the bus's source of truth; seq gives replay and
 	// Last-Event-ID for free).
@@ -35,7 +41,7 @@ type Server struct {
 
 // New builds the server.
 func New(life *approval.Lifecycle, st *store.Store, log *slog.Logger) *Server {
-	return &Server{life: life, st: st, log: log, pollEvery: 200 * time.Millisecond}
+	return &Server{life: life, st: st, log: log, token: os.Getenv("SNAPFALL_OWNER_TOKEN"), pollEvery: 200 * time.Millisecond}
 }
 
 // Handler returns the H2 routes.
@@ -47,7 +53,30 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/approvals", s.handleApprovals)
 	mux.HandleFunc("POST /api/v1/approvals/{id}/decision", s.handleDecision)
 	mux.HandleFunc("GET /api/v1/events/stream", s.handleStream)
-	return mux
+	return s.withAuth(mux)
+}
+
+// withAuth enforces the bearer token on EVERY route whenever a token is configured —
+// closing the gap the security review named: a token that only gates startup while
+// requests go unauthenticated is an auth bypass, not auth. With no token configured the
+// surface is loopback-only (Run refuses other binds) and requests carry no credential;
+// `by` on a decision is then a recorded label, not an authenticated identity — exactly
+// the written H2 §1 posture, no more.
+func (s *Server) withAuth(next http.Handler) http.Handler {
+	if s.token == "" {
+		return next
+	}
+	want := []byte(s.token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := r.Header.Get("Authorization")
+		const prefix = "Bearer "
+		if !strings.HasPrefix(h, prefix) ||
+			subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(h, prefix)), want) != 1 {
+			writeErr(w, http.StatusUnauthorized, "UNAUTHENTICATED", "bearer token required", nil)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Run serves until ctx is cancelled (H2 §1). The loopback guard is enforced BEFORE
@@ -59,7 +88,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 		return fmt.Errorf("owner api addr %q: %w", addr, err)
 	}
 	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		if len(os.Getenv("SNAPFALL_OWNER_TOKEN")) < 32 {
+		if len(s.token) < 32 {
 			return fmt.Errorf("owner api: refusing non-loopback bind %q without SNAPFALL_OWNER_TOKEN (>=32 bytes) — H2 §1", addr)
 		}
 	}
