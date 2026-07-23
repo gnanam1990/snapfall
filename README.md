@@ -12,8 +12,9 @@ Arc "Programmable Money" Hackathon (Encode x Circle) · Tracks: Agentic Economy 
 ## CI
 
 Pull requests and pushes to `main` run the complete Foundry contract suite, the Go daemon
-integration suite, and the TypeScript sidecar checks. AT-16, AT-17, and AT-18 also appear as
-named acceptance gates so failures are visible without reading the full suite output.
+integration suite, and the TypeScript sidecar checks. Worker isolation, duplicate-advance
+protection, and Circle facilitator validation appear as named gates so failures are visible
+without reading the full suite output.
 
 ## Layout
 ```

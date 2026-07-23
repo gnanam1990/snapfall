@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   contracts:
-    name: Contracts and AT-17
+    name: Contracts and duplicate-advance protection
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,11 +24,12 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
       - name: Run complete contract suite
         run: forge test --root contracts -vvv
-      - name: AT-17 — second advance on a prior job reverts
+      # Work-split acceptance criterion AT-17.
+      - name: Second advance on the same job reverts
         run: forge test --root contracts --match-test secondAdvanceOnPriorJobReverts -vvv
 
   daemon:
-    name: Daemon integration and AT-16
+    name: Daemon integration and worker isolation
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -41,11 +42,12 @@ jobs:
           cache-dependency-path: daemon/go.sum
       - name: Run daemon integration suite
         run: go test -race ./...
-      - name: AT-16 — worker has no path to funding
+      # Work-split acceptance criterion AT-16.
+      - name: Worker has no path to funding
         run: go test ./internal/brain -run '^TestAT16_' -count=1
 
   sidecar:
-    name: Sidecar integration and AT-18
+    name: Sidecar integration and Circle facilitator
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -61,8 +63,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run service:test
       - run: npm run store:test
-      - name: AT-18 — Circle facilitator fixture contract
+      # Work-split acceptance criterion AT-18.
+      - name: Validate the Circle facilitator fixture contract
         run: npm run test:circle-facilitator-fixture
-      - name: AT-18 — verify V1's real fixture when supplied
+      - name: Verify the real Circle V1 fixture when supplied
         if: ${{ hashFiles('sidecar/fixtures/v1-circle-payment.json') != '' }}
         run: npm run verify:circle-facilitator-fixture -- fixtures/v1-circle-payment.json
