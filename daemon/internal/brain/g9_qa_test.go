@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
@@ -46,6 +47,7 @@ func TestAT19_PlantedClaimBlocksDeliveryReadyUntilRevised(t *testing.T) {
 	if err := b.Confirm(ctx, "job_at19", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_at19")
 
 	js, _ := b.Job("job_at19")
 	if js.Stage != StageDeliveryReady {
@@ -91,6 +93,7 @@ func TestG9_AuthorReportAloneNeverReachesDeliveryReady(t *testing.T) {
 	if err := b.Confirm(ctx, "job_stuck", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_stuck")
 
 	js, _ := b.Job("job_stuck")
 	if js.Stage != StageQAReview {
@@ -98,11 +101,69 @@ func TestG9_AuthorReportAloneNeverReachesDeliveryReady(t *testing.T) {
 	}
 }
 
+// Review fix (Anandan #4.3): a job crashed mid-review recovers its DRAFT, so a later
+// passing verdict emits a REAL delivery report rather than an empty one. Without the
+// fix, jm.Draft is empty and the recovered report is blank.
+func TestRecover_RestoresQADraftForNonEmptyReport(t *testing.T) {
+	dir := t.TempDir()
+	mem, err := NewMemoryStore(filepath.Join(dir, "jobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b1, st, _ := newTestBrain(t)
+	b1.memory = mem
+	if err := b1.RegisterQAWorker(qa.Worker{}); err != nil { // sets qaKind
+		t.Fatalf("RegisterQAWorker: %v", err)
+	}
+	// Swap in a QA worker that never verdicts, so the job parks in qa_review with a draft.
+	b1.mu.Lock()
+	b1.workers[b1.qaKind] = silentWorker{kind: b1.qaKind}
+	b1.mu.Unlock()
+	ctx := context.Background()
+
+	if _, err := b1.HandleOwnerRequest(ctx, "job_draft", "Acme Corp"); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if err := b1.Confirm(ctx, "job_draft", "gnanam"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	waitJob(b1, "job_draft")
+	if js, _ := b1.Job("job_draft"); js.Stage != StageQAReview || js.Draft == nil {
+		t.Fatalf("precondition: want qa_review with a draft, got stage=%s draft=%v", js.Stage, js.Draft)
+	}
+	// The crux of the fix: the draft is durably persisted, not memory-only.
+	if jm, _ := mem.Get("job_draft"); jm.Draft == "" {
+		t.Fatal("draft was not persisted to JobMemory — recovery would emit an empty report")
+	}
+
+	// "Restart": a fresh Brain over the same memory recovers the parked job AND its draft.
+	b2 := New(b1.log, st, mem, b1.funding)
+	b2.SetScoper(StubScoper{})
+	if err := b2.Recover(); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	b2.mu.Lock()
+	jsPtr := b2.jobs["job_draft"]
+	b2.mu.Unlock()
+	if jsPtr == nil || jsPtr.Draft == nil {
+		t.Fatalf("draft lost across restart: %+v", jsPtr)
+	}
+
+	// A passing verdict on the RECOVERED job produces a NON-EMPTY report from the draft.
+	if err := b2.markDeliveryReady(ctx, jsPtr, envelope.QAVerdict{Passed: true, Disclaimer: qa.Disclaimer}); err != nil {
+		t.Fatalf("markDeliveryReady: %v", err)
+	}
+	if jm2, _ := mem.Get("job_draft"); jm2.Report == "" {
+		t.Fatal("recovered job produced an EMPTY delivery report — the fix did not take")
+	}
+}
+
 // silentWorker accepts its assignment and says nothing.
 type silentWorker struct{ kind string }
 
 func (w silentWorker) Kind() string { return w.kind }
-func (silentWorker) Handle(context.Context, envelope.Envelope, worker.Report) error {
+func (silentWorker) Handle(context.Context, envelope.Envelope, worker.Report, worker.Purchase) error {
 	return nil
 }
 
@@ -125,7 +186,12 @@ func TestG9_ForgedVerdictFromAuthorWorkerRefused(t *testing.T) {
 	if _, err := b.HandleOwnerRequest(ctx, "job_forge", "Acme Corp"); err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	err := b.Confirm(ctx, "job_forge", "gnanam")
+	if err := b.Confirm(ctx, "job_forge", "gnanam"); err != nil {
+		t.Fatalf("confirm dispatch: %v", err)
+	}
+	// The refusal now surfaces as the async task's terminal error (the forger returns
+	// report()'s error), not Confirm()'s return.
+	err := b.AwaitTask("job_forge")
 	if err == nil {
 		t.Fatal("a self-certifying author must be refused")
 	}
@@ -143,7 +209,7 @@ func TestG9_ForgedVerdictFromAuthorWorkerRefused(t *testing.T) {
 type verdictForger struct{}
 
 func (verdictForger) Kind() string { return "due-diligence" }
-func (verdictForger) Handle(ctx context.Context, a envelope.Envelope, report worker.Report) error {
+func (verdictForger) Handle(ctx context.Context, a envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	forged, _ := envelope.New(a.JobID, envelope.RoleWorker, envelope.TypeQAVerdict, envelope.QAVerdict{
 		Passed: true, Disclaimer: qa.Disclaimer,
 	})
@@ -162,6 +228,7 @@ func TestG9_VerdictOutsideReviewRefused(t *testing.T) {
 	if err := b.Confirm(ctx, "job_done", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_done")
 
 	v, _ := envelope.New("job_done", envelope.RoleWorker, envelope.TypeQAVerdict,
 		envelope.QAVerdict{Passed: false, Reasons: []string{"replayed"}, Disclaimer: qa.Disclaimer})
@@ -211,6 +278,7 @@ func TestG9_VerdictWithoutDisclaimerRefused(t *testing.T) {
 	if err := b.Confirm(ctx, "job_nodisc", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_nodisc")
 
 	v, _ := envelope.New("job_nodisc", envelope.RoleWorker, envelope.TypeQAVerdict,
 		envelope.QAVerdict{Passed: true /* no disclaimer */})
@@ -228,7 +296,7 @@ func TestG9_VerdictWithoutDisclaimerRefused(t *testing.T) {
 type hopelessWorker struct{}
 
 func (hopelessWorker) Kind() string { return "due-diligence" }
-func (hopelessWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report) error {
+func (hopelessWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	draft := envelope.Deliverable{
 		Title: "Hopeless report", Summary: "still unsourced",
 		Claims:  []envelope.Claim{{Text: "unfixable claim", Sources: nil}},
@@ -256,6 +324,7 @@ func TestG9_ExhaustedRevisionsEscalateToOwner(t *testing.T) {
 	if err := b.Confirm(ctx, "job_hopeless", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_hopeless")
 
 	// The loop TERMINATED: escalated, not spinning, not silently complete.
 	js, _ := b.Job("job_hopeless")
@@ -295,8 +364,64 @@ func TestG9_WithoutQARegisteredPhase1FlowUnchanged(t *testing.T) {
 	if err := b.Confirm(ctx, "job_p1", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_p1")
 	js, _ := b.Job("job_p1")
 	if js.Stage != StageComplete {
 		t.Fatalf("stage %q, want complete (Phase-1 flow)", js.Stage)
+	}
+}
+
+// Review decision #1 (G8 crash-mid-task): a job recovered in a worker-active stage is
+// ESCALATED to the owner — not auto-restarted (would repeat purchases/screens) and not
+// resumed (no checkpoint). No worker is dispatched.
+func TestRecover_InterruptedTaskEscalatesNeverReRuns(t *testing.T) {
+	dir := t.TempDir()
+	mem, err := NewMemoryStore(filepath.Join(dir, "jobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Seed durable memory as if a job died mid-QA-review (a worker-active stage).
+	if err := mem.Update("job_crash", func(jm *JobMemory) {
+		jm.Scope = "Due-diligence report: Acme"
+		jm.QuoteUSDC = "25.00"
+		jm.Stage = string(StageQAReview)
+		jm.AssignedWorker = "due-diligence"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	b, st, _ := newTestBrain(t)
+	b.memory = mem
+	// A worker that must NEVER be dispatched on recovery.
+	var ran atomic.Bool
+	b.mu.Lock()
+	b.workers["due-diligence"] = windowWorker{ran: &ran}
+	b.mu.Unlock()
+
+	if err := b.Recover(); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if err := b.EscalateInterruptedTasks(ctx); err != nil {
+		t.Fatalf("EscalateInterruptedTasks: %v", err)
+	}
+
+	js, ok := b.Job("job_crash")
+	if !ok || js.Stage != StageEscalated {
+		t.Fatalf("interrupted job stage = %v (ok=%v), want escalated", js.Stage, ok)
+	}
+	jm, _ := mem.Get("job_crash")
+	if jm.Stage != string(StageEscalated) {
+		t.Fatalf("memory stage = %q, want escalated", jm.Stage)
+	}
+	if ran.Load() {
+		t.Fatal("a worker was dispatched for an interrupted task — recovery must not re-run side-effecting work")
+	}
+	// The escalation is recorded for the owner.
+	var n int
+	st.DB().QueryRow(`SELECT COUNT(*) FROM events WHERE entity_id='job_crash' AND kind LIKE 'brain.msg.%job_update'`).Scan(&n)
+	if n == 0 {
+		t.Fatal("no owner-facing escalation event recorded for the interrupted task")
 	}
 }

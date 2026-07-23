@@ -95,6 +95,10 @@ func TestIntegration_PolicyApprovalFundingOnePath(t *testing.T) {
 	if err := b.Confirm(ctx, "job_dd_1", "gnanam"); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
+	// G8: assignment is async — await the deterministic completion signal before asserting.
+	if err := b.AwaitTask("job_dd_1"); err != nil {
+		t.Fatalf("DD task: %v", err)
+	}
 	jm, err := mem.Get("job_dd_1")
 	if err != nil || jm.CompletionPct != 100 {
 		t.Fatalf("Phase 1 regressed: DD job did not complete (%+v, %v)", jm, err)

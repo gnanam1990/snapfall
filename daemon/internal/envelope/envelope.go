@@ -60,12 +60,48 @@ type Claim struct {
 	Sources []string `json:"sources"`
 }
 
-// Deliverable is the structured draft a worker submits for QA review.
+// Deliverable is the structured draft a worker submits for QA review. It is consumed by
+// the QA worker, rendered in the customer portal, and cross-referenced by Billing. The G8
+// additions are all additive (older consumers ignore them).
 type Deliverable struct {
 	Title   string   `json:"title"`
 	Summary string   `json:"summary"`
 	Claims  []Claim  `json:"claims"`
 	Sources []string `json:"sources"`
+
+	// ── G8 additions ──
+	// Compliance is the FR-CMP-001 screen result — REQUIRED on a finished report so a
+	// deliverable can never silently omit the screen. `Stub:true` renders visibly.
+	Compliance *ComplianceResult `json:"compliance,omitempty"`
+	// Provenance is one entry per source the worker bought — carries the on-chain
+	// receiptHash so Billing joins EXACTLY, and `Status` encodes proven-vs-pending honesty.
+	Provenance []SourceProvenance `json:"provenance,omitempty"`
+	// Disclaimer is the report-level "evidence, not a guarantee" honesty line.
+	Disclaimer string `json:"disclaimer,omitempty"`
+}
+
+// ComplianceResult is the FR-CMP-001 screen wrapped with confidence and the honesty
+// disclaimer. Never a fabricated screen: when no real engine ran, Stub is true and every
+// surface renders "STUB — not a real screen".
+type ComplianceResult struct {
+	Decision   string `json:"decision"`   // "clear" | "review" | "hit"
+	Confidence string `json:"confidence"` // "low" | "medium" | "high" — never rendered as certainty
+	Provider   string `json:"provider"`   // "circle-compliance-engine" | "stub"
+	Stub       bool   `json:"stub"`       // true when no real screen ran — MUST render visibly
+	Disclaimer string `json:"disclaimer"` // "evidence, not a guarantee" verbatim
+}
+
+// SourceProvenance is what one purchased source leaves behind. ReceiptHash is the
+// JobVault.recordExpense(bytes32 receiptHash) value, so Billing joins provenance ->
+// chain_events(ExpenseRecorded).receiptHash EXACTLY, not by jobId+amount (fragile the
+// moment two purchases share an amount).
+type SourceProvenance struct {
+	Resource     string `json:"resource"`
+	Merchant     string `json:"merchant"`              // payTo (the F4 merchant-identity seam)
+	AmountAtomic string `json:"amountAtomic"`          // 6dp atomic USDC
+	ReceiptHash  string `json:"receiptHash,omitempty"` // bytes32 0x-hex; the exact Billing join key
+	PaymentID    string `json:"paymentId,omitempty"`   // sidecar paymentId once real
+	Status       string `json:"status"`                // "proven" | "pending-integration"
 }
 
 // QAVerdict is the QA-worker's review result (payload of TypeQAVerdict).
@@ -75,9 +111,15 @@ type Deliverable struct {
 // claim it fails to catch still ships. Disclaimer carries that sentence verbatim and
 // every surface that renders a verdict must show it.
 type QAVerdict struct {
-	Passed     bool     `json:"passed"`
-	Reasons    []string `json:"reasons"`
-	Checked    int      `json:"checked_claims"`
+	Passed  bool     `json:"passed"`
+	Reasons []string `json:"reasons"`
+	Checked int      `json:"checked_claims"`
+	// Notes are NON-BLOCKING observations QA surfaces without bouncing — e.g. a stubbed
+	// compliance screen or provenance still pending payment-path integration. These are
+	// honestly-disclosed provisional states, not defects: bouncing on them would block the
+	// demo until Circle credentials + the sidecar client land. Surfaced, never silently
+	// ignored (G8 QA decision: pass-with-a-visible-note).
+	Notes      []string `json:"notes,omitempty"`
 	Disclaimer string   `json:"disclaimer"`
 }
 

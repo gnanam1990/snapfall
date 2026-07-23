@@ -46,6 +46,7 @@ func TestG5_ExitGate_StubDDJobFullLoop(t *testing.T) {
 	if err := b.Confirm(ctx, "job_dd_1", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_dd_1")
 
 	// ── 3+4. ASSIGN + REPORT happened as consequences — verify the end state. ──
 	js, _ = b.Job("job_dd_1")
@@ -101,6 +102,7 @@ func TestG5_ConfirmationGatesAssignment(t *testing.T) {
 	if err := b.Confirm(ctx, "job_gate", "gnanam"); err != nil {
 		t.Fatalf("first confirm: %v", err)
 	}
+	waitJob(b, "job_gate")
 	if err := b.Confirm(ctx, "job_gate", "gnanam"); err == nil {
 		t.Fatal("a second confirmation must be rejected, not re-run the job")
 	}
@@ -148,6 +150,7 @@ func TestG5_WorkerFailureIsRecorded(t *testing.T) {
 	if err := b.Confirm(ctx, "job_fail", "gnanam"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	waitJob(b, "job_fail")
 
 	js, _ := b.Job("job_fail")
 	if js.Stage != StageFailed {
@@ -170,7 +173,7 @@ func (s kindScoper) Scope(_ context.Context, request string) (string, string, st
 type failingWorker struct{}
 
 func (failingWorker) Kind() string { return "always-fails" }
-func (failingWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report) error {
+func (failingWorker) Handle(ctx context.Context, a envelope.Envelope, report worker.Report, _ worker.Purchase) error {
 	e, err := envelope.New(a.JobID, envelope.RoleWorker, envelope.TypeWorkerFailure,
 		map[string]any{"reason": "stub failure"})
 	if err != nil {

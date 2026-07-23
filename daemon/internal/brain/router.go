@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
+	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
 	"github.com/gnanam1990/snapfall/daemon/internal/logging"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
@@ -44,6 +45,57 @@ type Brain struct {
 	qaKind string
 	// maxRevisions bounds the QA bounce loop (G9 pin 2). Exhausted -> escalate to owner.
 	maxRevisions int
+	// freezeReg is the G11 kill switch (nil = ungated); orgID scopes org-level checks.
+	freezeReg *freeze.Registry
+	orgID     string
+	// purchaser routes worker spend requests through policy+approval (nil = refused).
+	purchaser Purchaser
+	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
+	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
+	// package tests/demos (tasks then detach from the request ctx, as before).
+	rootCtx context.Context
+	// recovered guards Recover() exactly-once per Brain (serve pin 1).
+	recovered bool
+	// beforeFreezeCheck is a TEST-ONLY hook (nil in production) invoked at worker-start,
+	// immediately before the freeze gate — it lets a test engage a freeze deterministically
+	// in the dispatch->start window to pin that "begins" means worker-start (decision #3).
+	beforeFreezeCheck func()
+	// tasks tracks the one background goroutine per dispatched job (G8 async assignment).
+	// Assignment is no longer inline in the owner's Confirm() call — the worker runs on
+	// its own goroutine so a blocked Purchase never holds the owner's call hostage, and a
+	// single-threaded owner surface (Telegram/HTTP) cannot deadlock. Each handle carries a
+	// done channel for a DETERMINISTIC completion signal (tests await it, never poll).
+	tasks map[string]*taskHandle
+}
+
+// taskHandle is the per-job background dispatch: its done channel closes when the whole
+// worker interaction (author -> QA loop -> terminal) has run to completion or been
+// withheld, and err is the terminal outcome, set before done is closed.
+type taskHandle struct {
+	done chan struct{}
+	err  error
+}
+
+// SetFreeze wires the kill-switch registry and the org identity it checks against.
+func (b *Brain) SetFreeze(r *freeze.Registry, orgID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.freezeReg = r
+	b.orgID = orgID
+}
+
+// frozenErr consults the kill switch for a job/agent in this org.
+func (b *Brain) frozenErr(jobID, agentKind string) error {
+	b.mu.Lock()
+	r, org := b.freezeReg, b.orgID
+	b.mu.Unlock()
+	if r == nil {
+		return nil
+	}
+	if e := r.Check(org, jobID, agentKind); e != nil {
+		return freeze.Err(e)
+	}
+	return nil
 }
 
 // New wires a Brain. The funding agent pointer is handed here and nowhere else.
@@ -55,6 +107,7 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 		funding: fund,
 		workers: make(map[string]worker.Worker),
 		jobs:    make(map[string]*jobState),
+		tasks:   make(map[string]*taskHandle),
 	}
 
 	b.maxRevisions = 2
@@ -122,6 +175,59 @@ func (b *Brain) Deliver(ctx context.Context, e envelope.Envelope) error {
 	return h(ctx, e)
 }
 
+// Purchaser is Brain's handle to the deterministic policy+approval pipeline for worker
+// purchase requests. The daemon wires a concrete one (backed by approval.Lifecycle);
+// nil = purchases refused. Set via SetPurchaser, like the funding pointer and freeze
+// registry — Brain holds it, workers never see it.
+type Purchaser interface {
+	// Decide runs policy + approval for one JOB-STAMPED intent and returns the structured
+	// outcome. The jobID/agentKind on the intent are applied by Brain, not the worker.
+	Decide(ctx context.Context, intent PurchaseIntent) (worker.PurchaseOutcome, error)
+}
+
+// PurchaseIntent is a worker's purchase request AFTER Brain has stamped the job and the
+// worker's identity — the fields a worker cannot forge are set here by the closure.
+type PurchaseIntent struct {
+	JobID           string
+	AgentKind       string
+	Merchant        string
+	Resource        string
+	AmountMicros    int64
+	MaxAmountMicros int64
+	Purpose         string
+	// AlternativeTo carries the worker's causal link to a request-alternative decision
+	// (G7); intake validates it, so a forged value is refused, never trusted.
+	AlternativeTo string
+}
+
+// SetPurchaser wires the policy+approval pipeline Brain routes worker spends through.
+func (b *Brain) SetPurchaser(p Purchaser) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.purchaser = p
+}
+
+// purchaseFor builds the SPEND capability a Worker receives — the mirror of workerReportFor.
+// Brain BINDS the jobID and worker kind in this closure; the worker's PurchaseRequest has
+// no jobID field, so a worker cannot spend against another job's budget or spend as another
+// agent — the cross-job/cross-agent refusal is structural, not a runtime check.
+func (b *Brain) purchaseFor(kind, jobID string) worker.Purchase {
+	return func(ctx context.Context, req worker.PurchaseRequest) (worker.PurchaseOutcome, error) {
+		b.mu.Lock()
+		p := b.purchaser
+		b.mu.Unlock()
+		if p == nil {
+			return worker.PurchaseOutcome{}, fmt.Errorf("no purchaser wired: worker %q cannot spend on job %s", kind, jobID)
+		}
+		return p.Decide(ctx, PurchaseIntent{
+			JobID: jobID, AgentKind: kind,
+			Merchant: req.Merchant, Resource: req.Resource,
+			AmountMicros: req.AmountMicros, MaxAmountMicros: req.MaxAmountMicros,
+			Purpose: req.Purpose, AlternativeTo: req.AlternativeTo,
+		})
+	}
+}
+
 // workerReportFor builds the single outbound capability a Worker receives. It pins
 // From to RoleWorker AND stamps the worker KIND and JOB Brain assigned — all applied
 // by the closure, none forgeable by the worker. The kind stamp makes "only the
@@ -166,12 +272,110 @@ func (b *Brain) deliverFromWorker(ctx context.Context, kind string, e envelope.E
 	}
 }
 
-// assign dispatches an assignment to the registered worker of the given kind.
-// bounceReasons and draft parameterize the G9 loop: a revision carries the QA
-// reasons back to the author; a QA assignment carries the draft under review.
-// This is Brain acting, not an inbound route — there is no envelope a spoke could
-// send that lands here.
-func (b *Brain) assign(ctx context.Context, jobID, kind string, bounceReasons []string, draft *envelope.Deliverable) error {
+// bounceReasons and draft parameterize the G9 loop: a revision carries the QA reasons
+// back to the author; a QA assignment carries the draft under review. This is Brain
+// acting, not an inbound route — there is no envelope a spoke could send that lands here.
+//
+// dispatchTask is the ASYNC entry to a job's worker (G8): it launches runTask on a
+// tracked background goroutine and returns immediately, so the owner's Confirm() call is
+// never held for the job's duration. The freeze gate is NOT here — it is inside runTask,
+// immediately before Handle, so "begins" means worker-start (decision #3): a freeze that
+// engages in the dispatch->start window still stops the worker. Nested dispatches inside
+// the QA loop (author<->QA) run INLINE via runTask on this same goroutine, so one handle
+// covers the whole interaction and its done channel fires exactly at the terminal state.
+func (b *Brain) dispatchTask(ctx context.Context, jobID, kind string, bounceReasons []string, draft *envelope.Deliverable) error {
+	// SHUTDOWN RULE (serve step): once the daemon root context is cancelled, NO new task
+	// dispatches — the same "stops new claims" posture as the freeze. In-flight tasks are
+	// not aborted here; they complete or return via their own ctx (see taskContext).
+	b.mu.Lock()
+	root := b.rootCtx
+	b.mu.Unlock()
+	if root != nil && root.Err() != nil {
+		return fmt.Errorf("dispatch refused: daemon is shutting down (%w)", root.Err())
+	}
+
+	h := &taskHandle{done: make(chan struct{})}
+	b.mu.Lock()
+	b.tasks[jobID] = h
+	b.mu.Unlock()
+
+	// The task context is decoupled from the caller's request (Confirm() returning must
+	// not kill the task) but — when serving — BOUND to the daemon root, so SIGTERM stops
+	// blocked work. Cancellation is never allowed past a payment's write-ahead claim; the
+	// Purchaser shields approval.Execute (see purchasing.execute).
+	taskCtx := b.taskContext(ctx)
+	go func() {
+		err := b.runTask(taskCtx, jobID, kind, bounceReasons, draft)
+		b.mu.Lock()
+		h.err = err
+		b.mu.Unlock()
+		close(h.done)
+	}()
+	return nil
+}
+
+// taskContext derives the context a task goroutine runs under. With a root context set
+// (the serving daemon), tasks are children of the DAEMON's lifetime — cancelled on
+// SIGTERM — not of the owner's request. Without one (package tests, demos), the prior
+// behavior holds: detached from the request, never cancelled.
+func (b *Brain) taskContext(req context.Context) context.Context {
+	b.mu.Lock()
+	root := b.rootCtx
+	b.mu.Unlock()
+	if root != nil {
+		return root
+	}
+	return context.WithoutCancel(req)
+}
+
+// SetRootContext binds task goroutines to the daemon's lifetime (the serve step): on
+// SIGTERM, blocked tasks wake and return, new dispatches are refused, and in-flight
+// payment executions still complete past their claim (the shutdown analogue of the
+// freeze in-flight ruling). Call once at serve time, before any dispatch.
+func (b *Brain) SetRootContext(ctx context.Context) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rootCtx = ctx
+}
+
+// WaitTasks blocks until every currently-tracked task goroutine has finished — the
+// shutdown drain. Blocked tasks are woken by root-context cancellation (they return
+// interrupted); an Execute past its claim completes under the Purchaser's shield, so
+// this wait is bounded by real work, not by an owner who never answers.
+func (b *Brain) WaitTasks() {
+	b.mu.Lock()
+	handles := make([]*taskHandle, 0, len(b.tasks))
+	for _, h := range b.tasks {
+		handles = append(handles, h)
+	}
+	b.mu.Unlock()
+	for _, h := range handles {
+		<-h.done
+	}
+}
+
+// AwaitTask blocks until the job's dispatched task reaches its terminal state and returns
+// its outcome. This is the DETERMINISTIC completion signal — closed by the goroutine's
+// completion, never a wall-clock poll (decision #2). A job never dispatched returns nil.
+func (b *Brain) AwaitTask(jobID string) error {
+	b.mu.Lock()
+	h := b.tasks[jobID]
+	b.mu.Unlock()
+	if h == nil {
+		return nil
+	}
+	<-h.done
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return h.err
+}
+
+// runTask is THE dispatch chokepoint: the freeze gate and the sole worker-invocation
+// site live here (pinned by TestAT09_DispatchChokepointIsSingle). It runs one invocation
+// inline; the worker's report callbacks may re-enter runTask (QA loop) synchronously on
+// the same goroutine. Called on the background goroutine by dispatchTask (first dispatch)
+// and inline by the QA-loop handlers (re-assignments).
+func (b *Brain) runTask(ctx context.Context, jobID, kind string, bounceReasons []string, draft *envelope.Deliverable) error {
 	b.mu.Lock()
 	w, ok := b.workers[kind]
 	js := b.jobs[jobID]
@@ -181,6 +385,21 @@ func (b *Brain) assign(ctx context.Context, jobID, kind string, bounceReasons []
 	}
 	if js == nil {
 		return fmt.Errorf("unknown job %s", jobID)
+	}
+
+	// ── G11 + G8: THE task chokepoint, checked at WORKER-START. With async dispatch,
+	//    "begins" means here — not when dispatchTask launched the goroutine — so a freeze
+	//    that engages in the dispatch->start window still stops the worker (decision #3).
+	//    One gate stops all new tasks; withheld dispatches are recorded (fail loudly). ──
+	if b.beforeFreezeCheck != nil {
+		b.beforeFreezeCheck() // test-only hook: engage a freeze IN the dispatch->start window
+	}
+	if err := b.frozenErr(jobID, kind); err != nil {
+		_, _ = b.store.Append(ctx, store.Event{
+			Kind: "task.withheld", EntityID: jobID, Actor: "brain",
+			Payload: map[string]any{"worker_kind": kind, "reason": err.Error()},
+		})
+		return err
 	}
 
 	assignment, err := envelope.New(jobID, envelope.RoleBrain, envelope.TypeAssignment,
@@ -202,5 +421,5 @@ func (b *Brain) assign(ctx context.Context, jobID, kind string, bounceReasons []
 
 	// Synchronous in Phase 1/2: the worker runs inline and reports through the one
 	// kind-stamped callback it is handed.
-	return w.Handle(ctx, assignment, b.workerReportFor(kind, jobID))
+	return w.Handle(ctx, assignment, b.workerReportFor(kind, jobID), b.purchaseFor(kind, jobID))
 }

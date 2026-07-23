@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
@@ -130,6 +131,114 @@ func (b *Brain) Reject(ctx context.Context, jobID, by, reason string) error {
 	return b.Deliver(ctx, e)
 }
 
+// Recover rehydrates Brain's job map from the per-job memory files (G11 / extended
+// AT-10): after a restart, a mid-QA-loop job resumes parked at its recorded stage
+// instead of vanishing from the router's working set. The memory files are the
+// durable truth (G4); this is the read-back.
+func (b *Brain) Recover() error {
+	// EXACTLY-ONCE (serve pin 1): a second Recover on the same Brain is refused, not
+	// silently merged — two replays over the same event log is the double-recovery hazard
+	// flagged on #4. The daemon has one wiring point (pinned by a source-scan test in
+	// cmd/snapfall); this guard makes the per-Brain half structural.
+	b.mu.Lock()
+	if b.recovered {
+		b.mu.Unlock()
+		return fmt.Errorf("brain already recovered: a second Recover would replay state over a live working set")
+	}
+	b.recovered = true
+	b.mu.Unlock()
+
+	ids, err := b.memory.List()
+	if err != nil {
+		return fmt.Errorf("recovering brain jobs: %w", err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, id := range ids {
+		jm, err := b.memory.Get(id)
+		if err != nil {
+			return err
+		}
+		if _, exists := b.jobs[id]; exists {
+			continue
+		}
+		js := &jobState{
+			JobID: id, Scope: jm.Scope, QuoteUSDC: jm.QuoteUSDC,
+			Stage: JobStage(jm.Stage), Worker: jm.AssignedWorker,
+			RevisionCount: jm.RevisionCount, Report: jm.Report,
+		}
+		// Restore the QA draft so a job recovered mid-review can still emit a real
+		// delivery report, not an empty one (review fix, Anandan #4.3).
+		if jm.Draft != "" {
+			var d envelope.Deliverable
+			if err := json.Unmarshal([]byte(jm.Draft), &d); err == nil {
+				js.Draft = &d
+			}
+		}
+		b.jobs[id] = js
+	}
+	return nil
+}
+
+// inFlightStages are the worker-active stages: a job here when the process died was
+// mid-task. Pre-work stages (scoped/confirmed) had no worker running, and terminal
+// stages are done — neither is "interrupted."
+var inFlightStages = map[JobStage]bool{
+	StageAssigned: true, StageQAReview: true, StageRevision: true,
+}
+
+// EscalateInterruptedTasks is the crash-mid-task policy (G8 decision #1): FAIL LOUD AND
+// ESCALATE. A job recovered in a worker-active stage is NOT auto-restarted (that repeats
+// side-effecting work — duplicate compliance screens, duplicate research; money is covered
+// by exactly-once/nonce but the task semantics are wrong) and NOT resumed (no task-level
+// checkpoint exists). It is escalated to the owner to re-run or abandon. Call once after
+// Recover(), before serving. It never dispatches a worker.
+func (b *Brain) EscalateInterruptedTasks(ctx context.Context) error {
+	b.mu.Lock()
+	var ids []string
+	for id, js := range b.jobs {
+		if inFlightStages[js.Stage] {
+			ids = append(ids, id)
+		}
+	}
+	b.mu.Unlock()
+	sort.Strings(ids) // deterministic order
+
+	for _, id := range ids {
+		b.mu.Lock()
+		prev := b.jobs[id].Stage
+		b.jobs[id].Stage = StageEscalated
+		b.mu.Unlock()
+
+		if err := b.memory.Update(id, func(jm *JobMemory) { jm.Stage = string(StageEscalated) }); err != nil {
+			return err
+		}
+		esc, err := envelope.New(id, envelope.RoleBrain, envelope.TypeJobUpdate, map[string]any{
+			"escalation": fmt.Sprintf("task interrupted by a restart while %s; not resumed (no checkpoint) "+
+				"and not re-run (would repeat purchases/screens) — owner decides: re-run or abandon", prev),
+			"interrupted_stage": string(prev),
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := b.store.Append(ctx, store.Event{
+			Kind: "brain.msg." + string(envelope.TypeJobUpdate), EntityID: id,
+			Actor: string(envelope.RoleBrain), Payload: esc,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// JobCount returns how many jobs are in Brain's working set — the visible effect of
+// Recover() at startup (review fix, Anandan #4.2).
+func (b *Brain) JobCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.jobs)
+}
+
 // Job returns Brain's current view of a job.
 func (b *Brain) Job(jobID string) (jobState, bool) {
 	b.mu.Lock()
@@ -146,6 +255,10 @@ func (b *Brain) Job(jobID string) (jobState, bool) {
 func (b *Brain) onOwnerRequest(ctx context.Context, e envelope.Envelope) error {
 	if b.scoper == nil {
 		return fmt.Errorf("no scoper installed")
+	}
+	// G11: a frozen org accepts no new jobs at all.
+	if err := b.frozenErr(e.JobID, ""); err != nil {
+		return err
 	}
 	var req OwnerRequest
 	if err := e.Decode(&req); err != nil {
@@ -227,7 +340,9 @@ func (b *Brain) onOwnerConfirm(ctx context.Context, e envelope.Envelope) error {
 	b.mu.Lock()
 	js.Stage = StageAssigned
 	b.mu.Unlock()
-	return b.assign(ctx, e.JobID, kind, nil, nil)
+	// ASYNC (G8): dispatch onto a background goroutine and return. The worker — and any
+	// Purchase it blocks on awaiting approval — runs off the owner's Confirm() goroutine.
+	return b.dispatchTask(ctx, e.JobID, kind, nil, nil)
 }
 
 func (b *Brain) onOwnerReject(ctx context.Context, e envelope.Envelope) error {
@@ -299,12 +414,21 @@ func (b *Brain) onWorkerReport(ctx context.Context, kind string, e envelope.Enve
 		js.Draft = &draft
 		js.Stage = StageQAReview
 		b.mu.Unlock()
+		// Persist the draft JSON alongside the stage (review fix, Anandan #4.3): a crash
+		// in qa_review/revision must recover the actual deliverable, not an empty report.
+		draftJSON := ""
+		if enc, err := json.Marshal(&draft); err == nil {
+			draftJSON = string(enc)
+		}
 		if err := b.memory.Update(e.JobID, func(jm *JobMemory) {
 			jm.Stage = string(StageQAReview)
+			jm.Draft = draftJSON
 		}); err != nil {
 			return err
 		}
-		return b.assign(ctx, e.JobID, qaKind, nil, &draft)
+		// Inline: the QA dispatch runs on the same background goroutine as the author's
+		// task (this handler is invoked from the author's report callback).
+		return b.runTask(ctx, e.JobID, qaKind, nil, &draft)
 	}
 
 	// Phase-1 flow (no QA slot): report completes the job.
@@ -443,8 +567,9 @@ func (b *Brain) onQAVerdict(ctx context.Context, kind string, e envelope.Envelop
 	}); err != nil {
 		return err
 	}
-	// Bounce back to the AUTHOR with the reasons — never silently (FR-QA-001).
-	return b.assign(ctx, e.JobID, author, v.Reasons, nil)
+	// Bounce back to the AUTHOR with the reasons — never silently (FR-QA-001). Inline:
+	// runs on the QA task's goroutine (this handler is the QA worker's report callback).
+	return b.runTask(ctx, e.JobID, author, v.Reasons, nil)
 }
 
 // markDeliveryReady is the single assignment site for StageDeliveryReady — called
