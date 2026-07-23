@@ -100,7 +100,15 @@ func (f *Flow) Propose(ctx context.Context, jobID, vaultJobID, quoteUSDC string)
 	if err != nil {
 		return approval.Request{}, err
 	}
-	go f.await(ctx, *res.Request)
+	// The await goroutine outlives THIS call — it waits for a separate owner-approval
+	// request, which may arrive long after Propose returns. It must NOT be bound to the
+	// caller's context: the owner-initiated HTTP path passes r.Context(), which is
+	// cancelled the instant the proposal POST returns, and a request-scoped await would
+	// exit before the approval ever lands (approved-but-never-executed — the silent
+	// money-path no-op). Detach: keep values, drop the caller's cancellation. The
+	// deadline timer bounds the wait; a crash is covered by EscalateInterrupted. This is
+	// the G8 rootCtx lesson, applied to the advance flow.
+	go f.await(context.WithoutCancel(ctx), *res.Request)
 	return *res.Request, nil
 }
 
