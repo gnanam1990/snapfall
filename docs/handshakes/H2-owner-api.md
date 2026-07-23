@@ -126,10 +126,65 @@ Responses (all JSON):
 names this request (G7 validates the link) — the activity feed renders rejection and
 replacement as one causal story.
 
-## 4. What ships when
+## 4. Invoices — the owner's read of the chain record (G12)
+
+Two methods, one resource. Generation is a state change and reads are idempotent, so
+they are not the same verb:
+
+### 4.1 `POST /api/v1/jobs/{jobId}/invoice` — generate now
+
+The owner-request trigger. The daemon builds a fresh invoice **exclusively from
+on-chain rows** (FR-BRN-005; amounts are ALWAYS base-10 atomic-USDC strings, chain
+kinds verbatim), records it durably, and returns it. Response `200`:
+
+```jsonc
+{ "version": 2,                       // monotonic per job, starting at 1
+  "invoice": {                        // the OWNER copy — see the serving decision below
+    "copy": "owner", "jobId": "job_demo_1", "vaultJobId": "0x…",
+    "status": "complete" | "partial — awaiting chain records",
+    "lines":  [ { "kind": "JobFunded", "txHash": "0x…", "block": 100, "logIndex": 2,
+                  "payload": { "amountAtomic": "25000000" } } ],
+    "gaps":   [ { "stage": "settlement", "cause": "no on-chain settlement", "detail": "…" } ],
+    "totals": { "fundedAtomic": "25000000" },   // absent field = NO RECORD, never zero
+    "generatedAt": "2026-07-24T10:00:00Z", "disclaimer": "…" },
+  "reconciliation": { "outcomes": [ { "receiptHash": "0x…", "outcome": "matched" } ] },
+  "alerts": [ /* projection-divergence | expense-outside-policy — owner-only */ ] }
+```
+
+`404 UNKNOWN_JOB` for a job the daemon does not know.
+
+**Decision: regeneration is APPEND-ONLY VERSIONED.** Every generation appends a durable
+`billing.invoice` event (`version` = 1, 2, …) and replaces nothing — a job whose chain
+record is still filling regenerates from `partial` toward `complete`, and a surface can
+render "v1 partial → v2 complete" as history. Two generations can never leave two
+conflicting records claiming to be *the* invoice: the latest version is the current one,
+prior versions are the audit trail.
+
+The daemon MAY also append versions on its own when it observes a settlement for a
+tracked job (`JobSettled` reaching the shared store) — same event, same versioning, no
+separate vocabulary.
+
+### 4.2 `GET /api/v1/jobs/{jobId}/invoice` — latest recorded
+
+Returns the most recent recorded version, same shape as 4.1. `404 NO_INVOICE` when no
+version was ever generated. Never generates.
+
+**Decision: the daemon serves the OWNER copy only, behind §1's auth posture.** A
+customer copy exists in the invoice model (plain-language gaps, internals stripped),
+but **no daemon route serves it**: which reader gets which copy — Vasanth's layer
+scoping by magic link server-side, or a customer-scoped auth path in the daemon — is an
+open cross-stream seam, and both sides assuming the other handled it is how gaps
+happen. Until that is decided all-three, the customer copy stays unserved; serving it
+will be a versioned addition to this contract, not a silent one.
+
+## 5. What ships when
 
 - **Daemon-source stream + approvals endpoints:** implemented with this document, on the
   G8 stack (`Lifecycle.Pending`/`Decide` are the primitives).
+- **Invoice endpoints (§4):** implemented with G12 Step 2. Honesty note: the
+  settlement-observed generation path cannot fire until the chain gap closes (no
+  deployment → no `JobSettled` rows → nothing to observe); the owner-request trigger is
+  the exercisable one today.
 - **Chain-source relay:** the contract above; the code feature-detects the `chain_*`
   tables (present on `main` since PR #6; the G8 stack gains them on merge) and begins
   relaying when they exist. Until then `source:"chain"` messages simply do not occur —
