@@ -20,7 +20,7 @@ func find(t *testing.T, need string, capMicros int64) []Match {
 // margin, so a catalog or need-text edit that erodes the separation fails here instead
 // of flipping a take on camera (scripted-mode guarantee, design pin 3).
 func TestG10_DemoPrimaryFindsPremiumByDescription(t *testing.T) {
-	got := find(t, DemoNeed, 0)
+	got := find(t, DemoNeedMarket, 0)
 	if len(got) < 1 || got[0].Resource != "GET /v1/premium-dataset" {
 		t.Fatalf("primary match: %+v, want the premium dataset first", got)
 	}
@@ -43,7 +43,7 @@ func TestG10_DemoPrimaryFindsPremiumByDescription(t *testing.T) {
 // the rejected amount leaves the benchmark as the ONLY match — the profile scores zero
 // against this need and the threshold keeps it out, so the beat lands on $0.06.
 func TestG10_CheaperRequeryFindsBenchmarkOnly(t *testing.T) {
-	got := find(t, DemoNeed, 3_999_999)
+	got := find(t, DemoNeedMarket, 3_999_999)
 	if len(got) != 1 || got[0].Resource != "GET /v1/benchmark-summary" || got[0].AmountMicros != 60_000 {
 		t.Fatalf("cheaper re-query: %+v, want exactly the benchmark summary", got)
 	}
@@ -53,7 +53,7 @@ func TestG10_CheaperRequeryFindsBenchmarkOnly(t *testing.T) {
 // affordable candidate returns EMPTY WITHOUT ERROR — the worker's source-abandoned
 // path, a first-class honest outcome, not a crash and not a spin.
 func TestG10_NothingAffordableIsEmptyNotError(t *testing.T) {
-	if got := find(t, DemoNeed, 30_000); len(got) != 0 {
+	if got := find(t, DemoNeedMarket, 30_000); len(got) != 0 {
 		t.Fatalf("cap below every candidate: %+v, want none", got)
 	}
 }
@@ -73,8 +73,8 @@ func TestG10_NonsenseNeedFindsNothing(t *testing.T) {
 // Determinism is total: repeated calls are byte-identical, and ties cannot shift a
 // take — equal scores order by price then resource, an explicit rule, not map luck.
 func TestG10_DeterministicOrderingAndTieBreaks(t *testing.T) {
-	a := find(t, DemoNeed, 0)
-	b := find(t, DemoNeed, 0)
+	a := find(t, DemoNeedMarket, 0)
+	b := find(t, DemoNeedMarket, 0)
 	if !reflect.DeepEqual(a, b) {
 		t.Fatalf("same query, different results:\n%+v\n%+v", a, b)
 	}
@@ -104,8 +104,8 @@ func TestG10_DeterministicOrderingAndTieBreaks(t *testing.T) {
 // score in the unbounded query (IDF is computed over the full catalog, so a cap
 // filters candidates — it never re-scores them).
 func TestG10_CapFiltersWithoutRescoring(t *testing.T) {
-	unbounded := find(t, DemoNeed, 0)
-	capped := find(t, DemoNeed, 3_999_999)
+	unbounded := find(t, DemoNeedMarket, 0)
+	capped := find(t, DemoNeedMarket, 3_999_999)
 	var benchUnbounded float64
 	for _, m := range unbounded {
 		if m.Resource == "GET /v1/benchmark-summary" {
@@ -114,5 +114,18 @@ func TestG10_CapFiltersWithoutRescoring(t *testing.T) {
 	}
 	if benchUnbounded == 0 || capped[0].Score != benchUnbounded {
 		t.Fatalf("cap changed a score: %.4f vs %.4f", capped[0].Score, benchUnbounded)
+	}
+}
+
+// The third purchase of the script (design ruling: the task issues TWO needs, so the
+// $0.04 auto-approve beat survives as a genuine find): the profile need selects the
+// company profile as its ONLY match — it shares no language with premium or benchmark.
+func TestG10_DemoProfileNeedFindsProfileOnly(t *testing.T) {
+	got := find(t, DemoNeedProfile, 0)
+	if len(got) != 1 || got[0].Resource != "GET /v1/company-profile" || got[0].AmountMicros != 40_000 {
+		t.Fatalf("profile need: %+v, want exactly the company profile", got)
+	}
+	if got[0].Score < 0.20 {
+		t.Fatalf("profile match too weak to trust on camera: %.3f", got[0].Score)
 	}
 }

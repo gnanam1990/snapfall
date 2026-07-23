@@ -22,6 +22,7 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
 	"github.com/gnanam1990/snapfall/daemon/internal/brain"
 	"github.com/gnanam1990/snapfall/daemon/internal/config"
+	"github.com/gnanam1990/snapfall/daemon/internal/discovery"
 	"github.com/gnanam1990/snapfall/daemon/internal/events"
 	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
@@ -34,6 +35,26 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/supervisor"
 	"github.com/gnanam1990/snapfall/daemon/internal/worker"
 )
+
+// discoveryFinder adapts discovery.Matcher to worker.Finder AT THE WIRING LAYER —
+// worker and discovery never import each other (the G10 boundary: worker stays
+// envelope-only per AT-16; discovery cannot name money or the worker).
+type discoveryFinder struct{ m *discovery.Matcher }
+
+func (f discoveryFinder) Find(ctx context.Context, need string, maxAmountMicros int64) ([]worker.Found, error) {
+	ms, err := f.m.Find(ctx, need, maxAmountMicros)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]worker.Found, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, worker.Found{
+			Merchant: m.Merchant, Resource: m.Resource, Description: m.Description,
+			AmountMicros: m.AmountMicros, Score: m.Score,
+		})
+	}
+	return out, nil
+}
 
 func main() {
 	var (
@@ -292,22 +313,14 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	br.SetScoper(brain.StubScoper{})
 	// The G8 adaptive DD worker with its scripted source plan: the \$0.04 profile primary
 	// (auto-approves under DemoPolicy) with the \$0.06 benchmark as the cheaper fallback.
-	// The AT-04 reject-and-adapt beat needs an owner surface to answer the escalation, so
-	// the served one-shot exercises the auto path; the adaptive path is pinned by the
-	// integration tests until the owner surface (dashboard/Telegram) lands.
-	// The demo-spine plan (PRD §5.1): the \$4.00 premium dataset FIRST — it escalates for
-	// real, the owner answers through the H2 approvals endpoint, and a cost reason adapts
-	// to the \$0.06 benchmark (auto-approved). The reject-and-adapt beat, in the binary.
-	dd := worker.NewAdaptiveDD(worker.StubCompliance{}, []worker.SourceNeed{{
-		Primary: worker.PurchaseRequest{
-			Merchant: policy.DemoMerchantPremium, Resource: "GET /v1/premium-dataset",
-			AmountMicros: 4_000_000, MaxAmountMicros: 4_000_000, Purpose: "premium market dataset",
-		},
-		Cheaper: &worker.PurchaseRequest{
-			Merchant: policy.DemoMerchantBenchmark, Resource: "GET /v1/benchmark-summary",
-			AmountMicros: 60_000, MaxAmountMicros: 60_000, Purpose: "benchmark summary (cheaper source)",
-		},
-	}}, 1)
+	// G10: the DD worker DISCOVERS its sources by description — no merchant or resource
+	// name reaches it (the scripted plan type no longer exists; discovery is the only
+	// path the binary can run). Needs are a SLICE in demo-script order: the profile
+	// ($0.04, auto-approves — the 0:45 beat) before the market need ($4.00 escalates,
+	// a cost reason re-queries discovery for the $0.06 benchmark — the 1:10 beats).
+	dd := worker.NewDiscoveryDD(worker.StubCompliance{},
+		discoveryFinder{discovery.NewMatcher(discovery.V2StandIn())},
+		[]string{discovery.DemoNeedProfile, discovery.DemoNeedMarket}, 1)
 	if err := br.RegisterWorker(dd); err != nil {
 		return nil, nil, err
 	}

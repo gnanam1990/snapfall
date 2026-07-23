@@ -37,10 +37,14 @@ import (
 	"unicode"
 )
 
-// DemoNeed is the committed demo-script need: fuzzy language, no merchant and no
-// resource name. Its selections (premium primary; benchmark on the cheaper re-query)
-// are margin-pinned in discovery_test.go.
-const DemoNeed = "vendor risk market data: competitive landscape and industry benchmark summary"
+// The committed demo-script needs, IN SCRIPT ORDER: profile first (the $0.04
+// auto-approve beat, 0:45), market second (the $4.00 escalation and $0.06 adaptation,
+// 1:10). Fuzzy language only — no merchant and no resource name. Selections are
+// margin-pinned in discovery_test.go; order is the wiring's job (a slice, never a map).
+const (
+	DemoNeedProfile = "company profile and background of the vendor"
+	DemoNeedMarket  = "vendor risk market data: competitive landscape and industry benchmark summary"
+)
 
 // Service is one catalog entry — everything a PurchaseRequest needs, and no more:
 // no job, no approval state, no authority.
