@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -153,5 +154,36 @@ func TestAPI_AcceptErrorMapping(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "NOT_READY") {
 		t.Fatalf("not-ready accept: %d %s, want 409 NOT_READY", w.Code, w.Body.String())
+	}
+}
+
+// The route-group law (part of the boot-pins class closure): the ROOT mux admits
+// exactly the two credential-wrapped customer routes plus the single withAuth-wrapped
+// owner mux — a route registered on root outside either wrapper would bypass both
+// principals' auth, and this scan makes that a red test instead of a quiet hole.
+func TestAPI_RootMuxAdmitsOnlyWrappedRouteGroups(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootFuncs, rootHandles := 0, 0
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(raw)
+		rootFuncs += strings.Count(src, "root.HandleFunc(")
+		rootHandles += strings.Count(src, "root.Handle(")
+	}
+	if rootFuncs != 2 {
+		t.Fatalf("root.HandleFunc sites = %d, want exactly the 2 customer routes (both withCustomerAuth-wrapped)", rootFuncs)
+	}
+	if rootHandles != 1 {
+		t.Fatalf("root.Handle sites = %d, want exactly the 1 withAuth-wrapped owner mux", rootHandles)
 	}
 }
