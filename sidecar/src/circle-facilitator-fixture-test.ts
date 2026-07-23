@@ -24,6 +24,18 @@ assert.throws(
 );
 
 assert.throws(
+  () =>
+    validateCircleV1Fixture({
+      ...validFixture,
+      facilitatorEndpoints: {
+        ...validFixture.facilitatorEndpoints,
+        settle: 'https://x402.org/facilitator/settle',
+      },
+    }),
+  /Expected Circle settle endpoint/,
+);
+
+assert.throws(
   () => validateCircleV1Fixture({ ...validFixture, x402Version: 2 }),
   /requires an x402 V1 fixture/,
 );
