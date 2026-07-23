@@ -43,3 +43,58 @@ recording week, not the recording day.
 Forge's estimate ran ~2.3x above actual on both Arc deploys observed (0.1856 estimated
 vs 0.0791036 USDC actual for the three-contract deploy + wiring). Budget from actuals,
 not estimates.
+
+## Wallet health and funding
+
+Set the two runtime addresses, then run the read-only health check from the repository root:
+
+```bash
+export SNAPFALL_TREASURY_ADDRESS=0x...
+export SNAPFALL_CUSTOMER_ADDRESS=0x...
+./scripts/testnet-ops
+```
+
+Defaults:
+
+- `externalCustomer`: 25.10 USDC (the 25.00 full-demo escrow plus a 0.10 gas margin)
+- `operatorTreasury`: 0 USDC, preserving the zero-start demo claim
+- funding account reserve: 0.25 USDC
+
+Override those with `SNAPFALL_CUSTOMER_MIN_USDC`, `SNAPFALL_TREASURY_MIN_USDC`, and
+`SNAPFALL_FUNDER_RESERVE_USDC`. If the operator must self-fund gas rather than use the
+still-unresolved Paymaster/Gas Station path, explicitly raise the treasury minimum; do not
+quietly invalidate the zero-start claim.
+
+For guarded automatic top-up, import a testnet key into Foundry's encrypted keystore and name
+the account—never put a raw private key in a command or environment variable:
+
+```bash
+cast wallet import snapfall-funder --interactive
+./scripts/testnet-ops --fund --funder-account snapfall-funder
+```
+
+The command verifies Arc chain ID 5042002, reads every balance before sending, checks that the
+funder can cover all deficits while retaining its gas reserve, sends only exact deficits, and
+re-reads each funded balance. Without a keystore it exits with the exact shortages and the
+Circle faucet URL. The faucet remains a human path because its reCAPTCHA and cooldown must not
+be automated. Arc uses USDC as its native gas token; Foundry recommends encrypted keystores
+instead of raw private keys:
+
+- https://docs.arc.io/llms.txt
+- https://getfoundry.sh/guides/best-practices/writing-scripts/
+
+## Cadence-guarded redeployment
+
+Import/name the deployer keystore, set the same runtime wallet addresses and canonical USDC
+address, then run:
+
+```bash
+export ARC_USDC_ADDRESS=0x3600000000000000000000000000000000000000
+./scripts/redeploy-testnet --account snapfall-deployer
+```
+
+The command verifies the RPC chain, reads the committed deployment block timestamp, and refuses
+to broadcast until 48 hours have elapsed. The Solidity deploy script now accepts Foundry's
+encrypted `--account` signer and no longer reads `TREASURY_PRIVATE_KEY`. After a successful
+broadcast, verify all three contracts and update `deployments/arc-testnet.json` with the new
+addresses and start block before restarting the indexer.

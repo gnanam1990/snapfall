@@ -17,20 +17,20 @@ import {FloatPool} from "../src/FloatPool.sol";
 /// Usage (Arc testnet):
 ///   export ARC_TESTNET_RPC=https://rpc.testnet.arc.network
 ///   export ARC_USDC_ADDRESS=0x...        # the real USDC on Arc testnet
-///   export TREASURY_PRIVATE_KEY=0x...    # TESTNET ONLY
-///   forge script script/Deploy.s.sol --rpc-url "$ARC_TESTNET_RPC" --broadcast
+///   cast wallet import snapfall-deployer --interactive
+///   forge script script/Deploy.s.sol --rpc-url "$ARC_TESTNET_RPC" \
+///     --account snapfall-deployer --broadcast
 ///
 /// Copy the logged addresses into docs/addresses.md and the README testnet notes.
 contract Deploy is Script {
     function run() external {
         address usdc = vm.envAddress("ARC_USDC_ADDRESS");
-        uint256 pk = vm.envUint("TREASURY_PRIVATE_KEY");
-        address deployer = vm.addr(pk);
 
-        console2.log("deployer     ", deployer);
         console2.log("usdc         ", usdc);
 
-        vm.startBroadcast(pk);
+        // The CLI supplies one encrypted keystore or hardware-wallet signer. Keeping
+        // the raw key out of environment variables prevents process and shell-history leaks.
+        vm.startBroadcast();
 
         AuditAnchor anchor = new AuditAnchor();
         JobVault vault = new JobVault(IERC20(usdc));
