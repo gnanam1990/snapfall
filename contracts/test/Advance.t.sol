@@ -194,7 +194,7 @@ contract AdvanceTest is Test {
     // SC-FP-003 — exactly one advance per job
     // ─────────────────────────────────────────────────────────────────────
 
-    function test_requestAdvance_revertsOnDuplicate() public {
+    function test_AT17_secondAdvanceOnPriorJobReverts() public {
         _fundDemoJob();
 
         vm.startPrank(OPERATOR);
