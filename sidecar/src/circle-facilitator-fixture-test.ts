@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { validateCircleV1Fixture } from './at18-fixture.js';
+import { validateCircleV1Fixture } from './circle-facilitator-fixture.js';
 
 const validFixture = {
   x402Version: 1,
@@ -20,7 +20,7 @@ assert.throws(
         verify: 'https://x402.org/facilitator/verify',
       },
     }),
-  /expected Circle verify endpoint/,
+  /Expected Circle verify endpoint/,
 );
 
 assert.throws(
@@ -28,4 +28,4 @@ assert.throws(
   /requires an x402 V1 fixture/,
 );
 
-console.log('AT-18 fixture validation tests passed');
+console.log('Circle facilitator fixture validation tests passed');

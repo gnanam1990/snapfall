@@ -43,7 +43,7 @@ src/buyer.ts     purchase() — policy-gated signing path (FR-PAY-005)
 src/demo-loop.ts end-to-end proof with assertions
 ```
 
-### AT-18 fixture handoff
+### Circle facilitator fixture handoff (AT-18)
 
 CI unit-tests the AT-18 validator. Once V1's real raw request/response fixture lands, expose
 these stable fields at its top level (the raw evidence may remain alongside them):
@@ -62,7 +62,7 @@ Commit the real fixture at `sidecar/fixtures/v1-circle-payment.json`; CI will de
 verify it. The same check can be run locally with:
 
 ```bash
-npm run at18:fixture -- fixtures/v1-circle-payment.json
+npm run verify:circle-facilitator-fixture -- fixtures/v1-circle-payment.json
 ```
 
 The check requires both exact Circle testnet endpoints; a generic or non-Circle facilitator

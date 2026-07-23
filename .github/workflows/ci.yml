@@ -25,7 +25,7 @@ jobs:
       - name: Run complete contract suite
         run: forge test --root contracts -vvv
       - name: AT-17 — second advance on a prior job reverts
-        run: forge test --root contracts --match-test AT17 -vvv
+        run: forge test --root contracts --match-test secondAdvanceOnPriorJobReverts -vvv
 
   daemon:
     name: Daemon integration and AT-16
@@ -62,7 +62,7 @@ jobs:
       - run: npm run service:test
       - run: npm run store:test
       - name: AT-18 — Circle facilitator fixture contract
-        run: npm run at18:test
+        run: npm run test:circle-facilitator-fixture
       - name: AT-18 — verify V1's real fixture when supplied
         if: ${{ hashFiles('sidecar/fixtures/v1-circle-payment.json') != '' }}
-        run: npm run at18:fixture -- fixtures/v1-circle-payment.json
+        run: npm run verify:circle-facilitator-fixture -- fixtures/v1-circle-payment.json

@@ -12,8 +12,8 @@
     "demo:loop": "tsx src/demo-loop.ts",
     "service:test": "tsx src/service-test.ts",
     "store:test": "tsx src/store-test.ts",
-    "at18:test": "tsx src/at18-fixture-test.ts",
-    "at18:fixture": "tsx src/at18-fixture-check.ts",
+    "test:circle-facilitator-fixture": "tsx src/circle-facilitator-fixture-test.ts",
+    "verify:circle-facilitator-fixture": "tsx src/verify-circle-facilitator-fixture.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
