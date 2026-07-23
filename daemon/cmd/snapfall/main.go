@@ -26,6 +26,7 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
 	"github.com/gnanam1990/snapfall/daemon/internal/logging"
+	"github.com/gnanam1990/snapfall/daemon/internal/ownerapi"
 	"github.com/gnanam1990/snapfall/daemon/internal/policy"
 	"github.com/gnanam1990/snapfall/daemon/internal/purchasing"
 	"github.com/gnanam1990/snapfall/daemon/internal/qa"
@@ -45,6 +46,7 @@ func main() {
 		verbose      = flag.Bool("v", false, "debug logging (overrides config log_level)")
 		ownerReq     = flag.String("owner-request", "", "one-shot serve: submit this owner request, confirm it, run the DD task to its terminal state, then exit")
 		ownerJob     = flag.String("owner-job", "job_demo_1", "job ID for the one-shot owner request")
+		apiAddr      = flag.String("api-addr", "127.0.0.1:4010", "H2 owner API bind address (loopback only unless SNAPFALL_OWNER_TOKEN is set)")
 	)
 	flag.Parse()
 
@@ -79,13 +81,13 @@ func main() {
 	}[cfg.LogLevel]
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	if err := run(log, cfg, *beats, *validateOnly, *ownerReq, *ownerJob); err != nil {
+	if err := run(log, cfg, *beats, *validateOnly, *ownerReq, *ownerJob, *apiAddr); err != nil {
 		log.Error("daemon exited with error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, ownerReq, ownerJob string) error {
+func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, ownerReq, ownerJob, apiAddr string) error {
 	// Ctrl-C and SIGTERM cancel the root context; every worker unwinds from there.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -152,7 +154,7 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 	// ── Brain: wired, recovered, SERVED (the G8 serve step — the promise from #4). ──
 	// One Brain, one Recover, one escalation pass, then it serves: tasks bound to this
 	// daemon's root context, spends routed through the real policy+approval Purchaser.
-	br, err := wireBrain(ctx, log, st, dbPath, cfg.OrgID)
+	br, life, err := wireBrain(ctx, log, st, dbPath, cfg.OrgID)
 	if err != nil {
 		return err
 	}
@@ -229,6 +231,15 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		return err
 	}
 
+	// The H2 owner API (docs/handshakes/H2-owner-api.md): the SSE stream + the approval
+	// endpoints — the surface the reject-and-adapt beat is decided through.
+	api := ownerapi.New(life, st, log)
+	if err := sup.Register(workerFunc{name: "owner-api", fn: func(wctx context.Context) error {
+		return api.Run(wctx, apiAddr)
+	}}); err != nil {
+		return err
+	}
+
 	log.Info("supervisor starting", "workers", len(sup.Health()))
 	sup.Start(ctx)
 	sup.Wait()
@@ -272,10 +283,10 @@ func (w workerFunc) Run(ctx context.Context) error {
 // TestMain_SingleBrainWiringSite): one Brain, one Recover, one escalation pass, then
 // serve. Constructing a second Brain over the same store would race two replays of the
 // same event log — the double-recovery hazard from #4.
-func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, orgID string) (*brain.Brain, error) {
+func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, orgID string) (*brain.Brain, *approval.Lifecycle, error) {
 	mem, err := brain.NewMemoryStore(filepath.Join(filepath.Dir(dbPath), "memory"))
 	if err != nil {
-		return nil, fmt.Errorf("opening brain memory store: %w", err)
+		return nil, nil, fmt.Errorf("opening brain memory store: %w", err)
 	}
 	br := brain.New(log, st, mem, funding.New())
 	br.SetScoper(brain.StubScoper{})
@@ -284,10 +295,13 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// The AT-04 reject-and-adapt beat needs an owner surface to answer the escalation, so
 	// the served one-shot exercises the auto path; the adaptive path is pinned by the
 	// integration tests until the owner surface (dashboard/Telegram) lands.
+	// The demo-spine plan (PRD §5.1): the \$4.00 premium dataset FIRST — it escalates for
+	// real, the owner answers through the H2 approvals endpoint, and a cost reason adapts
+	// to the \$0.06 benchmark (auto-approved). The reject-and-adapt beat, in the binary.
 	dd := worker.NewAdaptiveDD(worker.StubCompliance{}, []worker.SourceNeed{{
 		Primary: worker.PurchaseRequest{
-			Merchant: policy.DemoMerchantProfile, Resource: "GET /v1/company-profile",
-			AmountMicros: 40_000, MaxAmountMicros: 40_000, Purpose: "company profile source",
+			Merchant: policy.DemoMerchantPremium, Resource: "GET /v1/premium-dataset",
+			AmountMicros: 4_000_000, MaxAmountMicros: 4_000_000, Purpose: "premium market dataset",
 		},
 		Cheaper: &worker.PurchaseRequest{
 			Merchant: policy.DemoMerchantBenchmark, Resource: "GET /v1/benchmark-summary",
@@ -295,16 +309,16 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		},
 	}}, 1)
 	if err := br.RegisterWorker(dd); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := br.RegisterQAWorker(qa.Worker{}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// G11 kill switch: replayed from the event log, gating intake, dispatch, and payment.
 	reg, err := freeze.NewRegistry(ctx, st, time.Now)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	br.SetFreeze(reg, orgID)
 
@@ -323,11 +337,11 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// Serve pins 1+3: exactly one Recover (guarded in Brain too), then interrupted tasks
 	// escalate — a restart after clean shutdown and after a crash are the same case.
 	if err := br.Recover(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := br.EscalateInterruptedTasks(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	log.Info("brain serving", "jobs_recovered", br.JobCount())
-	return br, nil
+	return br, life, nil
 }

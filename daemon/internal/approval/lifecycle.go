@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -90,6 +91,21 @@ func (l *Lifecycle) DecisionSignal(requestID string) <-chan struct{} {
 	closed := make(chan struct{})
 	close(closed)
 	return closed
+}
+
+// PendingRequests returns copies of every request awaiting a human decision, oldest
+// first — the H2 approvals inbox (GET /api/v1/approvals) renders exactly this.
+func (l *Lifecycle) PendingRequests() []Request {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []Request
+	for _, req := range l.requests {
+		if req.State == StatePending {
+			out = append(out, *req)
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].CreatedAt.Before(out[b].CreatedAt) })
+	return out
 }
 
 // Snapshot returns a copy of the request for reading its terminal state and reason — the
