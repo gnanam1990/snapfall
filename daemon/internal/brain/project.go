@@ -10,10 +10,12 @@ import (
 //
 // Anandan's A4 reconciler joins chain_job_financials against the SQL `jobs` table;
 // until now nothing wrote that table, so every comparison had a null local side. Brain
-// now projects each job into `jobs` — id, org, scope label (customer_ref is the
-// closest existing column in HIS schema; flagged at standup), stage as status, the
-// quote as the human-facing USDC string his usdcAtomic parses, vault_job_id when
-// memory has one (NULL until on-chain job creation exists), created_at.
+// now projects each job into `jobs` — id, org, stage as status, the quote as the
+// human-facing USDC string his usdcAtomic parses, vault_job_id when memory has one
+// (NULL until on-chain job creation exists), created_at. customer_ref stays NULL:
+// Brain has a SCOPE label, not a customer reference, and occupying a column that
+// means something else would be misread by its next consumer — if the label should
+// land in SQL, that is a scope column to ask Anandan for, not a column to repurpose.
 //
 // AUTHORITY, decided: the file-based JobMemory is the single source of truth. This
 // projection is derived, for reconciliation — never a second writable store:
@@ -58,13 +60,13 @@ func (b *Brain) projectJobRow(ctx context.Context, jm JobMemory) error {
 		vault = jm.VaultJobID
 	}
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO jobs (id, org_id, customer_ref, status, quote_usdc, vault_job_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO jobs (id, org_id, status, quote_usdc, vault_job_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
-		  org_id = excluded.org_id, customer_ref = excluded.customer_ref,
+		  org_id = excluded.org_id,
 		  status = excluded.status, quote_usdc = excluded.quote_usdc,
 		  vault_job_id = excluded.vault_job_id`,
-		jm.JobID, org, jm.Scope, jm.Stage, jm.QuoteUSDC, vault, now)
+		jm.JobID, org, jm.Stage, jm.QuoteUSDC, vault, now)
 	return err
 }
 
