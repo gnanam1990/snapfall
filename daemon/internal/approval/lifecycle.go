@@ -95,6 +95,18 @@ func (l *Lifecycle) DecisionSignal(requestID string) <-chan struct{} {
 
 // PendingRequests returns copies of every request awaiting a human decision, oldest
 // first — the H2 approvals inbox (GET /api/v1/approvals) renders exactly this.
+// Requests returns a copy of every request the lifecycle knows, any state — the
+// restart-escalation scan reads this after Recover.
+func (l *Lifecycle) Requests() []Request {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]Request, 0, len(l.requests))
+	for _, r := range l.requests {
+		out = append(out, *r)
+	}
+	return out
+}
+
 func (l *Lifecycle) PendingRequests() []Request {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -325,6 +337,67 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 	// (review-batch fix; the map-owned request stays private).
 	cp := *req
 	return SubmitResult{Decision: d, Request: &cp}, nil
+}
+
+// ErrWrongKind refuses an intent entering through the wrong door.
+var ErrWrongKind = errors.New("wrong-kind: this submission path does not accept that intent kind")
+
+// SubmitAdvance opens an approval request for a working-capital ADVANCE — money INTO
+// the treasury, human-authorized ONLY (PRD §6.4). It deliberately SKIPS policy
+// evaluation: Evaluate models outbound agent spend and its rule 0 denies any advance
+// kind by law; this path is the explicit, modelled entrance. The request enters
+// PENDING unconditionally — there is no auto-approve for an advance, ever — and lands
+// in the same H2 inbox, decision endpoint, Grant discipline, freeze gates, and
+// exactly-once execution as every payment approval.
+func (l *Lifecycle) SubmitAdvance(ctx context.Context, in Intent) (SubmitResult, error) {
+	if l.Policy == nil {
+		return SubmitResult{}, fmt.Errorf("lifecycle not wired: Policy must be set")
+	}
+	if in.Kind != policy.KindAdvance {
+		return SubmitResult{}, fmt.Errorf("%w: SubmitAdvance requires kind %q, got %q", ErrWrongKind, policy.KindAdvance, in.Kind)
+	}
+
+	// The kill switch gates intake BEFORE the nonce claim (AT-09: freeze stops new
+	// advances) — a frozen-scope proposal does not burn its nonce.
+	if err := l.frozenErr(in); err != nil {
+		return SubmitResult{}, err
+	}
+
+	// Record the active policy version so Execute's version gate applies to advances
+	// exactly as it does to payments (an advance approved under an old policy does not
+	// execute under a new one).
+	_, version := l.Policy()
+	in.PolicyVersion = version
+
+	if err := l.claimNonce(ctx, in); err != nil {
+		return SubmitResult{}, err
+	}
+
+	hash := InternalHash(in)
+	req := &Request{
+		ID:         "apr_" + hash[2:14],
+		JobID:      in.JobID,
+		IntentHash: hash,
+		Intent:     in,
+		CreatedAt:  l.clock(),
+		ExpiresAt:  in.ExpiresAt,
+		State:      StatePending,
+		decided:    make(chan struct{}),
+	}
+	if err := l.appendEvent(ctx, in.JobID, "approval.requested", map[string]any{
+		"request_id": req.ID, "intent_hash": hash, "state": string(req.State),
+		"intent": in, "decided_by": "",
+	}); err != nil {
+		return SubmitResult{}, err
+	}
+	l.mu.Lock()
+	l.requests[req.ID] = req
+	l.mu.Unlock()
+	if l.Pending != nil {
+		l.Pending(*req)
+	}
+	cp := *req
+	return SubmitResult{Request: &cp}, nil
 }
 
 // Decide records a human decision. Idempotent: repeating the SAME decision is a
