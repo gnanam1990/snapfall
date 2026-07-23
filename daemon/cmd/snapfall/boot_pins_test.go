@@ -44,6 +44,8 @@ func TestBoot_StartupCapabilitiesAreWired(t *testing.T) {
 		{"br.SetRootContext(", "SIGTERM semantics — task lifetimes bound to the daemon root"},
 		{"br.WaitTasks()", "shutdown drain — task goroutines complete before the store closes"},
 		{"br.SetPurchaser(", "worker spends route through the real policy+approval pipeline"},
+		{"fund.SetChain(", "the chain lanes wire through Funding — the only signer holder"},
+		{"SetOracle(", "the restart oracle — chain state answers the crash window, never a heuristic"},
 	}
 	for _, req := range required {
 		if !strings.Contains(src, req.token) {

@@ -57,6 +57,10 @@ type Intent struct {
 	// ExpiresAt bounds the approval's validity (SEC-006). G7 owns time; the policy
 	// engine never sees this field.
 	ExpiresAt time.Time
+	// ChainRef names the on-chain entity this intent acts on (the bytes32 vault job
+	// id for an advance) — "" for intents with no chain half. Hash-bound internally
+	// (CanonicalInternal reflects every field); classified OFF the H3 wire.
+	ChainRef string
 	// AlternativeTo links this intent to the request-alternative decision that spawned
 	// it ("" = not an alternative). Gives the activity feed (F3) explicit causality for
 	// the "owner rejects, worker adapts" story instead of inferring it from ordering.

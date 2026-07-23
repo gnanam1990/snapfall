@@ -48,7 +48,7 @@ func count(t *testing.T, st *store.Store, kind string) int {
 // absence of a policy.evaluated event is the skip-Evaluate decision made observable.
 func TestAdvance_ProposalIsHumanOnlyAndUnevaluated(t *testing.T) {
 	f, life, st, _, _ := rig(t)
-	req, err := f.Propose(context.Background(), "job_adv", "25.00")
+	req, err := f.Propose(context.Background(), "job_adv", "", "25.00")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestAdvance_ProposalIsHumanOnlyAndUnevaluated(t *testing.T) {
 func TestAdvance_ApproveExecutesToPendingChainExactlyOnce(t *testing.T) {
 	f, life, st, fund, done := rig(t)
 	ctx := context.Background()
-	req, err := f.Propose(ctx, "job_adv", "25.00")
+	req, err := f.Propose(ctx, "job_adv", "", "25.00")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestAdvance_ApproveExecutesToPendingChainExactlyOnce(t *testing.T) {
 func TestAdvance_RejectExecutesNothing(t *testing.T) {
 	f, life, st, fund, done := rig(t)
 	ctx := context.Background()
-	req, err := f.Propose(ctx, "job_adv", "25.00")
+	req, err := f.Propose(ctx, "job_adv", "", "25.00")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestAdvance_FreezeGatesProposeAndExecute(t *testing.T) {
 	if _, err := reg.Engage(ctx, freeze.KindOrg, "org_demo", "gnanam", "incident"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Propose(ctx, "job_adv", "25.00"); err == nil {
+	if _, err := f.Propose(ctx, "job_adv", "", "25.00"); err == nil {
 		t.Fatal("a frozen org accepted an advance proposal")
 	}
 	if err := reg.Lift(ctx, freeze.KindOrg, "org_demo", "gnanam", "resolved"); err != nil {
@@ -158,7 +158,7 @@ func TestAdvance_FreezeGatesProposeAndExecute(t *testing.T) {
 	}
 
 	// Execution half: propose, freeze, approve — the await must be refused at the gate.
-	req, err := f.Propose(ctx, "job_adv", "25.00")
+	req, err := f.Propose(ctx, "job_adv", "", "25.00")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestAdvance_RestartNeverAutoExecutesAndClaimSurvives(t *testing.T) {
 	}
 
 	// An executed advance, for the second half.
-	req, err := f.Propose(ctx, "job_done", "10.00")
+	req, err := f.Propose(ctx, "job_done", "", "10.00")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,8 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
 	"github.com/gnanam1990/snapfall/daemon/internal/billing"
 	"github.com/gnanam1990/snapfall/daemon/internal/brain"
+	"github.com/gnanam1990/snapfall/daemon/internal/chain"
+	"github.com/gnanam1990/snapfall/daemon/internal/chaincfg"
 	"github.com/gnanam1990/snapfall/daemon/internal/config"
 	"github.com/gnanam1990/snapfall/daemon/internal/discovery"
 	"github.com/gnanam1990/snapfall/daemon/internal/events"
@@ -36,6 +38,8 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 	"github.com/gnanam1990/snapfall/daemon/internal/supervisor"
 	"github.com/gnanam1990/snapfall/daemon/internal/worker"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // discoveryFinder adapts discovery.Matcher to worker.Finder AT THE WIRING LAYER —
@@ -62,6 +66,21 @@ func (f discoveryFinder) Find(ctx context.Context, need string, maxAmountMicros 
 // indexer fixtures — the one chain this build's invoices and settlement observer read.
 const arcTestnetChainID = uint64(5_042_002)
 
+// lane binds one signing client to one contract address as a funding.Submitter —
+// Funding holds the only references; nothing else can name a signer.
+type lane struct {
+	c  *chain.Client
+	to common.Address
+}
+
+func (l lane) Submit(ctx context.Context, calldata []byte) (funding.ChainOutcome, error) {
+	r, err := l.c.Submit(ctx, l.to, calldata)
+	if err != nil {
+		return funding.ChainOutcome{}, err
+	}
+	return funding.ChainOutcome{Submitted: true, TxHash: r.TxHash, Block: r.Block, GasUsed: r.GasUsed, Reverted: r.Reverted}, nil
+}
+
 func main() {
 	var (
 		configPath   = flag.String("config", "snapfall.yaml", "path to the YAML config file")
@@ -73,7 +92,9 @@ func main() {
 		verbose      = flag.Bool("v", false, "debug logging (overrides config log_level)")
 		ownerReq     = flag.String("owner-request", "", "one-shot serve: submit this owner request, confirm it, run the DD task to its terminal state, then exit")
 		ownerJob     = flag.String("owner-job", "job_demo_1", "job ID for the one-shot owner request")
+		ownerVault   = flag.String("owner-vault", "", "bytes32 on-chain vault job id to bind to the one-shot job (the owner-side identity binding; empty = no chain identity)")
 		apiAddr      = flag.String("api-addr", "127.0.0.1:4010", "H2 owner API bind address (loopback only unless SNAPFALL_OWNER_TOKEN is set)")
+		deployment   = flag.String("deployment", "", "chain deployment config (deployments/arc-testnet.json); empty = no chain lanes, flows stop loudly at *.pending_chain")
 	)
 	flag.Parse()
 
@@ -108,13 +129,13 @@ func main() {
 	}[cfg.LogLevel]
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	if err := run(log, cfg, *beats, *validateOnly, *ownerReq, *ownerJob, *apiAddr); err != nil {
+	if err := run(log, cfg, *beats, *validateOnly, *ownerReq, *ownerJob, *ownerVault, *apiAddr, *deployment); err != nil {
 		log.Error("daemon exited with error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, ownerReq, ownerJob, apiAddr string) error {
+func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, ownerReq, ownerJob, ownerVault, apiAddr, deployment string) error {
 	// Ctrl-C and SIGTERM cancel the root context; every worker unwinds from there.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -181,7 +202,7 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 	// ── Brain: wired, recovered, SERVED (the G8 serve step — the promise from #4). ──
 	// One Brain, one Recover, one escalation pass, then it serves: tasks bound to this
 	// daemon's root context, spends routed through the real policy+approval Purchaser.
-	br, life, err := wireBrain(ctx, log, st, dbPath, cfg.OrgID)
+	br, life, err := wireBrain(ctx, log, st, dbPath, cfg.OrgID, deployment)
 	if err != nil {
 		return err
 	}
@@ -233,6 +254,15 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 				return fmt.Errorf("owner request: %w", err)
 			}
 			log.Info("scope proposed", "job", proposal.JobID, "scope", proposal.Scope, "quote_usdc", proposal.QuoteUSDC)
+			if ownerVault != "" {
+				// The owner binds the job to its on-chain identity at request time — the
+				// explicit demo-phase producer for vault_job_id (on-chain job creation
+				// automating this binding remains open, and is said so at standup).
+				if err := br.BindVaultJob(wctx, ownerJob, ownerVault); err != nil {
+					return fmt.Errorf("vault binding: %w", err)
+				}
+				log.Info("job bound to on-chain identity", "job", ownerJob, "vault_job_id", ownerVault)
+			}
 			if err := br.Confirm(wctx, ownerJob, "gnanam"); err != nil {
 				return fmt.Errorf("owner confirm: %w", err)
 			}
@@ -376,7 +406,7 @@ func (w workerFunc) Run(ctx context.Context) error {
 // TestMain_SingleBrainWiringSite): one Brain, one Recover, one escalation pass, then
 // serve. Constructing a second Brain over the same store would race two replays of the
 // same event log — the double-recovery hazard from #4.
-func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, orgID string) (*brain.Brain, *approval.Lifecycle, error) {
+func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, orgID, deployment string) (*brain.Brain, *approval.Lifecycle, error) {
 	mem, err := brain.NewMemoryStore(filepath.Join(filepath.Dir(dbPath), "memory"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening brain memory store: %w", err)
@@ -426,6 +456,42 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// same Grant gates as payments, and Funding stops honestly at advance.pending_chain.
 	adv := advancing.New(life, st, fund, log, orgID, 10*time.Minute)
 	br.SetAdvanceFlow(adv)
+
+	// The chain lanes — wired only when a deployment config is given. POSTURE, stated:
+	// a configured deployment with a MISSING key wires no lane, and the affected flow
+	// stops LOUDLY at *.pending_chain (a labeled pending record, never a fabricated
+	// success) — the keys are env-only, format-validated, and never logged. The
+	// treasury key signs requestAdvance; the customer key signs acceptDelivery
+	// (SC-JV-005 — daemon-custodial for the demo, stated openly).
+	if deployment != "" {
+		dep, err := chaincfg.Load(deployment, os.LookupEnv)
+		if err != nil {
+			return nil, nil, fmt.Errorf("chain deployment: %w", err)
+		}
+		fpAddr := common.HexToAddress(dep.Contracts.FloatPool.Address)
+		jvAddr := common.HexToAddress(dep.Contracts.JobVault.Address)
+		var advanceLane, settleLane funding.Submitter
+		var reader *chain.Client
+		if treasury, err := chain.NewFromEnv("TREASURY_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
+			log.Warn("treasury chain lane NOT wired — advances stop at advance.pending_chain", "reason", err)
+		} else {
+			advanceLane, reader = lane{treasury, fpAddr}, treasury
+			log.Info("treasury chain lane wired", "signer", treasury.Address().Hex(), "floatPool", fpAddr.Hex())
+		}
+		if customer, err := chain.NewFromEnv("SNAPFALL_CUSTOMER_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
+			log.Warn("customer chain lane NOT wired — settlements stop at settlement.pending_chain", "reason", err)
+		} else {
+			settleLane = lane{customer, jvAddr}
+			if reader == nil {
+				reader = customer
+			}
+			log.Info("customer chain lane wired (demo-custodial)", "signer", customer.Address().Hex(), "jobVault", jvAddr.Hex())
+		}
+		fund.SetChain(advanceLane, settleLane)
+		if reader != nil {
+			adv.SetOracle(chain.Oracle{Reader: reader, FloatPool: fpAddr, JobVault: jvAddr})
+		}
+	}
 
 	// Restore the approval ledger, then surface any advance interrupted by the last
 	// shutdown — approved-but-unexecuted advances are NEVER auto-executed on boot

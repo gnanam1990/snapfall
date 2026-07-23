@@ -104,6 +104,10 @@ var wireCoveredFields = map[string]bool{
 	// binds to the kind (AT-05); two intents differing only in Kind share a wire hash,
 	// which is irrelevant because only payment-kind intents are ever wire-hashed.
 	"Kind": false,
+	// ChainRef is off the wire for the same reason as Kind: the H3 wire is the frozen
+	// sidecar payment contract, and chain-acting intents never cross it. The internal
+	// hash binds it (a decision binds to WHICH chain entity is acted on).
+	"ChainRef": false,
 }
 
 // The adversarial matrix: for EVERY Intent field, pin whether mutating it changes the
