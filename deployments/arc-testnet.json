@@ -8,25 +8,29 @@
     "rpcUrlEnv": "ARC_TESTNET_RPC",
     "explorerUrl": "https://testnet.arcscan.app",
     "confirmationDepth": 0,
-    "startBlock": 0,
+    "startBlock": 53268443,
     "startBlockEnv": "SNAPFALL_DEPLOYMENT_BLOCK"
   },
   "contracts": {
     "jobVault": {
       "addressEnv": "SNAPFALL_JOB_VAULT_ADDRESS",
-      "abi": "../contracts/abi/indexer/JobVault.json"
+      "abi": "../contracts/abi/indexer/JobVault.json",
+      "address": "0xF3830D7C3B8ca873bB0b277c0e179999e3d52681"
     },
     "floatPool": {
       "addressEnv": "SNAPFALL_FLOAT_POOL_ADDRESS",
-      "abi": "../contracts/abi/indexer/FloatPool.json"
+      "abi": "../contracts/abi/indexer/FloatPool.json",
+      "address": "0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5"
     },
     "auditAnchor": {
       "addressEnv": "SNAPFALL_AUDIT_ANCHOR_ADDRESS",
-      "abi": "../contracts/abi/indexer/AuditAnchor.json"
+      "abi": "../contracts/abi/indexer/AuditAnchor.json",
+      "address": "0x7CDBF8a6D33d4c4C55fb94447E7E90905b3672c6"
     },
     "usdc": {
       "addressEnv": "ARC_USDC_ADDRESS",
-      "decimals": 6
+      "decimals": 6,
+      "address": "0x3600000000000000000000000000000000000000"
     }
   },
   "fundedWallets": {
