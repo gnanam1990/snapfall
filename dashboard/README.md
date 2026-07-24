@@ -15,3 +15,12 @@ SNAPFALL_OWNER_API_URL=http://127.0.0.1:4010/api/v1 npm run dev
 
 If the daemon was started with `SNAPFALL_OWNER_TOKEN`, provide the same value to the
 dashboard process. It remains server-side and is never exposed to browser JavaScript.
+
+## Float page
+
+`/float` reads the committed Arc testnet `FloatPool` directly through the server-side
+`/api/float` adapter. `ARC_TESTNET_RPC`, `SNAPFALL_FLOAT_POOL_ADDRESS`, and
+`SNAPFALL_DEPLOYMENT_BLOCK` retain the deployment-config override behavior. Set
+`SNAPFALL_TREASURY_ADDRESS` to select the organization whose accepted-job/write-off
+history derives the displayed advance rate. Relevant H2 chain events trigger an immediate
+refresh; a 15-second read-only poll keeps the page current when the daemon relay is absent.

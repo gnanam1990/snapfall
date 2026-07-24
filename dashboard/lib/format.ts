@@ -22,6 +22,27 @@ export function formatUsdc(atomic: string | bigint): string {
   return `${whole.toLocaleString('en-US')}.${frac}`;
 }
 
+/** Format atomic USDC without hiding sub-cent amounts. The Float dashboard is an
+ *  accounting surface, so it keeps up to all six on-chain decimal places while
+ *  retaining two decimals for whole-cent values. */
+export function formatUsdcExact(atomic: string | bigint): string {
+  let v: bigint;
+  if (typeof atomic === 'bigint') {
+    v = atomic;
+  } else if (atomic === '') {
+    v = 0n;
+  } else if (ATOMIC_RE.test(atomic)) {
+    v = BigInt(atomic);
+  } else {
+    return String(atomic);
+  }
+
+  const whole = v / 1_000_000n;
+  let frac = (v % 1_000_000n).toString().padStart(6, '0');
+  while (frac.length > 2 && frac.endsWith('0')) frac = frac.slice(0, -1);
+  return `${whole.toLocaleString('en-US')}.${frac}`;
+}
+
 /** Basis points -> percent string: 5000 -> "50%". */
 export function formatBps(bps: number): string {
   if (!Number.isFinite(bps)) return '–';
