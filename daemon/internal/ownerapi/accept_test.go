@@ -2,13 +2,16 @@ package ownerapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/gnanam1990/snapfall/daemon/internal/billing"
 	"github.com/gnanam1990/snapfall/daemon/internal/brain"
+	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
 
 // wireAccept wires the customer seams the way the daemon does, over a tiny in-memory
@@ -180,10 +183,71 @@ func TestAPI_RootMuxAdmitsOnlyWrappedRouteGroups(t *testing.T) {
 		rootFuncs += strings.Count(src, "root.HandleFunc(")
 		rootHandles += strings.Count(src, "root.Handle(")
 	}
-	if rootFuncs != 2 {
-		t.Fatalf("root.HandleFunc sites = %d, want exactly the 2 customer routes (both withCustomerAuth-wrapped)", rootFuncs)
+	// The three customer routes — accept, acceptance, invoice (V9) — all
+	// withCustomerAuth-wrapped. A route registered on root outside the wrapper would
+	// bypass both principals' auth; this count makes that a red test, not a quiet hole.
+	if rootFuncs != 3 {
+		t.Fatalf("root.HandleFunc sites = %d, want exactly the 3 customer routes (all withCustomerAuth-wrapped)", rootFuncs)
 	}
 	if rootHandles != 1 {
 		t.Fatalf("root.Handle sites = %d, want exactly the 1 withAuth-wrapped owner mux", rootHandles)
+	}
+}
+
+// V9 copy-serving decision, pinned: the customer route serves the CUSTOMER copy —
+// plain-language gaps, NO owner internals, NO reconciliation, NO alerts — credential-
+// gated like every customer route, and 401 without it.
+func TestAPI_CustomerInvoiceServesCustomerCopyOnly(t *testing.T) {
+	s, _ := newAPI(t)
+	tokPtr := wireAccept(s)
+	h := s.Handler()
+
+	// Mint the credential (loopback posture, no owner token set) so VerifyAccept knows it.
+	if w, _ := do(t, h, "POST", "/api/v1/jobs/job_acc/accept-link", ""); w.Code != 200 {
+		t.Fatalf("mint: %d", w.Code)
+	}
+
+	// Seed a billing.invoice record whose OWNER copy carries internal gap detail and
+	// alerts, and whose CUSTOMER copy is plain — the two-copy Record G12 builds.
+	rec := billing.Record{
+		Version: 2,
+		Owner: billing.Invoice{
+			Copy: billing.CopyOwner, JobID: "job_acc", Status: billing.StatusPartial,
+			Gaps: []billing.Gap{{Stage: "settlement", Cause: "no on-chain settlement", Detail: "OWNER-ONLY internal detail"}},
+		},
+		Customer: billing.Invoice{
+			Copy: billing.CopyCustomer, JobID: "job_acc", Status: billing.StatusPartial,
+			Gaps: []billing.Gap{{Stage: "settlement", Cause: "no on-chain settlement"}},
+		},
+		Alerts: []billing.Alert{{Kind: billing.AlertExpenseOutsidePolicy, Message: "m", Data: map[string]string{}}},
+	}
+	raw, _ := json.Marshal(rec)
+	var payload map[string]any
+	_ = json.Unmarshal(raw, &payload)
+	if _, err := s.st.Append(context.Background(), store.Event{Kind: "billing.invoice", EntityID: "job_acc", Actor: "billing", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+
+	// No credential → 401 (the read side is not free).
+	if w, _ := do(t, h, "GET", "/api/v1/customer/jobs/job_acc/invoice", ""); w.Code != 401 {
+		t.Fatalf("invoice without credential: %d, want 401", w.Code)
+	}
+
+	// With the credential → the CUSTOMER copy, and owner internals absent.
+	r := httptest.NewRequest("GET", "/api/v1/customer/jobs/job_acc/invoice", nil)
+	r.Header.Set("Authorization", "Bearer "+*tokPtr)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("invoice with credential: %d (%s)", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"copy":"customer"`) {
+		t.Fatalf("must serve the customer copy: %s", body)
+	}
+	for _, leak := range []string{"OWNER-ONLY internal detail", "expense-outside-policy", "reconciliation"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("customer copy leaked owner-only content %q: %s", leak, body)
+		}
 	}
 }
