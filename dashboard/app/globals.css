@@ -709,3 +709,19 @@ table.t { width: 100%; border-collapse: collapse; }
   .rate-proof-note { margin-left: -18px; margin-right: -18px; padding-left: 18px; padding-right: 18px; }
   .rate-equation { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ── V8 approvals inbox ── */
+.approval-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.approval-amount { text-align: right; white-space: nowrap; }
+.approval-purpose { margin: 12px 0 8px; color: var(--text); font-size: 14px; line-height: 1.5; }
+.approval-reason {
+  width: 100%; margin: 12px 0; padding: 10px 12px; min-height: 58px; resize: vertical;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border-2); border-radius: 8px;
+  font: inherit; font-size: 13px;
+}
+.approval-reason:focus { outline: none; border-color: var(--accent-dim); }
+.approval-result { margin: 12px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.approval-result.approved, .approval-result.alternative_requested { color: var(--pos); }
+.approval-result.rejected { color: var(--neg); }
+.approval-result.STALE_VIEW, .approval-result.APPROVAL_EXPIRED, .approval-result.ALREADY_DECIDED,
+.approval-result.UNREACHABLE, .approval-result.NO_DAEMON { color: var(--warn); }
