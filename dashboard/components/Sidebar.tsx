@@ -15,6 +15,9 @@ const NAV: { href: string; label: string; pill?: string }[] = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  // The customer portal (V9) is a magic-link surface for a different principal — it must
+  // never show the owner's navigation. The portal page renders full-bleed over the grid.
+  if (pathname?.startsWith('/portal')) return null;
   return (
     <aside className="sidebar">
       <div className="brand">

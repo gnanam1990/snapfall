@@ -87,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 	root := http.NewServeMux()
 	root.HandleFunc("POST /api/v1/customer/jobs/{id}/accept", s.withCustomerAuth(s.handleCustomerAccept))
 	root.HandleFunc("GET /api/v1/customer/jobs/{id}/acceptance", s.withCustomerAuth(s.handleCustomerAcceptance))
+	root.HandleFunc("GET /api/v1/customer/jobs/{id}/invoice", s.withCustomerAuth(s.handleCustomerInvoice))
 	root.Handle("/", s.withAuth(owner))
 	return root
 }

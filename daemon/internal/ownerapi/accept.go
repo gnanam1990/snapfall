@@ -1,10 +1,13 @@
 package ownerapi
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/gnanam1990/snapfall/daemon/internal/billing"
 	"github.com/gnanam1990/snapfall/daemon/internal/brain"
 )
 
@@ -45,6 +48,37 @@ func (s *Server) handleCustomerAcceptance(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{
 		"jobId": r.PathValue("id"), "stage": stage, "accepted": stage == string(brain.StageAccepted),
 	})
+}
+
+// GET /api/v1/customer/jobs/{id}/invoice — the customer's receipt (V9), credential-gated.
+//
+// THE COPY-SERVING DECISION, made concrete: each principal sees ONLY their own copy
+// through their own auth. The owner route (owner token) serves the owner copy with
+// internal gap detail, reconciliation, and alerts; THIS route (per-job accept
+// credential) serves the CUSTOMER copy — plain-language gaps, internals stripped, and
+// NO reconciliation or alerts (those are owner-only). The daemon already builds both
+// copies in the billing Record; this is the read that finally serves the customer half,
+// closing the seam flagged at G12.
+func (s *Server) handleCustomerInvoice(w http.ResponseWriter, r *http.Request) {
+	var payload string
+	err := s.st.DB().QueryRowContext(r.Context(),
+		`SELECT payload_json FROM events WHERE kind='billing.invoice' AND entity_id=?
+		 ORDER BY seq DESC LIMIT 1`, r.PathValue("id")).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "NO_INVOICE", "no receipt has been generated for this job yet", nil)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	var rec billing.Record
+	if err := json.Unmarshal([]byte(payload), &rec); err != nil {
+		writeErr(w, http.StatusInternalServerError, "INTERNAL", "corrupt invoice record", nil)
+		return
+	}
+	// The CUSTOMER copy only — no owner internals, no reconciliation, no alerts.
+	writeJSON(w, http.StatusOK, map[string]any{"version": rec.Version, "invoice": rec.Customer})
 }
 
 // POST /api/v1/jobs/{id}/accept-link — OWNER surface (inside withAuth): mint or rotate
