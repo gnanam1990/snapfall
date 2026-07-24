@@ -142,8 +142,9 @@ func TestGitChecklistSourceRejectsDirectoryAsArtifact(t *testing.T) {
 	runGit(t, repo, "add", ".snapfall/milestone.json", "reports/release.txt")
 	runGit(t, repo, "commit", "-m", "add directory-shaped milestone evidence")
 
-	if _, err := (GitChecklistSource{}).Snapshot(context.Background(), repo); err == nil {
-		t.Fatal("Git tree directory was accepted as a completed artifact")
+	if _, err := (GitChecklistSource{}).Snapshot(context.Background(), repo); err == nil ||
+		!strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("Git tree directory was not explicitly rejected as a regular file: %v", err)
 	}
 }
 

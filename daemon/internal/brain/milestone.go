@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 	"github.com/gnanam1990/snapfall/daemon/internal/worker"
@@ -28,6 +27,11 @@ type Milestone struct {
 type MilestoneCycle struct {
 	JobID      string
 	VaultJobID string
+}
+
+type milestoneObservationGate struct {
+	token chan struct{}
+	users int
 }
 
 // MilestoneOracle is the authoritative post-settlement seam. chain.Oracle implements
@@ -147,9 +151,11 @@ func (b *Brain) observeMilestoneCompletion(ctx context.Context, jobID string) er
 	}
 	// Keep the idempotency check and append in one critical section. Accepted-job
 	// retries may arrive concurrently after an earlier observation failure.
-	observationLock := b.milestoneObservationLock(jobID)
-	observationLock.Lock()
-	defer observationLock.Unlock()
+	release, err := b.acquireMilestoneObservation(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	var prior int
 	if err := b.store.DB().QueryRowContext(ctx,
@@ -198,13 +204,34 @@ func (b *Brain) observeMilestoneCompletion(ctx context.Context, jobID string) er
 	return err
 }
 
-func (b *Brain) milestoneObservationLock(jobID string) *sync.Mutex {
+func (b *Brain) acquireMilestoneObservation(ctx context.Context, jobID string) (func(), error) {
+	b.mu.Lock()
+	gate := b.milestoneObservationGates[jobID]
+	if gate == nil {
+		gate = &milestoneObservationGate{token: make(chan struct{}, 1)}
+		gate.token <- struct{}{}
+		b.milestoneObservationGates[jobID] = gate
+	}
+	gate.users++
+	b.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		b.releaseMilestoneObservationUser(jobID, gate)
+		return nil, ctx.Err()
+	case <-gate.token:
+		return func() {
+			gate.token <- struct{}{}
+			b.releaseMilestoneObservationUser(jobID, gate)
+		}, nil
+	}
+}
+
+func (b *Brain) releaseMilestoneObservationUser(jobID string, gate *milestoneObservationGate) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	lock := b.milestoneObservationLocks[jobID]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		b.milestoneObservationLocks[jobID] = lock
+	gate.users--
+	if gate.users == 0 && b.milestoneObservationGates[jobID] == gate {
+		delete(b.milestoneObservationGates, jobID)
 	}
-	return lock
 }

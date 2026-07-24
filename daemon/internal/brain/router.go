@@ -62,7 +62,7 @@ type Brain struct {
 	// milestoneOracle verifies a standing-pipeline cycle from authoritative chain state
 	// after settlement and reads the resulting organization rate.
 	milestoneOracle           MilestoneOracle
-	milestoneObservationLocks map[string]*sync.Mutex
+	milestoneObservationGates map[string]*milestoneObservationGate
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).
@@ -121,7 +121,7 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 		workers:                   make(map[string]worker.Worker),
 		jobs:                      make(map[string]*jobState),
 		tasks:                     make(map[string]*taskHandle),
-		milestoneObservationLocks: make(map[string]*sync.Mutex),
+		milestoneObservationGates: make(map[string]*milestoneObservationGate),
 	}
 
 	b.maxRevisions = 2

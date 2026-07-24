@@ -196,6 +196,60 @@ func TestAcceptChain_ConcurrentObservationRetriesCompleteMilestoneOnce(t *testin
 	if n := countEvents(t, st, "pipeline.milestone.completed", jobID); n != 1 {
 		t.Fatalf("completed observations = %d, want exactly 1", n)
 	}
+	b.mu.Lock()
+	retainedGates := len(b.milestoneObservationGates)
+	b.mu.Unlock()
+	if retainedGates != 0 {
+		t.Fatalf("retained milestone observation gates = %d, want 0", retainedGates)
+	}
+}
+
+func TestMilestoneObservation_CanceledWaiterDoesNotBlockBehindOracle(t *testing.T) {
+	b, _, jobID := acceptRig(t)
+	if err := b.memory.Update(jobID, func(jm *JobMemory) {
+		jm.VaultJobID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		jm.StandingInstructionID = "standing-build"
+		jm.MilestoneNumber = 1
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oracle := &concurrentMilestoneOracle{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	b.SetMilestoneOracle(oracle)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- b.observeMilestoneCompletion(context.Background(), jobID)
+	}()
+	<-oracle.entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(started)
+		secondDone <- b.observeMilestoneCompletion(ctx, jobID)
+	}()
+	<-started
+	cancel()
+
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled observation error = %v, want context.Canceled", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		close(oracle.release)
+		<-firstDone
+		<-secondDone
+		t.Fatal("canceled observation remained blocked behind the in-flight oracle")
+	}
+	close(oracle.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first observation: %v", err)
+	}
 }
 
 func repeat64(s string) string {
