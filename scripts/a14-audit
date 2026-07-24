@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# High-confidence formats only. Generic words such as "token" and "secret" are
+# deliberately excluded: the codebase contains security interfaces and inert test
+# values, and a noisy scanner is easier to ignore than a narrow, actionable one.
+secret_pattern='(-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-(live|test)-[A-Za-z0-9]{16,}|[0-9]{8,10}:[A-Za-z0-9_-]{35}|act_[0-9a-fA-F]{64}|((PRIVATE_KEY|MNEMONIC|SEED_PHRASE|API_KEY|AUTH_TOKEN|APPROVAL_SECRET|OWNER_TOKEN|BOT_TOKEN)[[:space:]]*[:=][[:space:]]*(0x)?[0-9a-fA-F]{64})|([a-zA-Z]+://)[^/@[:space:]]+:[^/@[:space:]]+@)'
+sensitive_path_pattern='(^|/)(\.env($|\.)|.*(secret|credential|private[-_]?key|mnemonic|seed).*)|\.(pem|key|p12|pfx|jks|keystore)$'
+artifact_path_pattern='\.(har|log|png|jpe?g|gif|webp|mp4|mov|webm)$'
+
+failed=0
+
+current_hits="$(
+  git grep -l -I -E "$secret_pattern" -- \
+    . ':(exclude)contracts/lib/**' 2>/dev/null || true
+)"
+if [[ -n "$current_hits" ]]; then
+  echo "FAIL: high-confidence secret pattern(s) in the current tree:"
+  printf '%s\n' "$current_hits"
+  failed=1
+else
+  echo "PASS: no high-confidence secret patterns in the current tree"
+fi
+
+history_hits="$(
+  git rev-list --all |
+    xargs -r -n 40 git grep -l -I -E "$secret_pattern" -- 2>/dev/null |
+    sort -u || true
+)"
+if [[ -n "$history_hits" ]]; then
+  echo "FAIL: high-confidence secret pattern(s) in reachable Git history:"
+  printf '%s\n' "$history_hits"
+  failed=1
+else
+  echo "PASS: no high-confidence secret patterns in reachable Git history"
+fi
+
+sensitive_paths="$(
+  git log --all --pretty=format: --name-only |
+    sort -u |
+    grep -E -i "$sensitive_path_pattern" |
+    grep -v -E '^sidecar/\.env\.example$' || true
+)"
+if [[ -n "$sensitive_paths" ]]; then
+  echo "FAIL: sensitive filename(s) occurred in reachable Git history:"
+  printf '%s\n' "$sensitive_paths"
+  failed=1
+else
+  echo "PASS: no sensitive filenames in history (empty sidecar/.env.example allowed)"
+fi
+
+artifacts="$(
+  git log --all --pretty=format: --name-only |
+    sort -u |
+    grep -E -i "$artifact_path_pattern" || true
+)"
+if [[ -n "$artifacts" ]]; then
+  echo "INFO: tracked log/recording artifacts require manual visual review:"
+  printf '%s\n' "$artifacts"
+else
+  echo "PASS: no tracked logs, screenshots, or video artifacts"
+fi
+
+if (( failed != 0 )); then
+  exit 1
+fi
+
+echo "A14 automated secret preflight passed."
+echo "Recording claims still require the manual evidence checks in docs/A14-SECRET-INTEGRITY-AUDIT.md."
