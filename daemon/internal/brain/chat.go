@@ -37,6 +37,7 @@ const (
 	StageRevision      JobStage = "revision"       // QA bounced; author is revising
 	StageDeliveryReady JobStage = "delivery_ready" // QA passed; deliverable may go out
 	StageEscalated     JobStage = "escalated"      // revisions exhausted; owner decides
+	StageAccepted      JobStage = "accepted"       // customer accepted; settlement pending the chain
 )
 
 // jobState is Brain's in-memory view of one job. The event log and the memory file

@@ -44,6 +44,15 @@ type Server struct {
 	// never holds the billing agent — Brain does, from its single pinned site. Nil until
 	// wired: POST then refuses honestly (503 NOT_WIRED) while reads still work.
 	Generate func(ctx context.Context, jobID string) (billing.Record, error)
+
+	// The customer-surface seams (accept.go), wired to Brain: MintAccept (owner-gated
+	// mint/rotate), VerifyAccept (constant-time per-job credential check), Accept (the
+	// state/freeze/exactly-once transition), JobState (the customer's read). Nil seams
+	// REFUSE (503) — the surface never fails open.
+	MintAccept   func(ctx context.Context, jobID string) (string, error)
+	VerifyAccept func(jobID, token string) bool
+	Accept       func(ctx context.Context, jobID string) (string, error)
+	JobState     func(jobID string) (string, bool)
 }
 
 // New builds the server.
@@ -51,18 +60,28 @@ func New(life *approval.Lifecycle, st *store.Store, log *slog.Logger) *Server {
 	return &Server{life: life, st: st, log: log, token: os.Getenv("SNAPFALL_OWNER_TOKEN"), pollEvery: 200 * time.Millisecond}
 }
 
-// Handler returns the H2 routes.
+// Handler returns the H2 routes. TWO PRINCIPALS, two auth domains, one handler: owner
+// routes live behind withAuth (the owner bearer); the customer routes live behind
+// withCustomerAuth (the per-job accept credential) and are NOT under the owner token —
+// the settlement principal is the customer, and neither credential opens the other's
+// surface.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
+	owner := http.NewServeMux()
+	owner.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
-	mux.HandleFunc("GET /api/v1/approvals", s.handleApprovals)
-	mux.HandleFunc("POST /api/v1/approvals/{id}/decision", s.handleDecision)
-	mux.HandleFunc("GET /api/v1/events/stream", s.handleStream)
-	mux.HandleFunc("POST /api/v1/jobs/{id}/invoice", s.handleInvoiceGenerate)
-	mux.HandleFunc("GET /api/v1/jobs/{id}/invoice", s.handleInvoiceLatest)
-	return s.withAuth(mux)
+	owner.HandleFunc("GET /api/v1/approvals", s.handleApprovals)
+	owner.HandleFunc("POST /api/v1/approvals/{id}/decision", s.handleDecision)
+	owner.HandleFunc("GET /api/v1/events/stream", s.handleStream)
+	owner.HandleFunc("POST /api/v1/jobs/{id}/invoice", s.handleInvoiceGenerate)
+	owner.HandleFunc("GET /api/v1/jobs/{id}/invoice", s.handleInvoiceLatest)
+	owner.HandleFunc("POST /api/v1/jobs/{id}/accept-link", s.handleMintAcceptLink)
+
+	root := http.NewServeMux()
+	root.HandleFunc("POST /api/v1/customer/jobs/{id}/accept", s.withCustomerAuth(s.handleCustomerAccept))
+	root.HandleFunc("GET /api/v1/customer/jobs/{id}/acceptance", s.withCustomerAuth(s.handleCustomerAcceptance))
+	root.Handle("/", s.withAuth(owner))
+	return root
 }
 
 // withAuth enforces the bearer token on EVERY route whenever a token is configured —

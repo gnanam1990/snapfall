@@ -49,8 +49,11 @@ type JobMemory struct {
 	// the settlement observer use. NO PRODUCER EXISTS today (the fourth face of the
 	// chain gap: on-chain job creation never happens); it stays empty for real jobs
 	// until the chain-write path lands. Tests set it directly.
-	VaultJobID string    `json:"vault_job_id,omitempty"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	VaultJobID string `json:"vault_job_id,omitempty"`
+	// AcceptTokenHash is the SHA-256 (hex) of the customer's accept credential — the
+	// plaintext is returned once at mint time and NEVER stored (pinned by test).
+	AcceptTokenHash string    `json:"accept_token_hash,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // MemoryStore owns the directory of per-job files.
