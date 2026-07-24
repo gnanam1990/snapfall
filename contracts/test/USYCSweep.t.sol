@@ -57,6 +57,32 @@ contract USYCSweepTest is Test {
         assertEq(strategy.balanceOf(POOL), 105_000_000);
     }
 
+    function test_directDonationRaisesPositionValueInsteadOfBecomingTrapped() public {
+        vm.prank(POOL);
+        strategy.deposit(100_000_000);
+
+        vm.prank(YIELD_DONOR);
+        usdc.transfer(address(strategy), 5_000_000);
+
+        assertEq(strategy.balanceOf(POOL), 105_000_000);
+        assertEq(strategy.totalManagedAssets(), 105_000_000);
+    }
+
+    function test_shareMathDoesNotOverflowForLargeValidBalances() public {
+        uint256 first = uint256(1) << 200;
+        uint256 second = uint256(1) << 100;
+        usdc.mint(POOL, first);
+        usdc.mint(OTHER_POOL, second);
+
+        vm.prank(POOL);
+        strategy.deposit(first);
+        vm.prank(OTHER_POOL);
+        uint256 shares = strategy.deposit(second);
+
+        assertEq(shares, second);
+        assertEq(strategy.balanceOf(OTHER_POOL), second);
+    }
+
     function test_redeemOnDemandReturnsPrincipalAndYield() public {
         vm.prank(POOL);
         uint256 shares = strategy.deposit(100_000_000);

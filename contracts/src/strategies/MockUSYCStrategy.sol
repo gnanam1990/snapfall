@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IIdleCapitalStrategy} from "../IIdleCapitalStrategy.sol";
 
@@ -14,7 +15,6 @@ contract MockUSYCStrategy is IIdleCapitalStrategy, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable usdc;
-    uint256 public totalManagedAssets;
     uint256 public totalShares;
     mapping(address => uint256) public sharesOf;
 
@@ -32,52 +32,62 @@ contract MockUSYCStrategy is IIdleCapitalStrategy, ReentrancyGuard {
         usdc = asset_;
     }
 
-    function asset() external view returns (address) {
+    function asset() external view override returns (address) {
         return address(usdc);
     }
 
-    function isMock() external pure returns (bool) {
+    function isMock() external pure override returns (bool) {
         return true;
     }
 
-    function deposit(uint256 assets) external nonReentrant returns (uint256 shares) {
+    /// @notice The underlying token balance is the accounting truth. This also makes a
+    ///         direct donation visible as simulated yield instead of trapping it outside
+    ///         position values. Fee-on-transfer assets mint shares only for what arrived.
+    function deposit(uint256 assets) external override nonReentrant returns (uint256 shares) {
         if (assets == 0) revert ZeroAmount();
-        shares = totalShares == 0 ? assets : (assets * totalShares) / totalManagedAssets;
+
+        uint256 managedBefore = totalManagedAssets();
+        usdc.safeTransferFrom(msg.sender, address(this), assets);
+        uint256 received = totalManagedAssets() - managedBefore;
+        shares = totalShares == 0 ? received : Math.mulDiv(received, totalShares, managedBefore);
         if (shares == 0) revert ZeroAmount();
 
-        totalManagedAssets += assets;
         totalShares += shares;
         sharesOf[msg.sender] += shares;
-        emit Deposited(msg.sender, assets, shares);
-
-        usdc.safeTransferFrom(msg.sender, address(this), assets);
+        emit Deposited(msg.sender, received, shares);
     }
 
-    function redeem(uint256 shares, address receiver) external nonReentrant returns (uint256 assets) {
+    function redeem(uint256 shares, address receiver) external override nonReentrant returns (uint256 assets) {
         if (shares == 0) revert ZeroAmount();
         if (receiver == address(0)) revert ZeroAddress();
         if (shares > sharesOf[msg.sender]) revert InsufficientShares();
 
-        assets = (shares * totalManagedAssets) / totalShares;
+        assets = Math.mulDiv(shares, totalManagedAssets(), totalShares);
         sharesOf[msg.sender] -= shares;
         totalShares -= shares;
-        totalManagedAssets -= assets;
         emit Redeemed(msg.sender, receiver, shares, assets);
 
         usdc.safeTransfer(receiver, assets);
     }
 
-    function balanceOf(address account) external view returns (uint256 assets) {
+    function balanceOf(address account) external view override returns (uint256 assets) {
         if (totalShares == 0) return 0;
-        return (sharesOf[account] * totalManagedAssets) / totalShares;
+        return Math.mulDiv(sharesOf[account], totalManagedAssets(), totalShares);
+    }
+
+    /// @notice Assets currently controlled by the mock strategy.
+    function totalManagedAssets() public view returns (uint256) {
+        return usdc.balanceOf(address(this));
     }
 
     /// @notice Simulates external USYC yield by donating USDC without minting shares.
     function addMockYield(uint256 assets) external nonReentrant {
         if (assets == 0) revert ZeroAmount();
         if (totalShares == 0) revert NoActivePosition();
-        totalManagedAssets += assets;
-        emit MockYieldAdded(msg.sender, assets);
+        uint256 managedBefore = totalManagedAssets();
         usdc.safeTransferFrom(msg.sender, address(this), assets);
+        uint256 received = totalManagedAssets() - managedBefore;
+        if (received == 0) revert ZeroAmount();
+        emit MockYieldAdded(msg.sender, received);
     }
 }

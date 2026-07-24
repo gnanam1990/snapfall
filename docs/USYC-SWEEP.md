@@ -42,11 +42,13 @@ present simulated yield as Circle/Hashnote yield.
 Do not replace the mock until all of these are true:
 
 1. The designated Arc testnet wallet is allowlisted by Circle.
-2. A small USDC `deposit(assets, receiver)` through the Teller succeeds.
+2. An eligibility-approved depositor submits a compliant Teller
+   `deposit(assets, receiver)` meeting USYC's documented 100,000 USD minimum investment.
 3. The resulting USYC balance is observed at the documented token address.
 4. `redeem(shares, receiver, account)` returns testnet USDC on demand.
 5. A real adapter implements `IIdleCapitalStrategy` and returns `false` from `isMock()`.
 6. Deposit, balance, redemption, and failure-path fixtures are committed with explorer links.
 
-USYC production eligibility and minimum-investment rules are outside this hackathon mock. They
-must be reviewed before any production claim or use.
+The real-adapter prerequisites above are not claims that Snapfall is eligible. USYC production
+eligibility and minimum-investment rules must be independently reviewed before any production
+claim or use.
