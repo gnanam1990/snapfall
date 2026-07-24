@@ -71,9 +71,15 @@ func (a *Agent) Execute(ctx context.Context, g approval.Grant) error {
 		return fmt.Errorf("funding: refused — grant for request %s already executed (replay)", g.RequestID())
 	}
 	a.seen[g.RequestID()] = true
+	kind := "pay_intent"
+	if in.Kind != "" && in.Kind != "payment" {
+		// The Phase-2 vocabulary arrives: an advance-kind Grant records the advance
+		// instruction (request_advance) rather than a payment.
+		kind = "request_" + in.Kind
+	}
 	a.executed = append(a.executed, Instruction{
 		JobID:        in.JobID,
-		Kind:         "pay_intent",
+		Kind:         kind,
 		AmountMicros: in.AmountMicros,
 		Merchant:     in.Merchant,
 		RequestID:    g.RequestID(),

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gnanam1990/snapfall/daemon/internal/advancing"
 	"github.com/gnanam1990/snapfall/daemon/internal/agents"
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
 	"github.com/gnanam1990/snapfall/daemon/internal/billing"
@@ -277,6 +278,32 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		}
 		return string(js.Stage), true
 	}
+	// The snap's owner-initiated trigger: the proposal lands pending in this same
+	// inbox; the owner's approval mints the Grant and Funding stops honestly at
+	// advance.pending_chain until the deployment lands.
+	api.ProposeAdvance = br.ProposeAdvance
+
+	// The funding-observed advance trigger. HONEST STATE: never fired for real — no
+	// deployment, no JobFunded rows, nothing writes vault ids — but it runs so funding
+	// day needs no daemon change. Seeded-row tested in the brain package.
+	if err := sup.Register(workerFunc{name: "funding-observer", fn: func(wctx context.Context) error {
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-wctx.Done():
+				return nil
+			case <-tick.C:
+				if n, err := br.ObserveFundingOnce(wctx); err != nil {
+					log.Warn("funding observation failed", "err", err)
+				} else if n > 0 {
+					log.Info("funding-observed advance proposals", "count", n)
+				}
+			}
+		}
+	}}); err != nil {
+		return err
+	}
 	if err := sup.Register(workerFunc{name: "owner-api", fn: func(wctx context.Context) error {
 		return api.Run(wctx, apiAddr)
 	}}); err != nil {
@@ -354,7 +381,8 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening brain memory store: %w", err)
 	}
-	br := brain.New(log, st, mem, funding.New())
+	fund := funding.New()
+	br := brain.New(log, st, mem, fund)
 	br.SetScoper(brain.StubScoper{})
 	// The G8 adaptive DD worker with its scripted source plan: the \$0.04 profile primary
 	// (auto-approves under DemoPolicy) with the \$0.06 benchmark as the cheaper fallback.
@@ -392,6 +420,24 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// (arc-testnet chainId 5042002, deployments/arc-testnet.json). Brain alone holds the
 	// pointer; GenerateInvoice is its single pinned invocation site.
 	br.SetBilling(billing.New(st, arcTestnetChainID, nil))
+
+	// The advance's human-authorized path (the snap's daemon half): proposals enter
+	// the approval lifecycle pre-marked for the owner, execution flows through the
+	// same Grant gates as payments, and Funding stops honestly at advance.pending_chain.
+	adv := advancing.New(life, st, fund, log, orgID, 10*time.Minute)
+	br.SetAdvanceFlow(adv)
+
+	// Restore the approval ledger, then surface any advance interrupted by the last
+	// shutdown — approved-but-unexecuted advances are NEVER auto-executed on boot
+	// (AT-09's crash posture); the owner is told and re-proposes.
+	if err := life.Recover(ctx); err != nil {
+		return nil, nil, err
+	}
+	if n, err := adv.EscalateInterrupted(ctx); err != nil {
+		return nil, nil, err
+	} else if n > 0 {
+		log.Warn("advances interrupted by restart escalated to the owner", "count", n)
+	}
 
 	// Serve pin 2: task lifetimes bound to the daemon root — SIGTERM wakes blocked tasks
 	// and refuses new dispatches; in-flight executions complete past their claim.
