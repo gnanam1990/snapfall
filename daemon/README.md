@@ -116,6 +116,28 @@ cycle instead of creating a duplicate. Responses expose Brain's real lifecycle s
 than claiming that the one-shot repository measurement watches indefinitely. These routes
 remain under the existing owner bearer or loopback-only boundary.
 
+## Telegram approval mirror (A13)
+
+Telegram is an optional notification mirror over the existing H2 approval inbox. It never
+approves or rejects directly: each inline action opens `/approvals` with the request and
+decision preselected, where the dashboard renders the current request and posts the displayed
+`intentHash` through H2. Repeated decisions therefore retain G7's existing idempotency and
+stale-view protections.
+
+Configure the bot at runtime only:
+
+```bash
+export SNAPFALL_TELEGRAM_BOT_TOKEN=<BotFather token>
+export SNAPFALL_TELEGRAM_CHAT_ID=<owner chat id>
+export SNAPFALL_DASHBOARD_URL=https://dashboard.example
+go run ./cmd/snapfall
+```
+
+`SNAPFALL_DASHBOARD_URL` defaults to `http://127.0.0.1:3000`; set a reachable HTTPS URL when
+opening notifications on another device. Token and chat ID must be configured together or the
+daemon refuses to start. With neither set, Telegram remains disabled. `.env` files are ignored,
+and the bot token is never included in message bodies or error logs.
+
 ## Layout
 
 ```
@@ -130,6 +152,7 @@ internal/integration/   cross-module acceptance paths, including A11 / AT-17
 internal/store/        SQLite (WAL), event log, transactional outbox
 internal/events/       typed bus + outbox publisher
 internal/supervisor/   worker lifecycle, restart-with-backoff, health
+internal/telegram/     optional A13 approval mirror; dashboard deep links only
 store/schema.sql       canonical schema (PRD §8.1 entities, §8.5 taxonomy)
 manifests/*.yaml       the four bounded roles (PRD §4.1)
 ```

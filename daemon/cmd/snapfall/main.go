@@ -38,6 +38,7 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/qa"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 	"github.com/gnanam1990/snapfall/daemon/internal/supervisor"
+	"github.com/gnanam1990/snapfall/daemon/internal/telegram"
 	"github.com/gnanam1990/snapfall/daemon/internal/worker"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -232,6 +233,9 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 
 	// ── Supervisor ──
 	sup := supervisor.New(log, 5, 200*time.Millisecond)
+	if err := configureTelegramApprovals(life, sup, log); err != nil {
+		return err
+	}
 
 	// The dummy heartbeat runs as the Research role. In one-shot serve mode it is
 	// INFRASTRUCTURE (the owner one-shot below is what the daemon exists to finish);
@@ -411,6 +415,39 @@ func (w workerFunc) Run(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+func configureTelegramApprovals(life *approval.Lifecycle, sup *supervisor.Supervisor, log *slog.Logger) error {
+	cfg, err := telegram.LoadConfig(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("telegram approvals: %w", err)
+	}
+	if !cfg.Enabled() {
+		return nil
+	}
+	notifier := telegram.New(cfg, log)
+	previousPending := life.Pending
+	life.Pending = func(req approval.Request) {
+		if previousPending != nil {
+			previousPending(req)
+		}
+		if !notifier.Enqueue(req) {
+			log.Warn("telegram approval queue full; dashboard remains authoritative",
+				"request_id", req.ID, "job_id", req.JobID)
+		}
+	}
+	for _, req := range life.PendingRequests() {
+		if !notifier.Enqueue(req) {
+			log.Warn("telegram recovery queue full; dashboard remains authoritative",
+				"request_id", req.ID, "job_id", req.JobID)
+		}
+	}
+	if err := sup.Register(notifier); err != nil {
+		return fmt.Errorf("register telegram approvals: %w", err)
+	}
+	log.Info("telegram approval mirror enabled",
+		"dashboard_url", cfg.DashboardURL, "recovered_pending", len(life.PendingRequests()))
+	return nil
 }
 
 // wireBrain is THE single Brain wiring point in the daemon (pinned by
