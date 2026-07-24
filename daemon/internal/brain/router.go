@@ -59,6 +59,10 @@ type Brain struct {
 	// advanceFlow is the human-authorized advance path (internal/advancing) — held by
 	// Brain alone, invoked from the single ProposeAdvance site.
 	advanceFlow *advancing.Flow
+	// quoteOracle reads a job's authoritative quote (human USDC) from on-chain state
+	// when it is bound to a vault id — so the local record and the chain agree by
+	// construction instead of diverging (the stub quote vs the real customerPayment).
+	quoteOracle QuoteOracle
 	// milestoneOracle verifies a standing-pipeline cycle from authoritative chain state
 	// after settlement and reads the resulting organization rate.
 	milestoneOracle           MilestoneOracle

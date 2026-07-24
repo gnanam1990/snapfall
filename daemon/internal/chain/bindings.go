@@ -2,6 +2,7 @@ package chain
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strings"
@@ -42,7 +43,14 @@ func JobID32(hexID string) ([32]byte, error) {
 	if len(h) != 64 {
 		return out, fmt.Errorf("vault job id %q is not bytes32 hex", hexID)
 	}
-	b := common.FromHex("0x" + h)
+	// hex.DecodeString FAILS CLOSED on non-hex characters — common.FromHex would
+	// silently return zero/partial bytes for "0xGG…", producing the zero job id with
+	// no error, which every chain caller (advance, settlement, invoice, the quote
+	// oracle) would then read against a nonexistent job (review: PR #36).
+	b, err := hex.DecodeString(h)
+	if err != nil {
+		return out, fmt.Errorf("vault job id %q is not valid hex: %w", hexID, err)
+	}
 	copy(out[:], b)
 	return out, nil
 }
@@ -90,6 +98,9 @@ func CalldataAcceptDelivery(jobID [32]byte) []byte {
 func CalldataJobStatus(jobID [32]byte) []byte {
 	return pack("jobStatus(bytes32)", b32Word(jobID))
 }
+func CalldataJobEconomics(jobID [32]byte) []byte {
+	return pack("jobEconomics(bytes32)", b32Word(jobID))
+}
 
 // ── view decoders (the restart oracle's answers) ──
 
@@ -102,6 +113,18 @@ func DecodeOpenAdvance(ret []byte) (principal, fee *big.Int, open bool, err erro
 	fee = new(big.Int).SetBytes(ret[32:64])
 	open = new(big.Int).SetBytes(ret[64:96]).Sign() != 0
 	return principal, fee, open, nil
+}
+
+// DecodeJobEconomics parses jobEconomics's (address operator, uint256 customerPayment,
+// uint256 maxOperatingBudget). The customerPayment is the chain-authoritative quote.
+func DecodeJobEconomics(ret []byte) (operator common.Address, customerPayment, maxBudget *big.Int, err error) {
+	if len(ret) != 96 {
+		return common.Address{}, nil, nil, fmt.Errorf("jobEconomics returned %d bytes, want 96", len(ret))
+	}
+	operator = common.BytesToAddress(ret[0:32])
+	customerPayment = new(big.Int).SetBytes(ret[32:64])
+	maxBudget = new(big.Int).SetBytes(ret[64:96])
+	return operator, customerPayment, maxBudget, nil
 }
 
 // DecodeJobStatus parses jobStatus's enum. 4 = Accepted (the settled terminal).

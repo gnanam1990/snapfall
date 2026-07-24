@@ -574,6 +574,25 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 			if operator != (common.Address{}) {
 				br.SetMilestoneOracle(oracle)
 			}
+			// The chain is authoritative for a bound job's quote: read jobEconomics'
+			// customerPayment so Brain's local quote matches the chain by construction
+			// (no stub-quote divergence on camera; the reconciler stays quiet on funded).
+			jv := jvAddr
+			br.SetQuoteOracle(func(ctx context.Context, vaultJobID string) (string, bool) {
+				id, err := chain.JobID32(vaultJobID)
+				if err != nil {
+					return "", false
+				}
+				ret, err := reader.CallView(ctx, jv, chain.CalldataJobEconomics(id))
+				if err != nil {
+					return "", false
+				}
+				_, payment, _, err := chain.DecodeJobEconomics(ret)
+				if err != nil || payment.Sign() == 0 || !payment.IsInt64() {
+					return "", false
+				}
+				return policy.FormatUSDC(payment.Int64()), true
+			})
 		}
 	}
 
