@@ -2,6 +2,7 @@ package chain
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strings"
@@ -42,7 +43,14 @@ func JobID32(hexID string) ([32]byte, error) {
 	if len(h) != 64 {
 		return out, fmt.Errorf("vault job id %q is not bytes32 hex", hexID)
 	}
-	b := common.FromHex("0x" + h)
+	// hex.DecodeString FAILS CLOSED on non-hex characters — common.FromHex would
+	// silently return zero/partial bytes for "0xGG…", producing the zero job id with
+	// no error, which every chain caller (advance, settlement, invoice, the quote
+	// oracle) would then read against a nonexistent job (review: PR #36).
+	b, err := hex.DecodeString(h)
+	if err != nil {
+		return out, fmt.Errorf("vault job id %q is not valid hex: %w", hexID, err)
+	}
 	copy(out[:], b)
 	return out, nil
 }

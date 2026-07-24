@@ -2,6 +2,7 @@ package brain
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/advancing"
@@ -104,6 +105,12 @@ func (b *Brain) ObserveFundingOnce(ctx context.Context) (int, error) {
 func (b *Brain) BindVaultJob(ctx context.Context, jobID, vaultJobID string) error {
 	if len(vaultJobID) != 66 || vaultJobID[:2] != "0x" {
 		return fmt.Errorf("vault job id must be 0x-prefixed bytes32 hex, got %q", vaultJobID)
+	}
+	// Reject non-hex at the door: a malformed id (right length, "0x" prefix, invalid
+	// hex) must never be STORED — every downstream chain read would target the zero
+	// job, and the quote would silently fall back to the stub (review: PR #36).
+	if _, err := hex.DecodeString(vaultJobID[2:]); err != nil {
+		return fmt.Errorf("vault job id %q is not valid hex: %w", vaultJobID, err)
 	}
 	// The chain is authoritative: when a quote oracle is wired, read the on-chain
 	// customerPayment and adopt it as the quote, so Brain's local record agrees with
