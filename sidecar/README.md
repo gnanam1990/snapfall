@@ -43,6 +43,31 @@ src/buyer.ts     purchase() — policy-gated signing path (FR-PAY-005)
 src/demo-loop.ts end-to-end proof with assertions
 ```
 
+### Circle facilitator fixture handoff (AT-18)
+
+CI unit-tests the AT-18 validator. Once V1's real raw request/response fixture lands, expose
+these stable fields at its top level (the raw evidence may remain alongside them):
+
+```json
+{
+  "x402Version": 1,
+  "facilitatorEndpoints": {
+    "verify": "https://gateway-api-testnet.circle.com/gateway/v1/x402/verify",
+    "settle": "https://gateway-api-testnet.circle.com/gateway/v1/x402/settle"
+  }
+}
+```
+
+Commit the real fixture at `sidecar/fixtures/v1-circle-payment.json`; CI will detect and
+verify it. The same check can be run locally with:
+
+```bash
+npm run verify:circle-facilitator-fixture -- fixtures/v1-circle-payment.json
+```
+
+The check requires both exact Circle testnet endpoints; a generic or non-Circle facilitator
+fails. A synthetic fixture is intentionally not committed as proof of V1.
+
 ### Architecture law, enforced in the type signature
 
 `purchase()` takes an `ApprovedIntent`, not a URL and an amount. It throws `PolicyViolation`

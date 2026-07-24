@@ -9,6 +9,13 @@ Arc "Programmable Money" Hackathon (Encode x Circle) · Tracks: Agentic Economy 
 ## Source of truth
 - [`docs/PRD.md`](docs/PRD.md) — Snapfall PRD/SRS v4.1 FINAL. Read §14 (Delivery Plan) first.
 
+## CI
+
+Pull requests and pushes to `main` run the complete Foundry contract suite, the Go daemon
+integration suite, and the TypeScript sidecar checks. Worker isolation, duplicate-advance
+protection, and Circle facilitator validation appear as named gates so failures are visible
+without reading the full suite output.
+
 ## Layout
 ```
 contracts/   Foundry project: JobVault, FloatPool, AuditAnchor (owner: A)
