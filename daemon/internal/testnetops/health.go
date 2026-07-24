@@ -213,8 +213,8 @@ func EnsureWallets(
 }
 
 func validateGasBudget(budget GasBudget) error {
-	if budget.GasLimit == nil || budget.GasLimit.Sign() < 0 {
-		return fmt.Errorf("gas limit must be non-negative")
+	if budget.GasLimit == nil || budget.GasLimit.Sign() <= 0 {
+		return fmt.Errorf("gas limit must be positive")
 	}
 	if budget.MaxFeePerGas == nil || budget.MaxFeePerGas.Sign() < 0 {
 		return fmt.Errorf("maximum fee per gas must be non-negative")

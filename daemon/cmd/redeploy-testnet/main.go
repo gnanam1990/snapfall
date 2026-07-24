@@ -100,10 +100,12 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string) (ru
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
-	releaseBeforeBroadcast = false
-	if err := command.Run(); err != nil {
+	if err := runForgeCommand(command, func() { releaseBeforeBroadcast = false }); err != nil {
+		if releaseBeforeBroadcast {
+			return err
+		}
 		return fmt.Errorf(
-			"forge deployment: %w; pending reservation retained because broadcast status may be ambiguous",
+			"%w; pending reservation retained because broadcast status may be ambiguous",
 			err,
 		)
 	}
@@ -118,5 +120,16 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string) (ru
 		return fmt.Errorf("deployment guard recorded but pending reservation could not be removed: %w", err)
 	}
 	fmt.Println("Deployment broadcast. Verify the addresses, then update deployments/arc-testnet.json.")
+	return nil
+}
+
+func runForgeCommand(command *exec.Cmd, markStarted func()) error {
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("starting forge deployment: %w", err)
+	}
+	markStarted()
+	if err := command.Wait(); err != nil {
+		return fmt.Errorf("forge deployment: %w", err)
+	}
 	return nil
 }

@@ -231,6 +231,17 @@ func TestEnsureWalletsRefreshesCappedGasBudgetBeforeSending(t *testing.T) {
 	}
 }
 
+func TestValidateGasBudgetRejectsZeroGasLimit(t *testing.T) {
+	err := validateGasBudget(GasBudget{
+		GasLimit:     new(big.Int),
+		MaxFeePerGas: big.NewInt(1),
+		MaxCost:      new(big.Int),
+	})
+	if err == nil || !strings.Contains(err.Error(), "gas limit") {
+		t.Fatalf("expected zero gas-limit failure, got %v", err)
+	}
+}
+
 func TestUSDCFormattingPreservesLeadingFractionalZeroes(t *testing.T) {
 	if got := FormatUSDC(usdc(t, "0.000001")); got != "0.000001" {
 		t.Fatalf("formatted %q, want 0.000001", got)
