@@ -57,6 +57,7 @@ const (
 	CodeCategoryBlocked        = "category-blocked"
 	CodeAboveApprovalThreshold = "amount-above-approval-threshold"
 	CodeInvalidSpendState      = "invalid-spend-state"
+	CodeUnmodelledKind         = "unmodelled-intent-kind"
 	CodeApprovalNotConfigured  = "approval-threshold-not-configured"
 )
 
@@ -64,13 +65,27 @@ const (
 // low enough that no sum in the pipeline can approach int64 overflow.
 const maxIntentMicros int64 = 100_000_000_000_000
 
+// Intent kinds. Evaluate models exactly ONE kind — outbound agent spend (KindPayment).
+// The advance (money INTO the treasury) is human-authorized only: it skips Evaluate and
+// enters the approval lifecycle already marked HumanApprovalRequired; the settlement is
+// customer-authorized and never sees policy at all. Any non-payment kind reaching
+// Evaluate is therefore a ROUTING BUG, and rule 0 denies it by law — a fixed pipeline
+// handing an unmodelled kind whatever falls out of its rules is where a fail-open hides.
+const (
+	KindPayment = "payment" // "" means KindPayment: every existing caller predates the field
+	KindAdvance = "advance"
+)
+
 // PaymentIntent is the engine's input (v4 §8.3 shape; hashing/expiry live in G7).
 type PaymentIntent struct {
-	IntentID      string `json:"intent_id"`
-	OrgID         string `json:"org_id"`
-	JobID         string `json:"job_id"`
-	TaskID        string `json:"task_id"`
-	AgentID       string `json:"agent_id"`
+	IntentID string `json:"intent_id"`
+	OrgID    string `json:"org_id"`
+	JobID    string `json:"job_id"`
+	TaskID   string `json:"task_id"`
+	AgentID  string `json:"agent_id"`
+	// Kind is the intent's action class. Empty = KindPayment (back-compat, explicit
+	// decision). Evaluate refuses every other value at rule 0 (CodeUnmodelledKind).
+	Kind          string `json:"kind,omitempty"`
 	Merchant      string `json:"merchant"`
 	Resource      string `json:"resource"`
 	AmountMicros  int64  `json:"amount_micros"`
@@ -216,6 +231,14 @@ func Evaluate(cfg PolicyConfig, state SpendState, in PaymentIntent) Decision {
 	}
 
 	// ── 0. Intent validation — malformed money never reaches a budget comparison. ──
+	// The kind guard runs FIRST: an unmodelled kind fails here, by law, before any
+	// budget or allowlist rule can pass or fail incidentally.
+	if in.Kind != "" && in.Kind != KindPayment {
+		return fail(Reason{
+			Rule: RuleIntentValidation, Code: CodeUnmodelledKind,
+			Message: fmt.Sprintf("intent kind %q is not modelled by this pipeline: Evaluate authorizes outbound agent spend only (advances are human-authorized via the lifecycle; settlements are customer-authorized)", in.Kind),
+		})
+	}
 	if in.AmountMicros <= 0 || in.AmountMicros > maxIntentMicros {
 		return fail(Reason{
 			Rule: RuleIntentValidation, Code: CodeInvalidAmount,

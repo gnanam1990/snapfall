@@ -110,3 +110,35 @@ Before restart, remove stale deployment overrides or update them to the new depl
 unset SNAPFALL_DEPLOYMENT_BLOCK
 unset SNAPFALL_AUDIT_ANCHOR_ADDRESS SNAPFALL_JOB_VAULT_ADDRESS SNAPFALL_FLOAT_POOL_ADDRESS
 ```
+
+## FloatPool.requestAdvance guard order (measured on chain, 23 Jul)
+
+`requestAdvance` evaluates its guards in this order (FloatPool.sol:188→196):
+1. `jobStatus != Funded` → `JobNotFunded()` (0x514f27b4)
+2. `msg.sender != org` → `NotTreasury()`
+3. `advances[jobId] != None` → `DuplicateAdvance()` (0x38d6f89b)
+
+Consequence, observed: a second `requestAdvance` on a fully-settled job reverts
+**`JobNotFunded`**, not `DuplicateAdvance` — because acceptance moves the job to Accepted
+(past Funded), and the status guard is checked first. Both conditions hold, but the
+status guard wins. The receipt-status discipline records it as REVERTED either way; the
+reason decoded from the receipt is the honest one, not the intended demo label.
+
+## The stale-memory-dir gotcha (job-002 failure, 23 Jul)
+
+The daemon's job memory lives in `<db-dir>/memory/`, a directory BESIDE the db, not
+inside it. `rm -rf run.db` does NOT clear it. Relaunching a one-shot on a "fresh" db
+whose sibling `memory/` still holds the job → the create step hits "job already exists",
+the supervisor retries 5× and gives up (correct — but reads as a mystery exit if you
+only see the log tail). A one-shot is not idempotent against a db/memory that already
+holds its job. Reset recipe: `rm -rf run.db run.db-wal run.db-shm memory`.
+
+## Customer-wallet gas headroom (job-002 fund failure, 23 Jul)
+
+USDC is the gas token, so a wallet that both pays gas and holds a working balance is
+always short by exactly what it spent. A wallet given 2.00 that funds a 1.00 job loses
+~0.0044 to gas across create/approve/fund and cannot fund a second 1.00 job. Fund a job
+wallet with amount + gas headroom, never the exact figure. This surfaced at
+`estimateGas` (pre-flight) as `ERC20: transfer amount exceeds balance`, burning nothing
+— the same estimate-pre-empts-revert behavior force-advance's fixed-gas bypass exists to
+work around.
