@@ -1,44 +1,56 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import type { OverviewSnapshot, PoolStats, OpenAdvance, FinancialEvent, StreamMessage } from '@/lib/types';
+import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage } from '@/lib/types';
+import type { ActivityMessage } from '@/lib/activity';
+import { humanizeLegacyEvent, humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdc, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import TreasuryHero from '@/components/TreasuryHero';
 import StatCard from '@/components/StatCard';
-import EventFeed from '@/components/EventFeed';
+import TeamActivityFeed from '@/components/TeamActivityFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
 import ActiveJobs from '@/components/ActiveJobs';
+
+const EMPTY_POOL: PoolStats = {
+  tvlUsdc: '0',
+  utilizationBps: 0,
+  feesAccruedUsdc: '0',
+  reserveUsdc: '0',
+  orgRateBps: 0,
+};
 
 export default function OverviewPage() {
   const [snap, setSnap] = useState<OverviewSnapshot | null>(null);
   const [treasury, setTreasury] = useState('0');
   const [pool, setPool] = useState<PoolStats | null>(null);
   const [advances, setAdvances] = useState<OpenAdvance[]>([]);
-  const [events, setEvents] = useState<FinancialEvent[]>([]);
+  const [activity, setActivity] = useState<ActivityMessage[]>([]);
 
   const onMessage = useCallback((msg: StreamMessage) => {
     if (msg.kind === 'snapshot') {
       setSnap(msg.snapshot);
-      setTreasury(msg.snapshot.treasuryUsdc);
-      setPool(msg.snapshot.pool);
-      setAdvances(msg.snapshot.openAdvances);
-      setEvents(msg.snapshot.recentEvents);
+      setTreasury(msg.snapshot.treasuryUsdc ?? '0');
+      // The real H2 daemon starts before chain projections, so null money aggregates
+      // are a valid snapshot—not a reason to hide daemon activity behind a loader.
+      setPool(msg.snapshot.pool ?? EMPTY_POOL);
+      setAdvances(msg.snapshot.openAdvances ?? []);
+      setActivity((msg.snapshot.recentEvents ?? []).map(humanizeLegacyEvent));
     } else {
-      setTreasury(msg.treasuryUsdc);
-      setPool(msg.pool);
-      setAdvances(msg.openAdvances);
-      setEvents((prev) => [msg.event, ...prev].slice(0, 14));
-      // Jobs and approvals stream too, so acceptance is visible everywhere (review: PR #8).
-      const { activeJobs, pendingApprovals } = msg;
-      if (activeJobs || pendingApprovals !== undefined) {
+      const next = humanizeStreamEvent(msg);
+      setActivity((prev) => [next, ...prev.filter((item) => item.id !== next.id)].slice(0, 30));
+      const aggregates = msg.aggregates;
+      if (aggregates?.treasuryUsdc != null) setTreasury(aggregates.treasuryUsdc);
+      if (aggregates?.pool) setPool(aggregates.pool);
+      if (aggregates?.openAdvances) setAdvances(aggregates.openAdvances);
+      if (aggregates && (aggregates.activeJobs || aggregates.pendingApprovals !== undefined)) {
         setSnap((s) =>
           s
             ? {
                 ...s,
-                activeJobs: activeJobs ?? s.activeJobs,
-                pendingApprovals: pendingApprovals ?? s.pendingApprovals,
+                activeJobs: aggregates.activeJobs ?? s.activeJobs,
+                pendingApprovals: aggregates.pendingApprovals ?? s.pendingApprovals,
               }
             : s,
         );
@@ -86,15 +98,12 @@ export default function OverviewPage() {
         <StatCard label="Pending approvals" value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
       </div>
 
-      <div className="grid cols-2 mt">
-        <div className="card">
-          <p className="card-title">Recent financial events</p>
-          <EventFeed events={events} />
-        </div>
+      <div className="activity-layout mt">
+        <TeamActivityFeed messages={activity} live={status === 'live'} />
         <div className="grid" style={{ gap: 16, alignContent: 'start' }}>
           <div className="card">
             <p className="card-title">Workforce</p>
-            <WorkforceStrip agents={snap.workforce} />
+            <WorkforceStrip agents={snap.workforce ?? []} />
           </div>
           <div className="card">
             <p className="card-title">Open advances</p>
@@ -102,7 +111,7 @@ export default function OverviewPage() {
           </div>
           <div className="card">
             <p className="card-title">Active jobs</p>
-            <ActiveJobs jobs={snap.activeJobs} />
+            <ActiveJobs jobs={snap.activeJobs ?? []} />
           </div>
         </div>
       </div>

@@ -12,11 +12,146 @@
  */
 
 import { snapshot, timeline } from '@/lib/mockData';
+import type { FinancialEvent, StreamEvent } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export function GET(req: Request): Response {
+const REQUEST_ID = 'apr_demo_premium';
+const INTENT_HASH = `0x${'ab'.repeat(32)}`;
+
+function h2Event(event: FinancialEvent): { source: 'daemon' | 'chain'; event: StreamEvent } {
+  const base = { jobId: event.jobId, at: event.ts };
+  const amount = event.amountUsdc;
+  switch (event.type) {
+    case 'job.funded':
+      return {
+        source: 'chain',
+        event: { ...base, kind: 'JobFunded', actor: 'funding', payload: { amountAtomic: amount, explorerUrl: event.explorerUrl } },
+      };
+    case 'advance.issued':
+      return {
+        source: 'chain',
+        event: { ...base, kind: 'AdvanceIssued', actor: 'funding', payload: { amountAtomic: amount, explorerUrl: event.explorerUrl } },
+      };
+    case 'payment.delivered':
+      return {
+        source: 'daemon',
+        event: { ...base, kind: 'payment.executed', actor: 'approval', payload: { amountUsdc: amount } },
+      };
+    case 'approval.requested':
+      return {
+        source: 'daemon',
+        event: {
+          ...base,
+          kind: 'approval.requested',
+          actor: 'approval',
+          payload: {
+            request_id: REQUEST_ID,
+            intent_hash: INTENT_HASH,
+            state: 'PENDING',
+            intent: {
+              Merchant: 'api.research-data.example',
+              Resource: 'GET /v1/premium-dataset',
+              AmountMicros: 4_000_000,
+              Purpose: 'premium market dataset',
+              AlternativeTo: '',
+            },
+          },
+        },
+      };
+    case 'approval.request_alternative':
+      return {
+        source: 'daemon',
+        event: {
+          ...base,
+          kind: 'approval.request_alternative',
+          actor: 'approval',
+          payload: { request_id: REQUEST_ID, by: 'anandan', reason: 'Too expensive — find a cheaper source.' },
+        },
+      };
+    case 'approval.alternative_found':
+      return {
+        source: 'daemon',
+        event: {
+          ...base,
+          kind: 'approval.requested',
+          actor: 'worker:due-diligence',
+          payload: {
+            request_id: 'apr_demo_benchmark',
+            intent_hash: `0x${'cd'.repeat(32)}`,
+            state: 'APPROVED',
+            intent: {
+              Merchant: 'api.research-data.example',
+              Resource: 'GET /v1/benchmark',
+              AmountMicros: 60_000,
+              Purpose: 'benchmark summary',
+              AlternativeTo: REQUEST_ID,
+            },
+          },
+        },
+      };
+    case 'job.accepted':
+      return {
+        source: 'chain',
+        event: { ...base, kind: 'JobSettled', actor: 'funding', payload: { amountAtomic: amount, explorerUrl: event.explorerUrl } },
+      };
+    case 'rate.updated':
+      return {
+        source: 'chain',
+        event: { ...base, kind: 'RateChanged', actor: 'funding', payload: {} },
+      };
+    default:
+      return {
+        source: 'daemon',
+        event: {
+          ...base,
+          kind: 'brain.msg.brain.job_update',
+          actor: 'brain',
+          payload: { payload: { message: event.summary } },
+        },
+      };
+  }
+}
+
+async function daemonStream(req: Request): Promise<Response | null> {
+  const base = process.env.SNAPFALL_OWNER_API_URL?.replace(/\/$/, '');
+  if (!base) return null;
+
+  const headers = new Headers({ accept: 'text/event-stream' });
+  const token = process.env.SNAPFALL_OWNER_TOKEN;
+  if (token) headers.set('authorization', `Bearer ${token}`);
+  const lastEventId = req.headers.get('last-event-id');
+  if (lastEventId) headers.set('last-event-id', lastEventId);
+
+  try {
+    const upstream = await fetch(`${base}/events/stream`, {
+      headers,
+      cache: 'no-store',
+      signal: req.signal,
+    });
+    if (!upstream.ok || !upstream.body) {
+      return new Response('Owner API event stream unavailable', { status: 502 });
+    }
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      },
+    });
+  } catch {
+    if (req.signal.aborted) return new Response(null, { status: 499 });
+    return new Response('Owner API event stream unavailable', { status: 502 });
+  }
+}
+
+export async function GET(req: Request): Promise<Response> {
+  const upstream = await daemonStream(req);
+  if (upstream) return upstream;
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -54,21 +189,27 @@ export function GET(req: Request): Response {
       const now = new Date().toISOString();
       send({
         kind: 'snapshot',
-        snapshot: { ...snapshot, recentEvents: snapshot.recentEvents.map((e) => ({ ...e, ts: now })) },
+        snapshot: { ...snapshot, recentEvents: (snapshot.recentEvents ?? []).map((e) => ({ ...e, ts: now })) },
       });
 
       const tick = () => {
         if (closed) return;
         const step = timeline[i % timeline.length]!;
         seq += 1;
+        const stamped = { ...step.event, seq, ts: new Date().toISOString() };
+        const wire = h2Event(stamped);
         send({
           kind: 'event',
-          event: { ...step.event, seq, ts: new Date().toISOString() },
-          treasuryUsdc: step.treasuryUsdc,
-          pool: step.pool,
-          openAdvances: step.openAdvances,
-          ...(step.activeJobs ? { activeJobs: step.activeJobs } : {}),
-          ...(step.pendingApprovals !== undefined ? { pendingApprovals: step.pendingApprovals } : {}),
+          source: wire.source,
+          seq,
+          event: wire.event,
+          aggregates: {
+            treasuryUsdc: step.treasuryUsdc,
+            pool: step.pool,
+            openAdvances: step.openAdvances,
+            ...(step.activeJobs ? { activeJobs: step.activeJobs } : {}),
+            ...(step.pendingApprovals !== undefined ? { pendingApprovals: step.pendingApprovals } : {}),
+          },
         });
         i += 1;
         timer = setTimeout(tick, 2500);

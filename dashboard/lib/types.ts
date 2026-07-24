@@ -1,12 +1,4 @@
-/**
- * Dashboard data contract — the shapes the Overview (and later pages) render.
- *
- * This mirrors the H2 handshake (Gnanam -> Vasanth+Anandan: REST + SSE + approval POST).
- * H2 is not ratified yet, so this is the CONSUMER's proposed shape: it follows the PRD's
- * core entities (§8.1) and event taxonomy (§8.5). When H2 is agreed at the handshake, only
- * this file and lib/mockData.ts change; the components stay put. Amounts are atomic USDC
- * (6dp) decimal strings, matching the rest of the repo.
- */
+/** Dashboard data contract. Amounts are atomic USDC (6dp) decimal strings. */
 
 export type JobState =
   | 'Draft'
@@ -71,26 +63,40 @@ export interface PoolStats {
 }
 
 export interface OverviewSnapshot {
-  treasuryUsdc: string;
-  pool: PoolStats;
-  activeJobs: JobSummary[];
+  treasuryUsdc: string | null;
+  pool: PoolStats | null;
+  activeJobs: JobSummary[] | null;
   pendingApprovals: number;
-  workforce: AgentCard[];
-  openAdvances: OpenAdvance[];
-  recentEvents: FinancialEvent[];
+  workforce?: AgentCard[] | null;
+  openAdvances: OpenAdvance[] | null;
+  /** Present in the local demo fixture; the real H2 snapshot may omit history. */
+  recentEvents?: FinancialEvent[] | null;
 }
 
-/** SSE envelope on /api/events/stream. Each event carries the fields it moved, so the
- *  Overview stays live without re-fetching the whole snapshot. `activeJobs` and
- *  `pendingApprovals` are included only when the event changed them. */
+export interface StreamEvent {
+  kind: string;
+  jobId?: string;
+  entityId?: string;
+  actor?: string;
+  at: string;
+  payload?: unknown;
+}
+
+export interface OverviewAggregates {
+  treasuryUsdc?: string | null;
+  pool?: PoolStats | null;
+  openAdvances?: OpenAdvance[] | null;
+  activeJobs?: JobSummary[] | null;
+  pendingApprovals?: number;
+}
+
+/** Ratified H2 envelope: one stream, daemon and chain source vocabularies unchanged. */
 export type StreamMessage =
   | { kind: 'snapshot'; snapshot: OverviewSnapshot }
   | {
       kind: 'event';
-      event: FinancialEvent;
-      treasuryUsdc: string;
-      pool: PoolStats;
-      openAdvances: OpenAdvance[];
-      activeJobs?: JobSummary[];
-      pendingApprovals?: number;
+      source: 'daemon' | 'chain';
+      seq: number | string;
+      event: StreamEvent;
+      aggregates?: OverviewAggregates;
     };

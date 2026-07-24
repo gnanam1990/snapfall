@@ -82,7 +82,13 @@ a { color: inherit; text-decoration: none; }
 .grid { display: grid; gap: 16px; }
 .cols-4 { grid-template-columns: repeat(4, 1fr); }
 .cols-2 { grid-template-columns: 1.4fr 1fr; }
-@media (max-width: 900px) { .cols-4 { grid-template-columns: repeat(2, 1fr); } .cols-2 { grid-template-columns: 1fr; } .app { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } }
+.activity-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.75fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) {
+  .cols-4 { grid-template-columns: repeat(2, 1fr); }
+  .cols-2, .activity-layout { grid-template-columns: 1fr; }
+  .app { grid-template-columns: 1fr; }
+  .sidebar { position: static; height: auto; }
+}
 .card {
   background: linear-gradient(180deg, var(--panel), var(--panel-2));
   border: 1px solid var(--border);
@@ -115,18 +121,171 @@ a { color: inherit; text-decoration: none; }
 .hero-right { text-align: right; color: var(--muted); }
 .chip-arc { display: inline-flex; gap: 8px; align-items: center; border: 1px solid var(--border-2); border-radius: 999px; padding: 5px 12px; color: var(--sky); font-size: 12.5px; font-weight: 600; }
 
-/* ── event feed ── */
-.feed { display: flex; flex-direction: column; }
-.feed-row { display: flex; gap: 12px; padding: 10px 2px; border-top: 1px solid var(--border); align-items: flex-start; }
-.feed-row:first-child { border-top: none; }
-.feed-dot { width: 8px; height: 8px; border-radius: 999px; margin-top: 6px; flex: none; }
-.feed-body { flex: 1; min-width: 0; }
-.feed-line { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
-.feed-summary { font-weight: 500; }
-.feed-amt { font-variant-numeric: tabular-nums; font-weight: 700; flex: none; }
-.feed-meta { color: var(--muted-2); font-size: 12px; margin-top: 2px; display: flex; gap: 8px; }
-.feed-type { color: var(--muted); font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; }
-.feed-link { color: var(--sky); }
+/* ── humanized team activity ── */
+.activity {
+  overflow: hidden;
+  background:
+    radial-gradient(600px 260px at 70% -20%, rgba(45, 212, 191, 0.08), transparent 62%),
+    linear-gradient(180deg, var(--panel), var(--panel-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.activity-head {
+  min-height: 66px;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.activity-heading { display: flex; align-items: center; gap: 10px; }
+.activity-heading h2 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
+.activity-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid #1b4d3b;
+  border-radius: 999px;
+  background: #0d2119;
+  color: var(--pos);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.activity-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.activity-live.is-waiting { color: var(--warn); border-color: #574314; background: #201806; }
+.activity-filters { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.activity-filter {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.activity-filter:hover { color: var(--text); background: rgba(255, 255, 255, 0.035); }
+.activity-filter.is-active { color: var(--text); background: var(--bg-2); border-color: var(--border-2); }
+.activity-filter:focus-visible, .activity-action:focus-visible {
+  outline: 2px solid var(--sky);
+  outline-offset: 2px;
+}
+.activity-list { position: relative; list-style: none; padding: 0; margin: 0; }
+.activity-list::before {
+  content: "";
+  position: absolute;
+  left: 27px;
+  top: 26px;
+  bottom: 26px;
+  width: 1px;
+  background: linear-gradient(var(--border-2), var(--border), transparent);
+}
+.activity-item {
+  --actor-color: var(--accent);
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(126px, auto);
+  gap: 12px;
+  min-height: 100px;
+  padding: 17px 18px 17px 47px;
+  border-top: 1px solid var(--border);
+}
+.activity-item:first-child { border-top: 0; }
+.activity-item.tone-worker { --actor-color: var(--sky); }
+.activity-item.tone-funding { --actor-color: var(--pos); }
+.activity-item.tone-owner { --actor-color: var(--neg); }
+.activity-item.tone-qa { --actor-color: var(--violet); }
+.activity-node {
+  position: absolute;
+  z-index: 1;
+  top: 30px;
+  left: 23px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--panel-2);
+  border-radius: 50%;
+  background: var(--actor-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--actor-color) 35%, var(--border));
+}
+.activity-avatar {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  clip-path: polygon(25% 5%, 75% 5%, 98% 50%, 75% 95%, 25% 95%, 2% 50%);
+  background: color-mix(in srgb, var(--actor-color) 16%, var(--bg-2));
+  color: var(--actor-color);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+}
+.activity-copy { min-width: 0; }
+.activity-identity { display: flex; align-items: baseline; gap: 8px; }
+.activity-identity strong { font-size: 14px; }
+.activity-identity span { color: var(--muted-2); font-size: 11.5px; }
+.activity-copy p { margin: 5px 0 0; color: #cfdae4; font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.activity-meta { min-width: 126px; color: var(--muted-2); text-align: right; font-size: 11.5px; }
+.activity-meta time { font-variant-numeric: tabular-nums; }
+.activity-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-top: 8px; }
+.activity-job {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 7px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  white-space: nowrap;
+}
+.activity-tags strong { color: var(--text); font-variant-numeric: tabular-nums; font-size: 11.5px; }
+.activity-tags a { color: var(--sky); }
+.activity-tags a:hover { text-decoration: underline; }
+.activity-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
+.activity-action {
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 11px;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.activity-action:hover { color: var(--text); border-color: var(--muted-2); }
+.activity-action.approve { color: var(--pos); border-color: #1c4634; background: #0e2018; }
+.activity-action.reject { color: var(--neg); border-color: #58222f; background: #230b12; }
+.activity-action.alternative { color: var(--warn); border-color: #574314; background: #201806; }
+.activity-item.has-thread::after {
+  content: "";
+  position: absolute;
+  left: 37px;
+  top: 42px;
+  bottom: -1px;
+  width: 8px;
+  border-left: 1px dashed color-mix(in srgb, var(--actor-color) 55%, transparent);
+  border-bottom: 1px dashed color-mix(in srgb, var(--actor-color) 55%, transparent);
+  border-radius: 0 0 0 8px;
+  opacity: 0.65;
+}
+.activity-empty { min-height: 180px; display: grid; place-items: center; color: var(--muted); }
+@media (max-width: 640px) {
+  .activity-head { align-items: flex-start; flex-direction: column; }
+  .activity-filters { justify-content: flex-start; }
+  .activity-item { grid-template-columns: 38px minmax(0, 1fr); padding-right: 15px; }
+  .activity-identity { align-items: flex-start; flex-direction: column; gap: 0; }
+  .activity-meta { grid-column: 2; display: flex; align-items: center; justify-content: space-between; text-align: left; }
+  .activity-tags { flex-direction: row; flex-wrap: wrap; align-items: center; margin-top: 0; }
+}
 
 /* ── agent chips ── */
 .agents { display: flex; flex-wrap: wrap; gap: 8px; }

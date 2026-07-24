@@ -134,8 +134,21 @@ export const timeline: TimelineStep[] = [
   {
     event: {
       category: 'Approval',
-      type: 'approval.rejected',
-      summary: 'Owner rejected premium dataset · 4.00 USDC, over threshold',
+      type: 'approval.requested',
+      summary: 'Brain requested approval for premium market data · 4.00 USDC',
+      amountUsdc: '4000000',
+      jobId: 'job_104',
+    },
+    treasuryUsdc: '12460000',
+    pool: POOL_DRAWN,
+    openAdvances: [ADVANCE_OPEN],
+    pendingApprovals: 1,
+  },
+  {
+    event: {
+      category: 'Approval',
+      type: 'approval.request_alternative',
+      summary: 'Owner asked the team to find a cheaper alternative',
       jobId: 'job_104',
     },
     treasuryUsdc: '12460000',
@@ -146,8 +159,8 @@ export const timeline: TimelineStep[] = [
   {
     event: {
       category: 'Finance',
-      type: 'payment.delivered',
-      summary: 'x402 purchase: benchmark summary · 0.06 USDC (the cheaper alternative)',
+      type: 'approval.alternative_found',
+      summary: 'Due Diligence found a cheaper benchmark source · 0.06 USDC',
       amountUsdc: '60000',
       jobId: 'job_104',
     },
