@@ -136,6 +136,57 @@ func TestAPI_ConflictUnknownAndBadRequest(t *testing.T) {
 	}
 }
 
+func TestAPI_WorkforceCatalogAndHireStartConfiguredWatcher(t *testing.T) {
+	s, _ := newAPI(t)
+	s.WorkerCatalog = []WorkerManifest{{
+		ID:            "build-monitor",
+		Name:          "Build Monitor",
+		Category:      "Engineering operations",
+		Description:   "Reports committed milestone evidence to Brain.",
+		Permissions:   []string{"Read-only repo", "No payments", "No shell"},
+		ChecklistPath: ".snapfall/milestone.json",
+	}}
+	w, out := do(t, s.Handler(), "GET", "/api/v1/workforce/manifests", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("catalog status = %d, want 200", w.Code)
+	}
+	manifests := out["manifests"].([]any)
+	if len(manifests) != 1 || manifests[0].(map[string]any)["id"] != "build-monitor" {
+		t.Fatalf("catalog = %+v", manifests)
+	}
+
+	var hired HireWorkerRequest
+	s.HireWorker = func(_ context.Context, req HireWorkerRequest) (HireWorkerResult, error) {
+		hired = req
+		return HireWorkerResult{
+			JobID: "milestone_watch_1", VaultJobID: "0xwatch", State: "watching",
+		}, nil
+	}
+	body := `{"repository":"/work/acme","quoteUsdc":"25.00","by":"anandan"}`
+	w, out = do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
+	if w.Code != http.StatusCreated || out["state"] != "watching" || out["jobId"] != "milestone_watch_1" {
+		t.Fatalf("hire status=%d out=%+v", w.Code, out)
+	}
+	if hired.ManifestID != "build-monitor" || hired.Repository != "/work/acme" ||
+		hired.QuoteUSDC != "25.00" || hired.By != "anandan" {
+		t.Fatalf("hire request = %+v", hired)
+	}
+}
+
+func TestAPI_WorkforceHireRefusesBadOrUnwiredRequests(t *testing.T) {
+	s, _ := newAPI(t)
+	w, out := do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", `{}`)
+	if w.Code != http.StatusBadRequest || out["error"].(map[string]any)["code"] != "BAD_REQUEST" {
+		t.Fatalf("bad hire status=%d out=%+v", w.Code, out)
+	}
+
+	body := `{"repository":"/work/acme","quoteUsdc":"25.00","by":"anandan"}`
+	w, out = do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
+	if w.Code != http.StatusServiceUnavailable || out["error"].(map[string]any)["code"] != "NOT_WIRED" {
+		t.Fatalf("unwired hire status=%d out=%+v", w.Code, out)
+	}
+}
+
 // H2 decision 3, enforced not warned: a non-loopback bind without the token is refused
 // at startup.
 func TestAPI_NonLoopbackBindRefusedWithoutToken(t *testing.T) {

@@ -107,6 +107,12 @@ observation rather than inventing a result. The AT-17 integration test drives tw
 through distinct advances and settlements and pins progress-before-release plus the second
 rate tick.
 
+The A12 owner API exposes the reviewed catalog at `GET /api/v1/workforce/manifests`.
+`POST /api/v1/workforce/build-monitor/hire` accepts `repository`, `quoteUsdc`, and `by`;
+it opens the first standing-pipeline milestone and records the owner confirmation, which
+dispatches Build-Monitor immediately. The route remains under the existing owner bearer or
+loopback-only boundary.
+
 ## Layout
 
 ```

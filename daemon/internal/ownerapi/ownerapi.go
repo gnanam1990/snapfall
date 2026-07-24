@@ -59,6 +59,38 @@ type Server struct {
 	// inbox pre-marked for human approval — proposing and approving are two separate
 	// owner actions, on the record.
 	ProposeAdvance func(ctx context.Context, jobID string) (approval.Request, error)
+
+	// WorkerCatalog is the reviewed manifest gallery exposed to the owner dashboard.
+	// HireWorker is the activation seam; the daemon wires it to Brain so the API never
+	// constructs or directly controls a worker.
+	WorkerCatalog []WorkerManifest
+	HireWorker    func(ctx context.Context, req HireWorkerRequest) (HireWorkerResult, error)
+}
+
+// WorkerManifest is the owner-facing, capability-focused projection of one hireable
+// worker manifest. It intentionally excludes implementation and secret material.
+type WorkerManifest struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Category      string   `json:"category"`
+	Description   string   `json:"description"`
+	Permissions   []string `json:"permissions"`
+	ChecklistPath string   `json:"checklistPath,omitempty"`
+}
+
+// HireWorkerRequest carries the owner-confirmed configuration for one worker.
+type HireWorkerRequest struct {
+	ManifestID string `json:"manifestId"`
+	Repository string `json:"repository"`
+	QuoteUSDC  string `json:"quoteUsdc"`
+	By         string `json:"by"`
+}
+
+// HireWorkerResult identifies the newly activated watcher cycle.
+type HireWorkerResult struct {
+	JobID      string `json:"jobId"`
+	VaultJobID string `json:"vaultJobId"`
+	State      string `json:"state"`
 }
 
 // New builds the server.
@@ -83,6 +115,8 @@ func (s *Server) Handler() http.Handler {
 	owner.HandleFunc("GET /api/v1/jobs/{id}/invoice", s.handleInvoiceLatest)
 	owner.HandleFunc("POST /api/v1/jobs/{id}/accept-link", s.handleMintAcceptLink)
 	owner.HandleFunc("POST /api/v1/jobs/{id}/advance", s.handleProposeAdvance)
+	owner.HandleFunc("GET /api/v1/workforce/manifests", s.handleWorkerManifests)
+	owner.HandleFunc("POST /api/v1/workforce/{id}/hire", s.handleHireWorker)
 
 	root := http.NewServeMux()
 	root.HandleFunc("POST /api/v1/customer/jobs/{id}/accept", s.withCustomerAuth(s.handleCustomerAccept))
@@ -90,6 +124,42 @@ func (s *Server) Handler() http.Handler {
 	root.HandleFunc("GET /api/v1/customer/jobs/{id}/invoice", s.withCustomerAuth(s.handleCustomerInvoice))
 	root.Handle("/", s.withAuth(owner))
 	return root
+}
+
+func (s *Server) handleWorkerManifests(w http.ResponseWriter, _ *http.Request) {
+	manifests := s.WorkerCatalog
+	if manifests == nil {
+		manifests = []WorkerManifest{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"manifests": manifests})
+}
+
+func (s *Server) handleHireWorker(w http.ResponseWriter, r *http.Request) {
+	var body HireWorkerRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "malformed JSON body", nil)
+		return
+	}
+	body.ManifestID = strings.TrimSpace(r.PathValue("id"))
+	body.Repository = strings.TrimSpace(body.Repository)
+	body.QuoteUSDC = strings.TrimSpace(body.QuoteUSDC)
+	body.By = strings.TrimSpace(body.By)
+	if body.ManifestID == "" || body.Repository == "" || body.QuoteUSDC == "" || body.By == "" {
+		writeErr(w, http.StatusBadRequest, "BAD_REQUEST",
+			"hire requires a manifest id, repository, quoteUsdc, and owner identity", nil)
+		return
+	}
+	if s.HireWorker == nil {
+		writeErr(w, http.StatusServiceUnavailable, "NOT_WIRED",
+			"worker activation is not wired in this build", nil)
+		return
+	}
+	result, err := s.HireWorker(r.Context(), body)
+	if err != nil {
+		writeErr(w, http.StatusConflict, "HIRE_FAILED", err.Error(), nil)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
 }
 
 // withAuth enforces the bearer token on EVERY route whenever a token is configured —

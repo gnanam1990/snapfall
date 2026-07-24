@@ -24,3 +24,16 @@ dashboard process. It remains server-side and is never exposed to browser JavaSc
 `SNAPFALL_TREASURY_ADDRESS` to select the organization whose accepted-job/write-off
 history derives the displayed advance rate. Relevant H2 chain events trigger an immediate
 refresh; a 15-second read-only poll keeps the page current when the daemon relay is absent.
+
+## Workforce hiring
+
+`/workforce` renders the reviewed worker-manifest catalog. Build Monitor is the first
+hireable specialist; its activation form requires a local Git repository containing
+`.snapfall/milestone.json` and a milestone quote. The server-side `/api/workforce` adapter
+forwards the owner action to the daemon without exposing `SNAPFALL_OWNER_TOKEN` to browser
+JavaScript.
+
+With `SNAPFALL_OWNER_API_URL` configured as above, **Activate watcher** opens milestone 1,
+records the owner confirmation, and dispatches the registered Build-Monitor against the
+repository. Without a daemon connection, the catalog remains visible but activation fails
+explicitly with `DAEMON_UNAVAILABLE`; the dashboard never pretends a watcher started.
