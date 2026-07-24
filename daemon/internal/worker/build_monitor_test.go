@@ -3,7 +3,9 @@ package worker
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
@@ -13,8 +15,115 @@ type fixedBuildProgress struct {
 	snapshot BuildSnapshot
 }
 
+func runGit(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestGitChecklistSourceDoesNotAttributeUncommittedArtifactsToHead(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "build-monitor@test.invalid")
+	runGit(t, repo, "config", "user.name", "Build Monitor Test")
+	checklist := filepath.Join(repo, ".snapfall", "milestone.json")
+	if err := os.MkdirAll(filepath.Dir(checklist), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(checklist,
+		[]byte(`{"checks":[{"name":"release","path":"reports/release.txt"}]}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".snapfall/milestone.json")
+	runGit(t, repo, "commit", "-m", "add milestone checklist")
+	revision := runGit(t, repo, "rev-parse", "HEAD")
+
+	// Exists in the working tree only. It must remain pending for HEAD evidence.
+	release := filepath.Join(repo, "reports", "release.txt")
+	if err := os.MkdirAll(filepath.Dir(release), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, []byte("not committed"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := (GitChecklistSource{}).Snapshot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision != revision || got.CompletionPct != 0 ||
+		len(got.Pending) != 1 || got.Pending[0] != "release" {
+		t.Fatalf("uncommitted artifact was attributed to HEAD: %+v", got)
+	}
+}
+
+func TestGitChecklistSourceRejectsCommittedArtifactSymlink(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "build-monitor@test.invalid")
+	runGit(t, repo, "config", "user.name", "Build Monitor Test")
+	checklist := filepath.Join(repo, ".snapfall", "milestone.json")
+	if err := os.MkdirAll(filepath.Dir(checklist), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(checklist,
+		[]byte(`{"checks":[{"name":"release","path":"reports/release.txt"}]}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "release.txt")
+	if err := os.WriteFile(outside, []byte("outside repository"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	release := filepath.Join(repo, "reports", "release.txt")
+	if err := os.MkdirAll(filepath.Dir(release), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, release); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".snapfall/milestone.json", "reports/release.txt")
+	runGit(t, repo, "commit", "-m", "add symlinked milestone evidence")
+
+	if _, err := (GitChecklistSource{}).Snapshot(context.Background(), repo); err == nil {
+		t.Fatal("committed artifact symlink was accepted as repository-contained evidence")
+	}
+}
+
+func TestGitChecklistSourceRejectsCommittedChecklistSymlink(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "build-monitor@test.invalid")
+	runGit(t, repo, "config", "user.name", "Build Monitor Test")
+	outside := filepath.Join(t.TempDir(), "milestone.json")
+	if err := os.WriteFile(outside,
+		[]byte(`{"checks":[{"name":"release","path":"release.txt"}]}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	checklist := filepath.Join(repo, ".snapfall", "milestone.json")
+	if err := os.MkdirAll(filepath.Dir(checklist), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, checklist); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".snapfall/milestone.json")
+	runGit(t, repo, "commit", "-m", "add symlinked milestone checklist")
+
+	if _, err := (GitChecklistSource{}).Snapshot(context.Background(), repo); err == nil ||
+		!strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("committed checklist symlink was not explicitly rejected: %v", err)
+	}
+}
+
 func TestGitChecklistSourceMeasuresCommittedRepositoryArtifacts(t *testing.T) {
 	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "build-monitor@test.invalid")
+	runGit(t, repo, "config", "user.name", "Build Monitor Test")
 	mustWrite := func(name, content string) {
 		t.Helper()
 		path := filepath.Join(repo, filepath.FromSlash(name))
@@ -25,9 +134,6 @@ func TestGitChecklistSourceMeasuresCommittedRepositoryArtifacts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	revision := "0123456789abcdef0123456789abcdef01234567"
-	mustWrite(".git/HEAD", "ref: refs/heads/main\n")
-	mustWrite(".git/refs/heads/main", revision+"\n")
 	mustWrite(".snapfall/milestone.json", `{
 	  "checks": [
 	    {"name":"contract","path":"dist/contract.json"},
@@ -37,6 +143,9 @@ func TestGitChecklistSourceMeasuresCommittedRepositoryArtifacts(t *testing.T) {
 	}`)
 	mustWrite("dist/contract.json", "{}")
 	mustWrite("reports/integration.txt", "green")
+	runGit(t, repo, "add", ".snapfall/milestone.json", "dist/contract.json", "reports/integration.txt")
+	runGit(t, repo, "commit", "-m", "add milestone evidence")
+	revision := runGit(t, repo, "rev-parse", "HEAD")
 
 	got, err := (GitChecklistSource{}).Snapshot(context.Background(), repo)
 	if err != nil {
@@ -52,6 +161,9 @@ func TestGitChecklistSourceMeasuresCommittedRepositoryArtifacts(t *testing.T) {
 
 func TestGitChecklistSourceReadsPackedHeadRef(t *testing.T) {
 	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "build-monitor@test.invalid")
+	runGit(t, repo, "config", "user.name", "Build Monitor Test")
 	mustWrite := func(name, content string) {
 		t.Helper()
 		path := filepath.Join(repo, filepath.FromSlash(name))
@@ -62,11 +174,12 @@ func TestGitChecklistSourceReadsPackedHeadRef(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	revision := "fedcba9876543210fedcba9876543210fedcba98"
-	mustWrite(".git/HEAD", "ref: refs/heads/main\n")
-	mustWrite(".git/packed-refs", "# pack-refs with: peeled fully-peeled sorted\n"+revision+" refs/heads/main\n")
 	mustWrite(".snapfall/milestone.json", `{"checks":[{"name":"ready","path":"ready.txt"}]}`)
 	mustWrite("ready.txt", "yes")
+	runGit(t, repo, "add", ".snapfall/milestone.json", "ready.txt")
+	runGit(t, repo, "commit", "-m", "add ready milestone")
+	revision := runGit(t, repo, "rev-parse", "HEAD")
+	runGit(t, repo, "pack-refs", "--all")
 
 	got, err := (GitChecklistSource{}).Snapshot(context.Background(), repo)
 	if err != nil {

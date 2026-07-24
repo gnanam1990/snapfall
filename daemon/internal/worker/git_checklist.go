@@ -1,19 +1,23 @@
 package worker
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-// GitChecklistSource measures objective artifact existence at one Git revision. The
-// repository owns a .snapfall/milestone.json checklist; this adapter reads only paths
-// inside that repository and never executes repository code.
+const maxChecklistBytes = 1 << 20
+
+// GitChecklistSource measures milestone artifacts from the committed HEAD tree. It
+// deliberately ignores the working tree so the reported revision and evidence refer
+// to the same immutable repository state.
 type GitChecklistSource struct {
 	ChecklistPath string
 }
@@ -27,154 +31,201 @@ type milestoneCheck struct {
 	Path string `json:"path"`
 }
 
-// Snapshot implements BuildProgressSource.
+type gitTreeEntry struct {
+	mode string
+	kind string
+	hash string
+}
+
 func (s GitChecklistSource) Snapshot(ctx context.Context, repository string) (BuildSnapshot, error) {
-	repo, err := filepath.Abs(repository)
+	repo, err := canonicalRepository(ctx, repository)
 	if err != nil {
 		return BuildSnapshot{}, err
 	}
-	info, err := os.Stat(repo)
+	revision, err := gitOutput(ctx, repo, "rev-parse", "--verify", "HEAD")
 	if err != nil {
-		return BuildSnapshot{}, err
+		return BuildSnapshot{}, fmt.Errorf("resolve HEAD: %w", err)
 	}
-	if !info.IsDir() {
-		return BuildSnapshot{}, fmt.Errorf("repository %s is not a directory", repo)
-	}
-	revision, err := gitRevision(repo)
-	if err != nil {
-		return BuildSnapshot{}, err
+	revision = strings.TrimSpace(revision)
+	if !isHexRevision(revision) {
+		return BuildSnapshot{}, fmt.Errorf("HEAD is not a commit hash")
 	}
 
-	checklistName := s.ChecklistPath
-	if checklistName == "" {
-		checklistName = filepath.Join(".snapfall", "milestone.json")
+	checklistPath := strings.TrimSpace(s.ChecklistPath)
+	if checklistPath == "" {
+		checklistPath = ".snapfall/milestone.json"
 	}
-	checklistPath, err := confinedPath(repo, checklistName)
+	checklistPath, err = confinedGitPath(checklistPath)
 	if err != nil {
-		return BuildSnapshot{}, fmt.Errorf("checklist: %w", err)
+		return BuildSnapshot{}, fmt.Errorf("checklist path: %w", err)
 	}
-	f, err := os.Open(checklistPath)
+	entry, found, err := treeEntry(ctx, repo, revision, checklistPath)
 	if err != nil {
-		return BuildSnapshot{}, fmt.Errorf("open checklist: %w", err)
+		return BuildSnapshot{}, err
 	}
-	defer f.Close()
+	if !found {
+		return BuildSnapshot{}, fmt.Errorf("checklist %s is not committed at HEAD", checklistPath)
+	}
+	if entry.mode == "120000" {
+		return BuildSnapshot{}, fmt.Errorf("checklist %s is a symlink", checklistPath)
+	}
+	if entry.kind != "blob" {
+		return BuildSnapshot{}, fmt.Errorf("checklist %s is not a regular file at HEAD", checklistPath)
+	}
+	raw, err := gitBlob(ctx, repo, entry.hash)
+	if err != nil {
+		return BuildSnapshot{}, fmt.Errorf("read checklist %s: %w", checklistPath, err)
+	}
+
 	var checklist milestoneChecklist
-	dec := json.NewDecoder(io.LimitReader(f, 1<<20))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&checklist); err != nil {
-		return BuildSnapshot{}, fmt.Errorf("decode checklist: %w", err)
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&checklist); err != nil {
+		return BuildSnapshot{}, fmt.Errorf("decode checklist %s: %w", checklistPath, err)
 	}
-	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		return BuildSnapshot{}, fmt.Errorf("decode checklist: trailing JSON")
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return BuildSnapshot{}, fmt.Errorf("decode checklist %s: trailing JSON", checklistPath)
 	}
 	if len(checklist.Checks) == 0 {
-		return BuildSnapshot{}, fmt.Errorf("checklist has no checks")
+		return BuildSnapshot{}, fmt.Errorf("checklist %s has no checks", checklistPath)
 	}
 
 	snapshot := BuildSnapshot{Revision: revision}
 	seen := make(map[string]bool, len(checklist.Checks))
-	for _, check := range checklist.Checks {
+	for i, check := range checklist.Checks {
 		if err := ctx.Err(); err != nil {
 			return BuildSnapshot{}, err
 		}
 		name := strings.TrimSpace(check.Name)
 		if name == "" {
-			return BuildSnapshot{}, fmt.Errorf("check has no name")
+			return BuildSnapshot{}, fmt.Errorf("check %d has no name", i)
 		}
 		if seen[name] {
 			return BuildSnapshot{}, fmt.Errorf("duplicate check %q", name)
 		}
 		seen[name] = true
-		artifact, err := confinedPath(repo, check.Path)
+		artifactPath, err := confinedGitPath(check.Path)
+		if err != nil {
+			return BuildSnapshot{}, fmt.Errorf("check %q path: %w", name, err)
+		}
+		entry, found, err := treeEntry(ctx, repo, revision, artifactPath)
 		if err != nil {
 			return BuildSnapshot{}, fmt.Errorf("check %q: %w", name, err)
 		}
-		if _, err := os.Stat(artifact); err == nil {
+		if found && entry.mode == "120000" {
+			return BuildSnapshot{}, fmt.Errorf("check %q path %s is a symlink", name, artifactPath)
+		}
+		if found {
 			snapshot.Completed = append(snapshot.Completed, name)
-		} else if os.IsNotExist(err) {
-			snapshot.Pending = append(snapshot.Pending, name)
 		} else {
-			return BuildSnapshot{}, fmt.Errorf("check %q: %w", name, err)
+			snapshot.Pending = append(snapshot.Pending, name)
 		}
 	}
 	snapshot.CompletionPct = len(snapshot.Completed) * 100 / len(checklist.Checks)
 	return snapshot, nil
 }
 
-func confinedPath(root, relative string) (string, error) {
-	if filepath.IsAbs(relative) {
-		return "", fmt.Errorf("path %q must be repository-relative", relative)
+func canonicalRepository(ctx context.Context, repository string) (string, error) {
+	assigned, err := filepath.Abs(strings.TrimSpace(repository))
+	if err != nil {
+		return "", fmt.Errorf("resolve repository: %w", err)
 	}
-	clean := filepath.Clean(relative)
+	assigned, err = filepath.EvalSymlinks(assigned)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository: %w", err)
+	}
+	info, err := os.Stat(assigned)
+	if err != nil {
+		return "", fmt.Errorf("stat repository: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("repository is not a directory")
+	}
+	root, err := gitOutput(ctx, assigned, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("resolve repository root: %w", err)
+	}
+	root, err = filepath.EvalSymlinks(strings.TrimSpace(root))
+	if err != nil {
+		return "", fmt.Errorf("resolve repository root: %w", err)
+	}
+	if root != assigned {
+		return "", fmt.Errorf("assigned repository must be its Git worktree root")
+	}
+	return root, nil
+}
+
+func confinedGitPath(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("path is empty")
+	}
+	if filepath.IsAbs(name) {
+		return "", fmt.Errorf("absolute path is not allowed")
+	}
+	clean := filepath.Clean(name)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q escapes or names no repository artifact", relative)
+		return "", fmt.Errorf("path escapes repository")
 	}
-	return filepath.Join(root, clean), nil
+	return filepath.ToSlash(clean), nil
 }
 
-func gitRevision(repo string) (string, error) {
-	gitDir := filepath.Join(repo, ".git")
-	if raw, err := os.ReadFile(gitDir); err == nil {
-		line := strings.TrimSpace(string(raw))
-		const prefix = "gitdir:"
-		if !strings.HasPrefix(line, prefix) {
-			return "", fmt.Errorf("%s is not a Git directory pointer", gitDir)
-		}
-		gitDir = strings.TrimSpace(strings.TrimPrefix(line, prefix))
-		if !filepath.IsAbs(gitDir) {
-			gitDir = filepath.Join(repo, gitDir)
-		}
-	}
-	head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+func treeEntry(ctx context.Context, repo, revision, name string) (gitTreeEntry, bool, error) {
+	out, err := gitBytes(ctx, repo, "ls-tree", "-z", revision, "--", name)
 	if err != nil {
-		return "", fmt.Errorf("read Git HEAD: %w", err)
+		return gitTreeEntry{}, false, fmt.Errorf("inspect committed path %s: %w", name, err)
 	}
-	value := strings.TrimSpace(string(head))
-	if strings.HasPrefix(value, "ref: ") {
-		ref := strings.TrimSpace(strings.TrimPrefix(value, "ref: "))
-		refPath, err := confinedPath(gitDir, ref)
-		if err != nil {
-			return "", fmt.Errorf("Git HEAD ref: %w", err)
-		}
-		raw, err := os.ReadFile(refPath)
-		if err == nil {
-			value = strings.TrimSpace(string(raw))
-		} else if os.IsNotExist(err) {
-			value, err = packedGitRef(gitDir, ref)
-			if err != nil {
-				return "", err
-			}
-		} else {
-			return "", fmt.Errorf("read Git HEAD ref: %w", err)
-		}
+	if len(out) == 0 {
+		return gitTreeEntry{}, false, nil
 	}
-	if !isHexRevision(value) {
-		return "", fmt.Errorf("Git HEAD %q is not a full revision", value)
+	out = bytes.TrimSuffix(out, []byte{0})
+	header, listed, ok := bytes.Cut(out, []byte{'\t'})
+	if !ok || string(listed) != name {
+		return gitTreeEntry{}, false, fmt.Errorf("unexpected Git tree entry for %s", name)
 	}
-	return strings.ToLower(value), nil
+	fields := strings.Fields(string(header))
+	if len(fields) != 3 {
+		return gitTreeEntry{}, false, fmt.Errorf("malformed Git tree entry for %s", name)
+	}
+	return gitTreeEntry{mode: fields[0], kind: fields[1], hash: fields[2]}, true, nil
 }
 
-func packedGitRef(gitDir, ref string) (string, error) {
-	f, err := os.Open(filepath.Join(gitDir, "packed-refs"))
+func gitBlob(ctx context.Context, repo, hash string) ([]byte, error) {
+	sizeText, err := gitOutput(ctx, repo, "cat-file", "-s", hash)
 	if err != nil {
-		return "", fmt.Errorf("read Git HEAD ref: %w", err)
+		return nil, err
 	}
-	defer f.Close()
-	scanner := bufio.NewScanner(io.LimitReader(f, 1<<20))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "^") {
-			continue
+	size, err := strconv.ParseInt(strings.TrimSpace(sizeText), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid blob size: %w", err)
+	}
+	if size > maxChecklistBytes {
+		return nil, fmt.Errorf("checklist exceeds %d bytes", maxChecklistBytes)
+	}
+	return gitBytes(ctx, repo, "cat-file", "blob", hash)
+}
+
+func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
+	out, err := gitBytes(ctx, repo, args...)
+	return string(out), err
+}
+
+func gitBytes(ctx context.Context, repo string, args ...string) ([]byte, error) {
+	gitArgs := append([]string{"--literal-pathspecs", "-C", repo}, args...)
+	cmd := exec.CommandContext(ctx, "git", gitArgs...)
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_OPTIONAL_LOCKS=0",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(exitErr.Stderr)))
 		}
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[1] == ref {
-			return fields[0], nil
-		}
+		return nil, err
 	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read packed Git refs: %w", err)
-	}
-	return "", fmt.Errorf("read Git HEAD ref: %s is absent from loose and packed refs", ref)
+	return out, nil
 }
 
 func isHexRevision(value string) bool {
