@@ -97,6 +97,17 @@ var wireCoveredFields = map[string]bool{
 	// NOT on the wire:
 	"OrgID":         false,
 	"AlternativeTo": false,
+	// Kind is DELIBERATELY off the wire hash: H3 §3.3's 14-field set is the frozen
+	// sidecar payment contract, and advances never cross that wire — an advance-kind
+	// intent's Grant drives FloatPool.requestAdvance, not a sidecar /v1/pay. The
+	// INTERNAL hash covers Kind (CanonicalInternal reflects every field), so a decision
+	// binds to the kind (AT-05); two intents differing only in Kind share a wire hash,
+	// which is irrelevant because only payment-kind intents are ever wire-hashed.
+	"Kind": false,
+	// ChainRef is off the wire for the same reason as Kind: the H3 wire is the frozen
+	// sidecar payment contract, and chain-acting intents never cross it. The internal
+	// hash binds it (a decision binds to WHICH chain entity is acted on).
+	"ChainRef": false,
 }
 
 // The adversarial matrix: for EVERY Intent field, pin whether mutating it changes the

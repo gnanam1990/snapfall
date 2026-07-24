@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/gnanam1990/snapfall/daemon/internal/advancing"
 	"github.com/gnanam1990/snapfall/daemon/internal/billing"
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
 	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
@@ -55,6 +56,9 @@ type Brain struct {
 	// from the single GenerateInvoice site. invoiceMu serializes version assignment.
 	billingAgent *billing.Agent
 	invoiceMu    sync.Mutex
+	// advanceFlow is the human-authorized advance path (internal/advancing) — held by
+	// Brain alone, invoked from the single ProposeAdvance site.
+	advanceFlow *advancing.Flow
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).

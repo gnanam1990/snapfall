@@ -38,11 +38,16 @@ import (
 // EVERY exported field participates in InternalHash — adding a field here automatically
 // adds it to the binding, and the reflection test in hash_test.go automatically covers it.
 type Intent struct {
-	IntentID      string
-	OrgID         string
-	JobID         string
-	TaskID        string
-	AgentID       string
+	IntentID string
+	OrgID    string
+	JobID    string
+	TaskID   string
+	AgentID  string
+	// Kind is the intent's action class ("" = payment, mirroring policy.KindPayment).
+	// Advances enter through SubmitAdvance ONLY — pre-marked HumanApprovalRequired,
+	// never evaluated (Evaluate's rule 0 denies the kind by law if misrouted).
+	// CanonicalInternal reflects over every field, so Kind binds into the hash.
+	Kind          string
 	Merchant      string
 	Resource      string
 	AmountMicros  int64
@@ -52,6 +57,10 @@ type Intent struct {
 	// ExpiresAt bounds the approval's validity (SEC-006). G7 owns time; the policy
 	// engine never sees this field.
 	ExpiresAt time.Time
+	// ChainRef names the on-chain entity this intent acts on (the bytes32 vault job
+	// id for an advance) — "" for intents with no chain half. Hash-bound internally
+	// (CanonicalInternal reflects every field); classified OFF the H3 wire.
+	ChainRef string
 	// AlternativeTo links this intent to the request-alternative decision that spawned
 	// it ("" = not an alternative). Gives the activity feed (F3) explicit causality for
 	// the "owner rejects, worker adapts" story instead of inferring it from ordering.
