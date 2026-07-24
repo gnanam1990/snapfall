@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
@@ -40,13 +41,15 @@ type telegramResponse struct {
 	Description string `json:"description"`
 }
 
-// Notifier is a supervised, bounded outbound Telegram notification worker.
+// Notifier is a supervised outbound Telegram notification worker.
 type Notifier struct {
 	cfg     Config
 	client  *http.Client
 	apiBase string
 	log     *slog.Logger
-	queue   chan approval.Request
+	mu      sync.Mutex
+	queue   []approval.Request
+	wake    chan struct{}
 }
 
 // New constructs a production Telegram notifier.
@@ -63,7 +66,7 @@ func newNotifier(cfg Config, client *http.Client, apiBase string, log *slog.Logg
 	}
 	return &Notifier{
 		cfg: cfg, client: client, apiBase: strings.TrimRight(apiBase, "/"),
-		log: log, queue: make(chan approval.Request, 64),
+		log: log, queue: make([]approval.Request, 0, 64), wake: make(chan struct{}, 1),
 	}
 }
 
@@ -72,28 +75,45 @@ func (*Notifier) Name() string { return "telegram-approvals" }
 
 // Enqueue schedules one approval mirror without blocking the money path.
 func (n *Notifier) Enqueue(req approval.Request) bool {
+	n.mu.Lock()
+	n.queue = append(n.queue, req)
+	n.mu.Unlock()
 	select {
-	case n.queue <- req:
-		return true
+	case n.wake <- struct{}{}:
 	default:
-		return false
 	}
+	return true
 }
 
 // Run drains approval notifications until daemon shutdown. Telegram outages are
 // surfaced in logs but never crash or block the authoritative dashboard/H2 path.
 func (n *Notifier) Run(ctx context.Context) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case req := <-n.queue:
+		if req, ok := n.dequeue(); ok {
 			if err := n.Send(ctx, req); err != nil {
 				n.log.Warn("telegram approval notification failed",
 					"request_id", req.ID, "job_id", req.JobID, "err", err)
 			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-n.wake:
 		}
 	}
+}
+
+func (n *Notifier) dequeue() (approval.Request, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.queue) == 0 {
+		return approval.Request{}, false
+	}
+	req := n.queue[0]
+	n.queue[0] = approval.Request{}
+	n.queue = n.queue[1:]
+	return req, true
 }
 
 // Send mirrors one pending request to Telegram with dashboard decision deep links.

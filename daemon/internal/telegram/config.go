@@ -41,7 +41,7 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 		)
 	}
 	dashboard, err := url.Parse(cfg.DashboardURL)
-	if err != nil || dashboard.Host == "" || (dashboard.Scheme != "http" && dashboard.Scheme != "https") {
+	if err != nil || dashboard.Hostname() == "" || (dashboard.Scheme != "http" && dashboard.Scheme != "https") {
 		return Config{}, fmt.Errorf("SNAPFALL_DASHBOARD_URL must be an absolute http(s) URL")
 	}
 	if dashboard.User != nil {

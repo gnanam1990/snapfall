@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -59,6 +60,11 @@ func TestLoadConfigIsOptionalButRefusesPartialOrUnsafeConfiguration(t *testing.T
 			"SNAPFALL_TELEGRAM_BOT_TOKEN": "secret",
 			"SNAPFALL_TELEGRAM_CHAT_ID":   "123",
 			"SNAPFALL_DASHBOARD_URL":      "https://snapfall.example/?token=secret",
+		},
+		{
+			"SNAPFALL_TELEGRAM_BOT_TOKEN": "secret",
+			"SNAPFALL_TELEGRAM_CHAT_ID":   "123",
+			"SNAPFALL_DASHBOARD_URL":      "http://:3000",
 		},
 	} {
 		if _, err := LoadConfig(lookup(values)); err == nil {
@@ -163,6 +169,41 @@ func TestRunDrainsQueuedApprovalAndStopsCleanly(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("notifier did not stop on cancellation")
+	}
+}
+
+func TestRecoveredApprovalsBeyondLegacyQueueCapacityAreAllDelivered(t *testing.T) {
+	const total = 65
+	delivered := make(chan struct{}, total)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		delivered <- struct{}{}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer server.Close()
+
+	notifier := newNotifier(Config{
+		BotToken: "token", ChatID: "42", DashboardURL: "http://127.0.0.1:3000",
+	}, server.Client(), server.URL, slog.Default())
+	for index := 0; index < total; index++ {
+		req := telegramRequest()
+		req.ID = fmt.Sprintf("apr_recovered_%02d", index)
+		if !notifier.Enqueue(req) {
+			t.Fatalf("recovered approval %d was dropped before notifier startup", index+1)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- notifier.Run(ctx) }()
+	for count := 0; count < total; count++ {
+		select {
+		case <-delivered:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("delivered %d/%d recovered approvals", count, total)
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

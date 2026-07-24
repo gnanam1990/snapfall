@@ -174,6 +174,11 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		return nil
 	}
 
+	telegramCfg, err := telegram.LoadConfig(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("telegram approvals: %w", err)
+	}
+
 	// ── Local state ──
 	if dir := filepath.Dir(dbPath); dir != "." {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -233,7 +238,7 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 
 	// ── Supervisor ──
 	sup := supervisor.New(log, 5, 200*time.Millisecond)
-	if err := configureTelegramApprovals(life, sup, log); err != nil {
+	if err := configureTelegramApprovals(telegramCfg, life, sup, log); err != nil {
 		return err
 	}
 
@@ -417,11 +422,7 @@ func (w workerFunc) Run(ctx context.Context) error {
 	return err
 }
 
-func configureTelegramApprovals(life *approval.Lifecycle, sup *supervisor.Supervisor, log *slog.Logger) error {
-	cfg, err := telegram.LoadConfig(os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("telegram approvals: %w", err)
-	}
+func configureTelegramApprovals(cfg telegram.Config, life *approval.Lifecycle, sup *supervisor.Supervisor, log *slog.Logger) error {
 	if !cfg.Enabled() {
 		return nil
 	}
@@ -431,16 +432,10 @@ func configureTelegramApprovals(life *approval.Lifecycle, sup *supervisor.Superv
 		if previousPending != nil {
 			previousPending(req)
 		}
-		if !notifier.Enqueue(req) {
-			log.Warn("telegram approval queue full; dashboard remains authoritative",
-				"request_id", req.ID, "job_id", req.JobID)
-		}
+		notifier.Enqueue(req)
 	}
 	for _, req := range life.PendingRequests() {
-		if !notifier.Enqueue(req) {
-			log.Warn("telegram recovery queue full; dashboard remains authoritative",
-				"request_id", req.ID, "job_id", req.JobID)
-		}
+		notifier.Enqueue(req)
 	}
 	if err := sup.Register(notifier); err != nil {
 		return fmt.Errorf("register telegram approvals: %w", err)
