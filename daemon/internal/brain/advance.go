@@ -105,6 +105,38 @@ func (b *Brain) BindVaultJob(ctx context.Context, jobID, vaultJobID string) erro
 	if len(vaultJobID) != 66 || vaultJobID[:2] != "0x" {
 		return fmt.Errorf("vault job id must be 0x-prefixed bytes32 hex, got %q", vaultJobID)
 	}
-	_ = ctx
-	return b.memory.Update(jobID, func(jm *JobMemory) { jm.VaultJobID = vaultJobID })
+	// The chain is authoritative: when a quote oracle is wired, read the on-chain
+	// customerPayment and adopt it as the quote, so Brain's local record agrees with
+	// the chain by construction — no 25.00-next-to-0.50 divergence on camera, and the
+	// reconciler has no funded-amount disagreement to raise. Falls back to the existing
+	// (stub) quote if the read fails, loudly.
+	b.mu.Lock()
+	oracle := b.quoteOracle
+	b.mu.Unlock()
+	chainQuote := ""
+	if oracle != nil {
+		if q, ok := oracle(ctx, vaultJobID); ok {
+			chainQuote = q
+		} else {
+			b.log.Warn("quote oracle returned no on-chain quote; keeping the local quote", "job", jobID, "vault", vaultJobID)
+		}
+	}
+	return b.memory.Update(jobID, func(jm *JobMemory) {
+		jm.VaultJobID = vaultJobID
+		if chainQuote != "" {
+			jm.QuoteUSDC = chainQuote
+		}
+	})
+}
+
+// QuoteOracle reads a job's authoritative quote as a human USDC string ("1.00") from
+// on-chain state, given its bytes32 vault id. Returns false when the read is
+// unavailable (no chain wired, RPC error, or the job is not yet on chain).
+type QuoteOracle func(ctx context.Context, vaultJobID string) (string, bool)
+
+// SetQuoteOracle wires the on-chain quote reader (main.go, from the chain view client).
+func (b *Brain) SetQuoteOracle(o QuoteOracle) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.quoteOracle = o
 }

@@ -90,6 +90,9 @@ func CalldataAcceptDelivery(jobID [32]byte) []byte {
 func CalldataJobStatus(jobID [32]byte) []byte {
 	return pack("jobStatus(bytes32)", b32Word(jobID))
 }
+func CalldataJobEconomics(jobID [32]byte) []byte {
+	return pack("jobEconomics(bytes32)", b32Word(jobID))
+}
 
 // ── view decoders (the restart oracle's answers) ──
 
@@ -102,6 +105,18 @@ func DecodeOpenAdvance(ret []byte) (principal, fee *big.Int, open bool, err erro
 	fee = new(big.Int).SetBytes(ret[32:64])
 	open = new(big.Int).SetBytes(ret[64:96]).Sign() != 0
 	return principal, fee, open, nil
+}
+
+// DecodeJobEconomics parses jobEconomics's (address operator, uint256 customerPayment,
+// uint256 maxOperatingBudget). The customerPayment is the chain-authoritative quote.
+func DecodeJobEconomics(ret []byte) (operator common.Address, customerPayment, maxBudget *big.Int, err error) {
+	if len(ret) != 96 {
+		return common.Address{}, nil, nil, fmt.Errorf("jobEconomics returned %d bytes, want 96", len(ret))
+	}
+	operator = common.BytesToAddress(ret[0:32])
+	customerPayment = new(big.Int).SetBytes(ret[32:64])
+	maxBudget = new(big.Int).SetBytes(ret[64:96])
+	return operator, customerPayment, maxBudget, nil
 }
 
 // DecodeJobStatus parses jobStatus's enum. 4 = Accepted (the settled terminal).
