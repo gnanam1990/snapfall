@@ -758,6 +758,7 @@ table.t { width: 100%; border-collapse: collapse; }
 
 /* ── A12 workforce manifest gallery ── */
 .workforce-page {
+
   --workforce-line: #263544;
   display: grid;
   gap: 18px;

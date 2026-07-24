@@ -3,6 +3,7 @@ package ownerapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -184,6 +185,33 @@ func TestAPI_WorkforceHireRefusesBadOrUnwiredRequests(t *testing.T) {
 	w, out = do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
 	if w.Code != http.StatusServiceUnavailable || out["error"].(map[string]any)["code"] != "NOT_WIRED" {
 		t.Fatalf("unwired hire status=%d out=%+v", w.Code, out)
+	}
+
+	s.HireWorker = func(context.Context, HireWorkerRequest) (HireWorkerResult, error) {
+		return HireWorkerResult{}, errors.New("confirmation temporarily unavailable")
+	}
+	w, out = do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
+	if w.Code != http.StatusConflict || out["error"].(map[string]any)["code"] != "HIRE_FAILED" {
+		t.Fatalf("failed hire status=%d out=%+v", w.Code, out)
+	}
+}
+
+func TestAPI_WorkforceHireRejectsInvalidQuotesBeforeActivation(t *testing.T) {
+	s, _ := newAPI(t)
+	called := false
+	s.HireWorker = func(context.Context, HireWorkerRequest) (HireWorkerResult, error) {
+		called = true
+		return HireWorkerResult{}, nil
+	}
+	for _, quote := range []string{"0", "0.00", "-1", "1.234", "nope"} {
+		body := `{"repository":"/work/acme","quoteUsdc":"` + quote + `","by":"anandan"}`
+		w, out := do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
+		if w.Code != http.StatusBadRequest || out["error"].(map[string]any)["code"] != "BAD_REQUEST" {
+			t.Fatalf("quote %q status=%d out=%+v", quote, w.Code, out)
+		}
+	}
+	if called {
+		t.Fatal("invalid quote reached the activation callback")
 	}
 }
 

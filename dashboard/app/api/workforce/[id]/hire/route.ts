@@ -50,7 +50,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       headers: ownerHeaders(),
       body: JSON.stringify(body),
       cache: 'no-store',
-      signal: req.signal,
+      signal: AbortSignal.any([req.signal, AbortSignal.timeout(5_000)]),
     });
     return new Response(upstream.body, {
       status: upstream.status,

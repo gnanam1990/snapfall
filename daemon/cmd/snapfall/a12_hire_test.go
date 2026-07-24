@@ -148,9 +148,17 @@ func TestBuildMonitorHireResumesPersistedUnconfirmedMilestone(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	b.SetRootContext(cancelled)
+	if _, err := buildMonitorHire(b)(ctx, req); err == nil {
+		t.Fatal("hire must surface a confirmation dispatch failure")
+	}
+	b.SetRootContext(context.Background())
+
 	result, err := buildMonitorHire(b)(ctx, req)
 	if err != nil {
-		t.Fatalf("retrying persisted unconfirmed hire: %v", err)
+		t.Fatalf("retrying after confirmation dispatch failure: %v", err)
 	}
 	if result.JobID != opened.JobID || result.VaultJobID != opened.VaultJobID {
 		t.Fatalf("retry created a different cycle: result=%+v opened=%+v", result, opened)

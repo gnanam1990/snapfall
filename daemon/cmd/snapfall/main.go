@@ -440,9 +440,15 @@ func buildMonitorHire(br *brain.Brain) func(context.Context, ownerapi.HireWorker
 			if err := br.Confirm(hctx, cycle.JobID, req.By); err != nil {
 				return ownerapi.HireWorkerResult{}, err
 			}
+		} else if job.Stage == brain.StageConfirmed || job.Stage == brain.StageAssigned {
+			if err := br.ResumeMilestone(hctx, cycle.JobID); err != nil {
+				return ownerapi.HireWorkerResult{}, err
+			}
+		}
+		if job.Stage == brain.StageScoped || job.Stage == brain.StageConfirmed || job.Stage == brain.StageAssigned {
 			job, ok = br.Job(cycle.JobID)
 			if !ok {
-				return ownerapi.HireWorkerResult{}, fmt.Errorf("milestone %s disappeared after confirmation", cycle.JobID)
+				return ownerapi.HireWorkerResult{}, fmt.Errorf("milestone %s disappeared after activation", cycle.JobID)
 			}
 		}
 		return ownerapi.HireWorkerResult{

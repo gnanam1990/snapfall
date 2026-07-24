@@ -72,17 +72,27 @@ function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; 
     if (!valid || submitting) return;
     setSubmitting(true);
     setError('');
+    const fallback = 'Build Monitor could not be activated.';
     try {
       const response = await fetch(`/api/workforce/${encodeURIComponent(manifest.id)}/hire`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ repository: repository.trim(), quoteUsdc: quoteUsdc.trim(), by: 'anandan' }),
       });
-      const body = await response.json() as HireWorkerResult & { error?: { message?: string } };
-      if (!response.ok) throw new Error(body.error?.message ?? 'Build Monitor could not be activated.');
+      let body: HireWorkerResult & { error?: { message?: string } };
+      try {
+        body = await response.json() as HireWorkerResult & { error?: { message?: string } };
+      } catch {
+        setError(fallback);
+        return;
+      }
+      if (!response.ok) {
+        setError(body.error?.message ?? fallback);
+        return;
+      }
       setResult(body);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Build Monitor could not be activated.');
+    } catch {
+      setError(fallback);
     } finally {
       setSubmitting(false);
     }
@@ -228,7 +238,9 @@ export default function WorkforcePage() {
             <h2 id="manifest-gallery-title">Grow your team</h2>
             <p>Hire from reviewed manifests. Permissions stay explicit.</p>
           </div>
-          <span className="gallery-count">1 available · 3 upcoming</span>
+          <span className="gallery-count">
+            {manifests.length} available · {COMING_SOON_WORKERS.length} upcoming
+          </span>
         </div>
         <div className="manifest-grid">
           <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} />

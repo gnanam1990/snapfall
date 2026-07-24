@@ -52,8 +52,10 @@ test('hire proxy permits a same-origin JSON action', async () => {
   const previousFetch = globalThis.fetch;
   process.env.SNAPFALL_OWNER_API_URL = 'http://127.0.0.1:4010/api/v1';
   let forwarded = 0;
-  globalThis.fetch = async () => {
+  let forwardedSignal: AbortSignal | null | undefined;
+  globalThis.fetch = async (_input, init) => {
     forwarded += 1;
+    forwardedSignal = init?.signal;
     return Response.json({ jobId: 'milestone_1', vaultJobId: '0xwatch', state: 'assigned' }, { status: 201 });
   };
   try {
@@ -68,6 +70,8 @@ test('hire proxy permits a same-origin JSON action', async () => {
     const response = await POST(request, { params: Promise.resolve({ id: 'build-monitor' }) });
     assert.equal(response.status, 201);
     assert.equal(forwarded, 1);
+    assert.ok(forwardedSignal, 'privileged upstream request must carry a timeout/cancellation signal');
+    assert.notEqual(forwardedSignal, request.signal, 'upstream signal must compose a bounded timeout');
   } finally {
     globalThis.fetch = previousFetch;
     if (previousURL === undefined) delete process.env.SNAPFALL_OWNER_API_URL;

@@ -18,6 +18,7 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/envelope"
 	"github.com/gnanam1990/snapfall/daemon/internal/logging"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
+	"github.com/gnanam1990/snapfall/daemon/internal/worker"
 )
 
 // JobStage is Brain's job lifecycle for Phase 1.
@@ -343,11 +344,14 @@ func (b *Brain) onOwnerConfirm(ctx context.Context, e envelope.Envelope) error {
 
 	logging.From(ctx, b.log).Info("owner confirmed, assigning", "worker_kind", kind)
 
+	// ASYNC (G8): dispatch onto a background goroutine and return. The worker — and any
+	// Purchase it blocks on awaiting approval — runs off the owner's Confirm() goroutine.
+	if kind == worker.BuildMonitorKind {
+		return b.ResumeMilestone(ctx, e.JobID)
+	}
 	b.mu.Lock()
 	js.Stage = StageAssigned
 	b.mu.Unlock()
-	// ASYNC (G8): dispatch onto a background goroutine and return. The worker — and any
-	// Purchase it blocks on awaiting approval — runs off the owner's Confirm() goroutine.
 	return b.dispatchTask(ctx, e.JobID, kind, nil, nil)
 }
 

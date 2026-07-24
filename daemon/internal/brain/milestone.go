@@ -218,6 +218,51 @@ func (b *Brain) Milestones() ([]MilestoneStatus, error) {
 	return statuses, nil
 }
 
+// ResumeMilestone dispatches a durably confirmed Build Monitor cycle when a prior
+// confirmation attempt failed before the task goroutine was started.
+func (b *Brain) ResumeMilestone(ctx context.Context, jobID string) error {
+	b.mu.Lock()
+	js, ok := b.jobs[jobID]
+	if !ok {
+		b.mu.Unlock()
+		return fmt.Errorf("resume unknown milestone %s", jobID)
+	}
+	if js.Worker != worker.BuildMonitorKind {
+		b.mu.Unlock()
+		return fmt.Errorf("job %s is assigned to %s, not Build Monitor", jobID, js.Worker)
+	}
+	switch js.Stage {
+	case StageConfirmed:
+		js.Stage = StageAssigned
+	case StageAssigned:
+		if _, running := b.tasks[jobID]; running {
+			b.mu.Unlock()
+			return nil
+		}
+	default:
+		stage := js.Stage
+		b.mu.Unlock()
+		return fmt.Errorf("milestone %s is %s, not resumable", jobID, stage)
+	}
+	kind := js.Worker
+	b.mu.Unlock()
+
+	if err := b.dispatchTask(ctx, jobID, kind, nil, nil); err != nil {
+		b.mu.Lock()
+		if js.Stage == StageAssigned {
+			js.Stage = StageConfirmed
+		}
+		b.mu.Unlock()
+		if persistErr := b.memory.Update(jobID, func(jm *JobMemory) {
+			jm.Stage = string(StageConfirmed)
+		}); persistErr != nil {
+			return fmt.Errorf("dispatch milestone: %v; restore confirmed state: %w", err, persistErr)
+		}
+		return err
+	}
+	return nil
+}
+
 // observeMilestoneCompletion verifies the completed cycle and records the rate produced
 // by that settlement. It is idempotent because customer acceptance is idempotent and
 // this event is checked before append.

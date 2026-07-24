@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -104,6 +105,8 @@ type WorkerActivation struct {
 	State      string `json:"state"`
 }
 
+var positiveUSDCQuote = regexp.MustCompile(`^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$`)
+
 // New builds the server.
 func New(life *approval.Lifecycle, st *store.Store, log *slog.Logger) *Server {
 	return &Server{life: life, st: st, log: log, token: os.Getenv("SNAPFALL_OWNER_TOKEN"), pollEvery: 200 * time.Millisecond}
@@ -175,6 +178,11 @@ func (s *Server) handleHireWorker(w http.ResponseWriter, r *http.Request) {
 	if body.ManifestID == "" || body.Repository == "" || body.QuoteUSDC == "" || body.By == "" {
 		writeErr(w, http.StatusBadRequest, "BAD_REQUEST",
 			"hire requires a manifest id, repository, quoteUsdc, and owner identity", nil)
+		return
+	}
+	if !positiveUSDCQuote.MatchString(body.QuoteUSDC) || strings.Trim(body.QuoteUSDC, "0.") == "" {
+		writeErr(w, http.StatusBadRequest, "BAD_REQUEST",
+			"quoteUsdc must be a strictly positive decimal with at most two fractional digits", nil)
 		return
 	}
 	if s.HireWorker == nil {
