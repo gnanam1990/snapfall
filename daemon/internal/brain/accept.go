@@ -125,17 +125,61 @@ func (b *Brain) AcceptDelivery(ctx context.Context, jobID string) (string, error
 	if err := b.memory.Update(jobID, func(jm *JobMemory) { jm.Stage = string(StageAccepted) }); err != nil {
 		return "", err
 	}
-	// The honest stop: no deployment exists, so the on-chain acceptDelivery cannot be
-	// submitted. The acceptance is durable and the settlement is explicitly pending the
-	// chain — the same honesty shape as purchase.pending_settlement.
+	return b.settleOnChain(ctx, jobID)
+}
+
+// settleOnChain is the chain half of an authenticated, claimed Accept: submit
+// JobVault.acceptDelivery through Funding's CUSTOMER lane (SC-JV-005 — only the
+// customer settles; the demo lane is daemon-custodial, stated openly) and record the
+// outcome distinctly. No lane or no chain identity = the honest pending stop; a
+// REVERT is mined-and-failed — surfaced to the owner, never recorded as settled.
+func (b *Brain) settleOnChain(ctx context.Context, jobID string) (string, error) {
+	pending := func(note string) (string, error) {
+		if _, err := b.store.Append(ctx, store.Event{
+			Kind: "settlement.pending_chain", EntityID: jobID, Actor: "customer",
+			Payload: map[string]any{"note": note},
+		}); err != nil {
+			return "", err
+		}
+		b.log.Info("delivery accepted", "job", jobID, "settlement", "pending-chain")
+		return "accepted-pending-chain", nil
+	}
+	jm, err := b.memory.Get(jobID)
+	if err != nil {
+		return "", err
+	}
+	if b.funding == nil {
+		return pending("delivery accepted; no funding agent wired — settlement pending")
+	}
+	if jm.VaultJobID == "" {
+		return pending("delivery accepted; no on-chain job identity yet (vault_job_id unset) — settlement pending")
+	}
+	out, err := b.funding.SettleOnChain(context.WithoutCancel(ctx), jm.VaultJobID)
+	if err != nil {
+		return "", fmt.Errorf("acceptDelivery submission: %w", err)
+	}
+	if !out.Submitted {
+		return pending("delivery accepted; no customer chain lane wired — settlement pending")
+	}
+	if out.Reverted {
+		if _, aerr := b.store.Append(ctx, store.Event{
+			Kind: "settlement.reverted", EntityID: jobID, Actor: "funding",
+			Payload: map[string]any{
+				"tx_hash": out.TxHash, "block": out.Block, "gas_used": out.GasUsed,
+				"note": "acceptDelivery MINED AND REVERTED — not settled; owner attention required",
+			},
+		}); aerr != nil {
+			return "", aerr
+		}
+		b.log.Warn("settlement reverted on chain", "job", jobID, "tx", out.TxHash)
+		return "accepted-settlement-reverted", nil
+	}
 	if _, err := b.store.Append(ctx, store.Event{
-		Kind: "settlement.pending_chain", EntityID: jobID, Actor: "customer",
-		Payload: map[string]any{
-			"note": "delivery accepted by the customer; on-chain acceptDelivery pending deployment (chain-write path)",
-		},
+		Kind: "settlement.executed", EntityID: jobID, Actor: "funding",
+		Payload: map[string]any{"tx_hash": out.TxHash, "block": out.Block, "gas_used": out.GasUsed},
 	}); err != nil {
 		return "", err
 	}
-	b.log.Info("delivery accepted", "job", jobID, "settlement", "pending-chain")
-	return "accepted-pending-chain", nil
+	b.log.Info("settlement executed on chain", "job", jobID, "tx", out.TxHash, "gas", out.GasUsed)
+	return "accepted-settled", nil
 }

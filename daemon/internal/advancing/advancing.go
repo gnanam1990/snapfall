@@ -45,10 +45,24 @@ type Flow struct {
 	orgID  string
 	window time.Duration
 
+	// oracle, when set, answers the crash-window question from CHAIN STATE (never a
+	// heuristic): SC-FP-003 permits one advance per job, so the chain says whether a
+	// claimed-but-unconfirmed advance actually landed.
+	oracle AdvanceOracle
+
 	// afterExecute is a TEST-ONLY hook (nil in production), invoked after the await
 	// goroutine reaches its terminal outcome — tests await it deterministically.
 	afterExecute func()
 }
+
+// AdvanceOracle is the chain-state reader the restart recovery consults
+// (chain.Oracle satisfies it; tests fake it).
+type AdvanceOracle interface {
+	AdvanceLanded(ctx context.Context, vaultJobID string) (bool, error)
+}
+
+// SetOracle wires the restart oracle.
+func (f *Flow) SetOracle(o AdvanceOracle) { f.oracle = o }
 
 // New wires the flow. window bounds how long an advance proposal awaits its decision.
 func New(life *approval.Lifecycle, st *store.Store, fund *funding.Agent, log *slog.Logger, orgID string, window time.Duration) *Flow {
@@ -62,7 +76,7 @@ const AdvanceRateBps = 5_000
 
 // Propose opens the human-authorized advance request and spawns the await that
 // executes on approval. Returns the pending request (its ID lands in the H2 inbox).
-func (f *Flow) Propose(ctx context.Context, jobID, quoteUSDC string) (approval.Request, error) {
+func (f *Flow) Propose(ctx context.Context, jobID, vaultJobID, quoteUSDC string) (approval.Request, error) {
 	principal, err := principalMicros(quoteUSDC)
 	if err != nil {
 		return approval.Request{}, fmt.Errorf("advance proposal: %w", err)
@@ -75,6 +89,7 @@ func (f *Flow) Propose(ctx context.Context, jobID, quoteUSDC string) (approval.R
 		IntentID: "adv_" + hex.EncodeToString(nonce[:6]),
 		OrgID:    f.orgID, JobID: jobID, AgentID: "funding",
 		Kind:     policy.KindAdvance,
+		ChainRef: vaultJobID,
 		Resource: "FloatPool.requestAdvance",
 		Purpose: fmt.Sprintf("working-capital advance: 50%% of the %s USDC escrowed receivable (fee computed on-chain at submission)",
 			quoteUSDC),
@@ -85,7 +100,15 @@ func (f *Flow) Propose(ctx context.Context, jobID, quoteUSDC string) (approval.R
 	if err != nil {
 		return approval.Request{}, err
 	}
-	go f.await(ctx, *res.Request)
+	// The await goroutine outlives THIS call — it waits for a separate owner-approval
+	// request, which may arrive long after Propose returns. It must NOT be bound to the
+	// caller's context: the owner-initiated HTTP path passes r.Context(), which is
+	// cancelled the instant the proposal POST returns, and a request-scoped await would
+	// exit before the approval ever lands (approved-but-never-executed — the silent
+	// money-path no-op). Detach: keep values, drop the caller's cancellation. The
+	// deadline timer bounds the wait; a crash is covered by EscalateInterrupted. This is
+	// the G8 rootCtx lesson, applied to the advance flow.
+	go f.await(context.WithoutCancel(ctx), *res.Request)
 	return *res.Request, nil
 }
 
@@ -116,18 +139,11 @@ func (f *Flow) await(ctx context.Context, req approval.Request) {
 		return
 	}
 	execErr := f.life.Execute(context.WithoutCancel(ctx), snap.Intent, req.ID, func(ectx context.Context, g approval.Grant) error {
-		if err := f.fund.Execute(ectx, g); err != nil {
+		out, err := f.fund.ExecuteAdvance(ectx, g)
+		if err != nil {
 			return err
 		}
-		// The honest stop: no deployment, no FloatPool.requestAdvance submission.
-		_, err := f.st.Append(ectx, store.Event{
-			Kind: "advance.pending_chain", EntityID: g.Intent().JobID, Actor: "funding",
-			Payload: map[string]any{
-				"request_id": g.RequestID(), "principal_micros": g.Intent().AmountMicros,
-				"note": "advance approved by the owner; FloatPool.requestAdvance pending deployment (chain-write path)",
-			},
-		})
-		return err
+		return f.recordAdvanceOutcome(ectx, g, out)
 	})
 	if execErr != nil {
 		// Refused (freeze, expiry, policy change) or failed: visible, never silent.
@@ -141,6 +157,45 @@ func (f *Flow) await(ctx context.Context, req approval.Request) {
 	}
 }
 
+// recordAdvanceOutcome makes the chain outcome durable, distinctly — success
+// (advance.executed), REVERTED (advance.reverted: mined and failed, surfaced to the
+// owner, never recorded as done), or the honest pending_chain stop when no lane or no
+// chain identity is wired.
+func (f *Flow) recordAdvanceOutcome(ectx context.Context, g approval.Grant, out funding.ChainOutcome) error {
+	pending := func(note string) error {
+		_, err := f.st.Append(ectx, store.Event{
+			Kind: "advance.pending_chain", EntityID: g.Intent().JobID, Actor: "funding",
+			Payload: map[string]any{
+				"request_id": g.RequestID(), "principal_micros": g.Intent().AmountMicros, "note": note,
+			},
+		})
+		return err
+	}
+	if !out.Submitted {
+		return pending("advance approved; no treasury chain lane or on-chain job identity — submission pending")
+	}
+	if out.Reverted {
+		if _, aerr := f.st.Append(ectx, store.Event{
+			Kind: "advance.reverted", EntityID: g.Intent().JobID, Actor: "funding",
+			Payload: map[string]any{
+				"request_id": g.RequestID(), "tx_hash": out.TxHash, "block": out.Block, "gas_used": out.GasUsed,
+				"note": "requestAdvance MINED AND REVERTED — not an advance; owner attention required",
+			},
+		}); aerr != nil {
+			f.log.Error("revert event append failed", "err", aerr)
+		}
+		return fmt.Errorf("requestAdvance reverted on chain (tx %s)", out.TxHash)
+	}
+	_, err := f.st.Append(ectx, store.Event{
+		Kind: "advance.executed", EntityID: g.Intent().JobID, Actor: "funding",
+		Payload: map[string]any{
+			"request_id": g.RequestID(), "tx_hash": out.TxHash, "block": out.Block, "gas_used": out.GasUsed,
+			"principal_micros": g.Intent().AmountMicros,
+		},
+	})
+	return err
+}
+
 // EscalateInterrupted surfaces advance requests that survived a restart in a
 // non-terminal-executed state: approved-but-unexecuted advances are NEVER auto-executed
 // (the await goroutine died with the old process; re-running money movement on boot is
@@ -152,7 +207,20 @@ func (f *Flow) EscalateInterrupted(ctx context.Context) (int, error) {
 		if req.Intent.Kind != policy.KindAdvance {
 			continue
 		}
-		if req.Executed || req.State == approval.StateRejected || req.State == approval.StateExpired ||
+		if req.Executed {
+			// THE CRASH WINDOW: claim durable, outcome unknown (the process may have
+			// died between submission and receipt). The chain is the oracle — never a
+			// heuristic: SC-FP-003 permits one advance per job, so openAdvanceOf
+			// answers definitively. No outcome record + oracle says landed → record
+			// it; says not landed (or no oracle/no chain ref) → escalate to the owner.
+			n, err := f.resolveExecutedClaim(ctx, req)
+			if err != nil {
+				return escalated, err
+			}
+			escalated += n
+			continue
+		}
+		if req.State == approval.StateRejected || req.State == approval.StateExpired ||
 			req.State == approval.StateAlternativeRequested {
 			continue
 		}
@@ -168,6 +236,46 @@ func (f *Flow) EscalateInterrupted(ctx context.Context) (int, error) {
 		escalated++
 	}
 	return escalated, nil
+}
+
+// resolveExecutedClaim closes one executed-claim request: 0 or 1 escalations.
+func (f *Flow) resolveExecutedClaim(ctx context.Context, req approval.Request) (int, error) {
+	var outcomes int
+	if err := f.st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM events
+		WHERE kind IN ('advance.executed','advance.pending_chain','advance.reverted')
+		  AND payload_json LIKE ?`, "%"+req.ID+"%").Scan(&outcomes); err != nil {
+		return 0, err
+	}
+	if outcomes > 0 {
+		return 0, nil // outcome already durable; nothing to resolve
+	}
+	if f.oracle != nil && req.Intent.ChainRef != "" {
+		landed, err := f.oracle.AdvanceLanded(ctx, req.Intent.ChainRef)
+		if err == nil && landed {
+			_, aerr := f.st.Append(ctx, store.Event{
+				Kind: "advance.executed", EntityID: req.JobID, Actor: "funding",
+				Payload: map[string]any{
+					"request_id": req.ID, "principal_micros": req.Intent.AmountMicros,
+					"recovered_from_chain": true,
+					"note":                 "claim survived a crash; the chain confirms the advance landed (openAdvanceOf)",
+				},
+			})
+			return 0, aerr
+		}
+		// Oracle errors fall through to escalation: uncertain = owner decides.
+	}
+	_, err := f.st.Append(ctx, store.Event{
+		Kind: "advance.interrupted", EntityID: req.JobID, Actor: "funding",
+		Payload: map[string]any{
+			"request_id": req.ID, "state": string(req.State),
+			"note": "executed claim with no outcome record and no chain confirmation — owner attention required; never auto-resubmitted",
+		},
+	})
+	if err != nil {
+		return 0, err
+	}
+	return 1, nil
 }
 
 // principalMicros converts a human-facing USDC quote to the 50% advance principal in

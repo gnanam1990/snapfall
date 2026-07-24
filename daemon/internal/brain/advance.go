@@ -43,7 +43,7 @@ func (b *Brain) ProposeAdvance(ctx context.Context, jobID string) (approval.Requ
 	if jm.QuoteUSDC == "" {
 		return approval.Request{}, fmt.Errorf("job %s has no quote to advance against", jobID)
 	}
-	return flow.Propose(ctx, jobID, jm.QuoteUSDC)
+	return flow.Propose(ctx, jobID, jm.VaultJobID, jm.QuoteUSDC)
 }
 
 // ObserveFundingOnce is the automatic trigger: a JobFunded row in the shared store for
@@ -95,4 +95,16 @@ func (b *Brain) ObserveFundingOnce(ctx context.Context) (int, error) {
 		proposed++
 	}
 	return proposed, nil
+}
+
+// BindVaultJob records the job's on-chain identity (the bytes32 JobVault job id) in
+// memory — the owner-side producer for vault_job_id, used by the advance observer,
+// the settlement path, Billing's join, and Anandan's reconciler (via the jobs
+// projection, which fires automatically on this write).
+func (b *Brain) BindVaultJob(ctx context.Context, jobID, vaultJobID string) error {
+	if len(vaultJobID) != 66 || vaultJobID[:2] != "0x" {
+		return fmt.Errorf("vault job id must be 0x-prefixed bytes32 hex, got %q", vaultJobID)
+	}
+	_ = ctx
+	return b.memory.Update(jobID, func(jm *JobMemory) { jm.VaultJobID = vaultJobID })
 }

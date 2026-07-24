@@ -76,6 +76,20 @@ func TestFunding_SoleEntryPointDemandsAGrant(t *testing.T) {
 	allowed := map[string]bool{
 		"Execute":  true, // the door — signature checked below
 		"Executed": true, // read-only inspection for Billing/tests
+		// The chain lanes (classified at the chain-writer review, deliberately):
+		"SetChain": true, // wiring-only setter: installs lanes, moves nothing
+		// ExecuteAdvance DEMANDS the Grant like Execute and derives its calldata FROM
+		// the grant's ChainRef — no caller-supplied calldata, no second door: an
+		// attacker with the Agent pointer but no Grant gets the same refusal Execute
+		// gives (empty-grant + replay checks run first, signature pinned below).
+		"ExecuteAdvance": true,
+		// SettleOnChain takes only a vault job id, NO Grant — a deliberate exception,
+		// classified: the settlement principal is the CUSTOMER (no owner approval
+		// exists to mint a Grant from), its authorization is upstream in Brain
+		// (credential + state + freeze + exactly-once) and ON-CHAIN (SC-JV-005: the
+		// contract refuses unless msg.sender is the job's customer and the job is
+		// Delivered — a misdirected call reverts; it cannot misappropriate).
+		"SettleOnChain": true,
 	}
 	for i := 0; i < typ.NumMethod(); i++ {
 		name := typ.Method(i).Name
@@ -123,5 +137,29 @@ func TestFunding_RefusesGrantReplay(t *testing.T) {
 	}
 	if got := len(agent.Executed()); got != 1 {
 		t.Fatalf("grant replay produced %d movements, want 1", got)
+	}
+}
+
+// ExecuteAdvance's signature demands the Grant exactly like Execute — pinned so the
+// advance door can never drift to accepting anything forgeable.
+func TestFunding_AdvanceDoorDemandsAGrantToo(t *testing.T) {
+	m, ok := reflect.TypeOf(&funding.Agent{}).MethodByName("ExecuteAdvance")
+	if !ok {
+		t.Fatal("ExecuteAdvance missing")
+	}
+	grantType := reflect.TypeOf(approval.Grant{})
+	found := false
+	for i := 1; i < m.Type.NumIn(); i++ {
+		if m.Type.In(i) == grantType {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("ExecuteAdvance does not take approval.Grant — the advance door lost the Grant requirement")
+	}
+
+	// And behaviorally: an empty (forged) grant is refused before any lane submission.
+	if _, err := funding.New().ExecuteAdvance(context.Background(), approval.Grant{}); err == nil {
+		t.Fatal("a forged grant reached the advance lane")
 	}
 }
