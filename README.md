@@ -55,7 +55,7 @@ reference page rather than pasting values between environments — testnet and m
 | Contract addresses | docs.arc.io — contract-addresses reference page | canonical USDC/system addresses per network |
 | Native gas token | USDC, **18 decimals** | same |
 | Faucet rate limits | _unverified_ — needs a real claim | — |
-| USYC on testnet | _unverified_ (FR-FLT-009 mock fallback is pre-authorized) | — |
+| USYC on testnet | Official contracts and live code verified 23 July 2026; access requires Circle allowlisting (typically 24–48h), so A8 ships the disclosed mock fallback | [`docs/USYC-SWEEP.md`](docs/USYC-SWEEP.md) |
 | Paymaster vs Gas Station | _unverified_ — C picks one per PRD §4.1 P1 | — |
 
 #### EVM differences that will bite us
