@@ -52,10 +52,12 @@ type Contracts struct {
 	USDC        Contract `json:"usdc"`
 }
 
-// Contract is one resolved contract and its ABI artifact.
+// Contract is one resolved contract and its ABI artifact. Address may be committed in
+// the deployment file (the 23 Jul testnet deploy artifact); the AddressEnv variable,
+// when set, OVERRIDES it — and when neither exists, loading fails closed as before.
 type Contract struct {
 	AddressEnv string `json:"addressEnv"`
-	Address    string `json:"-"`
+	Address    string `json:"address,omitempty"`
 	ABI        string `json:"abi,omitempty"`
 	ABIPath    string `json:"-"`
 	Decimals   int    `json:"decimals,omitempty"`
@@ -133,7 +135,12 @@ func (d *Deployment) resolve(base string, lookup LookupEnv) error {
 		}
 		value, ok := lookup(item.c.AddressEnv)
 		if !ok || strings.TrimSpace(value) == "" {
-			return fmt.Errorf("required address environment variable %s is not set", item.c.AddressEnv)
+			// No env override: fall back to the address committed in the deployment
+			// file (the deploy artifact). Neither present = fail closed, as always.
+			value = item.c.Address
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("contracts.%s: no committed address and %s is not set", item.name, item.c.AddressEnv)
+			}
 		}
 		address, err := normalizeAddress(value)
 		if err != nil {
