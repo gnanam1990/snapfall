@@ -46,6 +46,40 @@ export interface OpenAdvance {
   status: AdvanceStatus;
 }
 
+export interface FloatOpenAdvance extends OpenAdvance {
+  openedAt: string | null;
+  txHash: string;
+  explorerUrl: string;
+}
+
+export interface FloatLossTotals {
+  bondSlashedUsdc: string;
+  reserveUsedUsdc: string;
+  socializedUsdc: string;
+}
+
+/** Authoritative read-only FloatPool snapshot returned by /api/float. */
+export interface FloatSnapshot {
+  chainId: number;
+  blockNumber: number;
+  poolAddress: string;
+  explorerUrl: string;
+  totalAssetsUsdc: string;
+  totalOutstandingUsdc: string;
+  availableLiquidityUsdc: string;
+  utilizationBps: number;
+  feesAccruedUsdc: string | null;
+  reserveUsdc: string;
+  orgAddress: string | null;
+  orgRateBps: number | null;
+  acceptedJobs: number | null;
+  writtenOffJobs: number | null;
+  openAdvances: FloatOpenAdvance[] | null;
+  losses: FloatLossTotals | null;
+  historyStatus: 'complete' | 'unavailable';
+  observedAt: string;
+}
+
 export interface JobSummary {
   jobId: string;
   customer: string;
