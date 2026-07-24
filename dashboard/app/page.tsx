@@ -1,22 +1,24 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import type { OverviewSnapshot, PoolStats, OpenAdvance, FinancialEvent, StreamMessage } from '@/lib/types';
+import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage } from '@/lib/types';
+import type { ActivityMessage } from '@/lib/activity';
+import { humanizeLegacyEvent, humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdc, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import TreasuryHero from '@/components/TreasuryHero';
 import StatCard from '@/components/StatCard';
-import EventFeed from '@/components/EventFeed';
+import TeamActivityFeed from '@/components/TeamActivityFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
 import ActiveJobs from '@/components/ActiveJobs';
 
 export default function OverviewPage() {
   const [snap, setSnap] = useState<OverviewSnapshot | null>(null);
-  const [treasury, setTreasury] = useState('0');
+  const [treasury, setTreasury] = useState<string | null>(null);
   const [pool, setPool] = useState<PoolStats | null>(null);
-  const [advances, setAdvances] = useState<OpenAdvance[]>([]);
-  const [events, setEvents] = useState<FinancialEvent[]>([]);
+  const [advances, setAdvances] = useState<OpenAdvance[] | null>(null);
+  const [activity, setActivity] = useState<ActivityMessage[]>([]);
 
   const onMessage = useCallback((msg: StreamMessage) => {
     if (msg.kind === 'snapshot') {
@@ -24,21 +26,25 @@ export default function OverviewPage() {
       setTreasury(msg.snapshot.treasuryUsdc);
       setPool(msg.snapshot.pool);
       setAdvances(msg.snapshot.openAdvances);
-      setEvents(msg.snapshot.recentEvents);
+      const recent = (msg.snapshot.recentEvents ?? []).map(humanizeLegacyEvent);
+      setActivity((previous) => {
+        const ids = new Set(recent.map((item) => item.id));
+        return [...recent, ...previous.filter((item) => !ids.has(item.id))].slice(0, 30);
+      });
     } else {
-      setTreasury(msg.treasuryUsdc);
-      setPool(msg.pool);
-      setAdvances(msg.openAdvances);
-      setEvents((prev) => [msg.event, ...prev].slice(0, 14));
-      // Jobs and approvals stream too, so acceptance is visible everywhere (review: PR #8).
-      const { activeJobs, pendingApprovals } = msg;
-      if (activeJobs || pendingApprovals !== undefined) {
+      const next = humanizeStreamEvent(msg);
+      setActivity((prev) => [next, ...prev.filter((item) => item.id !== next.id)].slice(0, 30));
+      const aggregates = msg.aggregates;
+      if (aggregates?.treasuryUsdc != null) setTreasury(aggregates.treasuryUsdc);
+      if (aggregates?.pool) setPool(aggregates.pool);
+      if (aggregates?.openAdvances) setAdvances(aggregates.openAdvances);
+      if (aggregates && (aggregates.activeJobs || aggregates.pendingApprovals !== undefined)) {
         setSnap((s) =>
           s
             ? {
                 ...s,
-                activeJobs: activeJobs ?? s.activeJobs,
-                pendingApprovals: pendingApprovals ?? s.pendingApprovals,
+                activeJobs: aggregates.activeJobs ?? s.activeJobs,
+                pendingApprovals: aggregates.pendingApprovals ?? s.pendingApprovals,
               }
             : s,
         );
@@ -48,7 +54,7 @@ export default function OverviewPage() {
 
   const status = useEventStream('/api/events/stream', onMessage);
 
-  if (!snap || !pool) {
+  if (!snap) {
     return (
       <>
         <div className="topbar">
@@ -73,36 +79,41 @@ export default function OverviewPage() {
         )}
       </div>
 
-      <TreasuryHero treasuryUsdc={treasury} orgRateBps={pool.orgRateBps} />
+      <TreasuryHero treasuryUsdc={treasury} orgRateBps={pool?.orgRateBps ?? null} />
 
       <div className="grid cols-4 mt">
-        <StatCard label="Pool TVL" value={<>{formatUsdc(pool.tvlUsdc)} <span className="u">USDC</span></>} sub="seeded by demo LPs" />
-        <StatCard label="Utilization" value={formatBps(pool.utilizationBps)} sub="drawn / TVL · cap 80%" />
+        <StatCard
+          label="Pool TVL"
+          value={pool ? <>{formatUsdc(pool.tvlUsdc)} <span className="u">USDC</span></> : '—'}
+          sub={pool ? 'seeded by demo LPs' : 'awaiting chain indexer'}
+        />
+        <StatCard
+          label="Utilization"
+          value={pool ? formatBps(pool.utilizationBps) : '—'}
+          sub={pool ? 'drawn / TVL · cap 80%' : 'awaiting chain indexer'}
+        />
         <StatCard
           label="Fees accrued"
-          value={<>{formatUsdc(pool.feesAccruedUsdc)} <span className="u">USDC</span></>}
-          sub={`first-loss reserve ${formatUsdc(pool.reserveUsdc)}`}
+          value={pool ? <>{formatUsdc(pool.feesAccruedUsdc)} <span className="u">USDC</span></> : '—'}
+          sub={pool ? `first-loss reserve ${formatUsdc(pool.reserveUsdc)}` : 'awaiting chain indexer'}
         />
         <StatCard label="Pending approvals" value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
       </div>
 
-      <div className="grid cols-2 mt">
-        <div className="card">
-          <p className="card-title">Recent financial events</p>
-          <EventFeed events={events} />
-        </div>
+      <div className="activity-layout mt">
+        <TeamActivityFeed messages={activity} live={status === 'live'} />
         <div className="grid" style={{ gap: 16, alignContent: 'start' }}>
           <div className="card">
             <p className="card-title">Workforce</p>
-            <WorkforceStrip agents={snap.workforce} />
+            <WorkforceStrip agents={snap.workforce ?? []} />
           </div>
           <div className="card">
             <p className="card-title">Open advances</p>
-            <AdvancesTable advances={advances} />
+            {advances === null ? <div className="empty">Awaiting chain indexer.</div> : <AdvancesTable advances={advances} />}
           </div>
           <div className="card">
             <p className="card-title">Active jobs</p>
-            <ActiveJobs jobs={snap.activeJobs} />
+            <ActiveJobs jobs={snap.activeJobs ?? []} />
           </div>
         </div>
       </div>
