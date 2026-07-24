@@ -119,6 +119,34 @@ func TestGitChecklistSourceRejectsCommittedChecklistSymlink(t *testing.T) {
 	}
 }
 
+func TestGitChecklistSourceRejectsDirectoryAsArtifact(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "build-monitor@test.invalid")
+	runGit(t, repo, "config", "user.name", "Build Monitor Test")
+	checklist := filepath.Join(repo, ".snapfall", "milestone.json")
+	if err := os.MkdirAll(filepath.Dir(checklist), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(checklist,
+		[]byte(`{"checks":[{"name":"release","path":"reports"}]}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	report := filepath.Join(repo, "reports", "release.txt")
+	if err := os.MkdirAll(filepath.Dir(report), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(report, []byte("committed child"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".snapfall/milestone.json", "reports/release.txt")
+	runGit(t, repo, "commit", "-m", "add directory-shaped milestone evidence")
+
+	if _, err := (GitChecklistSource{}).Snapshot(context.Background(), repo); err == nil {
+		t.Fatal("Git tree directory was accepted as a completed artifact")
+	}
+}
+
 func TestGitChecklistSourceMeasuresCommittedRepositoryArtifacts(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-b", "main")

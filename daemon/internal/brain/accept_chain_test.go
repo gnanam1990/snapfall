@@ -3,9 +3,12 @@ package brain
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
+	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
 
 type fakeSettleLane struct{ out funding.ChainOutcome }
@@ -31,6 +34,25 @@ func (*transientMilestoneOracle) SettlementLanded(context.Context, string) (bool
 }
 
 func (*transientMilestoneOracle) AdvanceRateBps(context.Context) (uint64, error) {
+	return 5_500, nil
+}
+
+type concurrentMilestoneOracle struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (o *concurrentMilestoneOracle) AdvanceLanded(context.Context, string) (bool, error) {
+	o.entered <- struct{}{}
+	<-o.release
+	return true, nil
+}
+
+func (*concurrentMilestoneOracle) SettlementLanded(context.Context, string) (bool, error) {
+	return true, nil
+}
+
+func (*concurrentMilestoneOracle) AdvanceRateBps(context.Context) (uint64, error) {
 	return 5_500, nil
 }
 
@@ -114,6 +136,65 @@ func TestAcceptChain_RetriesMilestoneObservationWithoutResettling(t *testing.T) 
 	}
 	if n := countEvents(t, st, "settlement.executed", jobID); n != 1 {
 		t.Fatalf("settlement executions = %d, want exactly 1", n)
+	}
+}
+
+func TestAcceptChain_ConcurrentObservationRetriesCompleteMilestoneOnce(t *testing.T) {
+	b, st, jobID := acceptRig(t)
+	const vaultJobID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	b.mu.Lock()
+	b.jobs[jobID].Stage = StageAccepted
+	b.mu.Unlock()
+	if err := b.memory.Update(jobID, func(jm *JobMemory) {
+		jm.Stage = string(StageAccepted)
+		jm.VaultJobID = vaultJobID
+		jm.StandingInstructionID = "standing-build"
+		jm.MilestoneNumber = 1
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(context.Background(), store.Event{
+		Kind: "settlement.executed", EntityID: jobID, Actor: "funding",
+		Payload: map[string]any{"tx_hash": "0xsettled"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oracle := &concurrentMilestoneOracle{
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	b.SetMilestoneOracle(oracle)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	retry := func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := b.AcceptDelivery(context.Background(), jobID)
+			errs <- err
+		}()
+	}
+	retry()
+	<-oracle.entered
+	retry()
+	select {
+	case <-oracle.entered:
+		// Without serialization both callers pass the prior-count check and reach
+		// the oracle before either can append.
+	case <-time.After(100 * time.Millisecond):
+		// With serialization the second caller waits for the first completion.
+	}
+	close(oracle.release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent observation retry: %v", err)
+		}
+	}
+	if n := countEvents(t, st, "pipeline.milestone.completed", jobID); n != 1 {
+		t.Fatalf("completed observations = %d, want exactly 1", n)
 	}
 }
 

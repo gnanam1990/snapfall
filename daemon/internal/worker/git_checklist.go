@@ -115,6 +115,12 @@ func (s GitChecklistSource) Snapshot(ctx context.Context, repository string) (Bu
 		if found && entry.mode == "120000" {
 			return BuildSnapshot{}, fmt.Errorf("check %q path %s is a symlink", name, artifactPath)
 		}
+		if found && entry.kind != "blob" {
+			return BuildSnapshot{}, fmt.Errorf(
+				"check %q path %s is a Git %s, not a regular file",
+				name, artifactPath, entry.kind,
+			)
+		}
 		if found {
 			snapshot.Completed = append(snapshot.Completed, name)
 		} else {

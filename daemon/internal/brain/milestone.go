@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 	"github.com/gnanam1990/snapfall/daemon/internal/worker"
@@ -144,6 +145,12 @@ func (b *Brain) observeMilestoneCompletion(ctx context.Context, jobID string) er
 	if jm.StandingInstructionID == "" {
 		return nil
 	}
+	// Keep the idempotency check and append in one critical section. Accepted-job
+	// retries may arrive concurrently after an earlier observation failure.
+	observationLock := b.milestoneObservationLock(jobID)
+	observationLock.Lock()
+	defer observationLock.Unlock()
+
 	var prior int
 	if err := b.store.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM events WHERE kind='pipeline.milestone.completed' AND entity_id=?`,
@@ -189,4 +196,15 @@ func (b *Brain) observeMilestoneCompletion(ctx context.Context, jobID string) er
 		},
 	})
 	return err
+}
+
+func (b *Brain) milestoneObservationLock(jobID string) *sync.Mutex {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	lock := b.milestoneObservationLocks[jobID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		b.milestoneObservationLocks[jobID] = lock
+	}
+	return lock
 }

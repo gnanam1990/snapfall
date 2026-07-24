@@ -61,7 +61,8 @@ type Brain struct {
 	advanceFlow *advancing.Flow
 	// milestoneOracle verifies a standing-pipeline cycle from authoritative chain state
 	// after settlement and reads the resulting organization rate.
-	milestoneOracle MilestoneOracle
+	milestoneOracle           MilestoneOracle
+	milestoneObservationLocks map[string]*sync.Mutex
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).
@@ -113,13 +114,14 @@ func (b *Brain) frozenErr(jobID, agentKind string) error {
 // New wires a Brain. The funding agent pointer is handed here and nowhere else.
 func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agent) *Brain {
 	b := &Brain{
-		log:     log,
-		store:   st,
-		memory:  mem,
-		funding: fund,
-		workers: make(map[string]worker.Worker),
-		jobs:    make(map[string]*jobState),
-		tasks:   make(map[string]*taskHandle),
+		log:                       log,
+		store:                     st,
+		memory:                    mem,
+		funding:                   fund,
+		workers:                   make(map[string]worker.Worker),
+		jobs:                      make(map[string]*jobState),
+		tasks:                     make(map[string]*taskHandle),
+		milestoneObservationLocks: make(map[string]*sync.Mutex),
 	}
 
 	b.maxRevisions = 2
