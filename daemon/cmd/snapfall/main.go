@@ -322,6 +322,7 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		ChecklistPath: ".snapfall/milestone.json",
 	}}
 	api.HireWorker = buildMonitorHire(br)
+	api.ListWorkerActivations = buildMonitorActivations(br)
 
 	// The funding-observed advance trigger. HONEST STATE: never fired for real — no
 	// deployment, no JobFunded rows, nothing writes vault ids — but it runs so funding
@@ -422,7 +423,7 @@ func buildMonitorHire(br *brain.Brain) func(context.Context, ownerapi.HireWorker
 			return ownerapi.HireWorkerResult{}, fmt.Errorf("unknown worker manifest %q", req.ManifestID)
 		}
 		repository := strings.TrimSpace(req.Repository)
-		cycle, err := br.OpenMilestone(hctx, brain.Milestone{
+		cycle, err := br.EnsureMilestone(hctx, brain.Milestone{
 			StandingInstructionID: "hire:" + repository,
 			Number:                1,
 			Repository:            repository,
@@ -431,12 +432,46 @@ func buildMonitorHire(br *brain.Brain) func(context.Context, ownerapi.HireWorker
 		if err != nil {
 			return ownerapi.HireWorkerResult{}, err
 		}
-		if err := br.Confirm(hctx, cycle.JobID, req.By); err != nil {
-			return ownerapi.HireWorkerResult{}, err
+		job, ok := br.Job(cycle.JobID)
+		if !ok {
+			return ownerapi.HireWorkerResult{}, fmt.Errorf("milestone %s disappeared after opening", cycle.JobID)
+		}
+		if job.Stage == brain.StageScoped {
+			if err := br.Confirm(hctx, cycle.JobID, req.By); err != nil {
+				return ownerapi.HireWorkerResult{}, err
+			}
+			job, ok = br.Job(cycle.JobID)
+			if !ok {
+				return ownerapi.HireWorkerResult{}, fmt.Errorf("milestone %s disappeared after confirmation", cycle.JobID)
+			}
 		}
 		return ownerapi.HireWorkerResult{
-			JobID: cycle.JobID, VaultJobID: cycle.VaultJobID, State: "watching",
+			JobID: cycle.JobID, VaultJobID: cycle.VaultJobID, State: string(job.Stage),
 		}, nil
+	}
+}
+
+func buildMonitorActivations(br *brain.Brain) func(context.Context) ([]ownerapi.WorkerActivation, error) {
+	return func(context.Context) ([]ownerapi.WorkerActivation, error) {
+		milestones, err := br.Milestones()
+		if err != nil {
+			return nil, err
+		}
+		activations := make([]ownerapi.WorkerActivation, 0, len(milestones))
+		for _, milestone := range milestones {
+			if !strings.HasPrefix(milestone.StandingInstructionID, "hire:") {
+				continue
+			}
+			activations = append(activations, ownerapi.WorkerActivation{
+				ManifestID: worker.BuildMonitorKind,
+				Repository: milestone.Repository,
+				QuoteUSDC:  milestone.QuoteUSDC,
+				JobID:      milestone.JobID,
+				VaultJobID: milestone.VaultJobID,
+				State:      string(milestone.Stage),
+			})
+		}
+		return activations, nil
 	}
 }
 

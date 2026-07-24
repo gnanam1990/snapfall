@@ -72,7 +72,8 @@ func TestBuildMonitorHireStartsRepositoryWatcher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != "watching" || result.JobID == "" || result.VaultJobID == "" {
+	if (result.State != "assigned" && result.State != "complete") ||
+		result.JobID == "" || result.VaultJobID == "" {
 		t.Fatalf("hire result = %+v", result)
 	}
 	if err := b.AwaitTask(result.JobID); err != nil {
@@ -90,5 +91,87 @@ func TestBuildMonitorHireStartsRepositoryWatcher(t *testing.T) {
 	}
 	if progress != 1 {
 		t.Fatalf("watcher progress events = %d, want 1", progress)
+	}
+}
+
+func TestBuildMonitorHireResumesPersistedUnconfirmedMilestone(t *testing.T) {
+	repository := t.TempDir()
+	hireGit(t, repository, "init", "-b", "main")
+	hireGit(t, repository, "config", "user.email", "hire@test.invalid")
+	hireGit(t, repository, "config", "user.name", "Hire Test")
+	checklist := filepath.Join(repository, ".snapfall", "milestone.json")
+	if err := os.MkdirAll(filepath.Dir(checklist), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(checklist,
+		[]byte(`{"checks":[{"name":"release","path":"reports/release.txt"}]}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	release := filepath.Join(repository, "reports", "release.txt")
+	if err := os.MkdirAll(filepath.Dir(release), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, []byte("ready"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	hireGit(t, repository, "add", ".snapfall/milestone.json", "reports/release.txt")
+	hireGit(t, repository, "commit", "-m", "add empty milestone")
+
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "hire.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	memory, err := brain.NewMemoryStore(filepath.Join(t.TempDir(), "memory"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := brain.New(slog.New(slog.NewTextHandler(io.Discard, nil)), st, memory, funding.New())
+	if err := b.RegisterWorker(worker.NewBuildMonitor(worker.GitChecklistSource{})); err != nil {
+		t.Fatal(err)
+	}
+
+	req := ownerapi.HireWorkerRequest{
+		ManifestID: worker.BuildMonitorKind,
+		Repository: repository,
+		QuoteUSDC:  "25.00",
+		By:         "anandan",
+	}
+	opened, err := b.OpenMilestone(ctx, brain.Milestone{
+		StandingInstructionID: "hire:" + repository,
+		Number:                1,
+		Repository:            repository,
+		QuoteUSDC:             "25.00",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := buildMonitorHire(b)(ctx, req)
+	if err != nil {
+		t.Fatalf("retrying persisted unconfirmed hire: %v", err)
+	}
+	if result.JobID != opened.JobID || result.VaultJobID != opened.VaultJobID {
+		t.Fatalf("retry created a different cycle: result=%+v opened=%+v", result, opened)
+	}
+	if err := b.AwaitTask(result.JobID); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := buildMonitorHire(b)(ctx, req)
+	if err != nil {
+		t.Fatalf("repeating completed hire: %v", err)
+	}
+	if again.JobID != result.JobID || again.State != "complete" {
+		t.Fatalf("completed hire retry = %+v, want same job in complete state", again)
+	}
+	activations, err := buildMonitorActivations(b)(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activations) != 1 || activations[0].JobID != result.JobID ||
+		activations[0].Repository != repository || activations[0].State != "complete" {
+		t.Fatalf("durable activation projection = %+v", activations)
 	}
 }

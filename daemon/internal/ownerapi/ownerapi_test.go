@@ -159,12 +159,12 @@ func TestAPI_WorkforceCatalogAndHireStartConfiguredWatcher(t *testing.T) {
 	s.HireWorker = func(_ context.Context, req HireWorkerRequest) (HireWorkerResult, error) {
 		hired = req
 		return HireWorkerResult{
-			JobID: "milestone_watch_1", VaultJobID: "0xwatch", State: "watching",
+			JobID: "milestone_watch_1", VaultJobID: "0xwatch", State: "assigned",
 		}, nil
 	}
 	body := `{"repository":"/work/acme","quoteUsdc":"25.00","by":"anandan"}`
 	w, out = do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
-	if w.Code != http.StatusCreated || out["state"] != "watching" || out["jobId"] != "milestone_watch_1" {
+	if w.Code != http.StatusCreated || out["state"] != "assigned" || out["jobId"] != "milestone_watch_1" {
 		t.Fatalf("hire status=%d out=%+v", w.Code, out)
 	}
 	if hired.ManifestID != "build-monitor" || hired.Repository != "/work/acme" ||
@@ -184,6 +184,28 @@ func TestAPI_WorkforceHireRefusesBadOrUnwiredRequests(t *testing.T) {
 	w, out = do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
 	if w.Code != http.StatusServiceUnavailable || out["error"].(map[string]any)["code"] != "NOT_WIRED" {
 		t.Fatalf("unwired hire status=%d out=%+v", w.Code, out)
+	}
+}
+
+func TestAPI_WorkforceActivationsExposeDurableHireState(t *testing.T) {
+	s, _ := newAPI(t)
+	s.ListWorkerActivations = func(context.Context) ([]WorkerActivation, error) {
+		return []WorkerActivation{{
+			ManifestID: "build-monitor", Repository: "/work/acme", QuoteUSDC: "25.00",
+			JobID: "milestone_watch_1", VaultJobID: "0xwatch", State: "complete",
+		}}, nil
+	}
+	w, out := do(t, s.Handler(), "GET", "/api/v1/workforce/activations", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("activation status = %d out=%+v, want 200", w.Code, out)
+	}
+	activations, ok := out["activations"].([]any)
+	if !ok || len(activations) != 1 {
+		t.Fatalf("activations = %#v, want one durable activation", out["activations"])
+	}
+	activation := activations[0].(map[string]any)
+	if activation["repository"] != "/work/acme" || activation["state"] != "complete" {
+		t.Fatalf("activation = %+v", activation)
 	}
 }
 

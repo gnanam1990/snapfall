@@ -5,8 +5,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   BUILD_MONITOR_MANIFEST,
   COMING_SOON_WORKERS,
+  activationLabel,
   validHireInput,
   type HireWorkerResult,
+  type WorkerActivation,
   type WorkerManifest,
 } from '@/lib/workforce';
 
@@ -51,13 +53,20 @@ function ActiveTeam() {
   );
 }
 
-function BuildMonitorCard({ manifest }: { manifest: WorkerManifest }) {
-  const [repository, setRepository] = useState('');
-  const [quoteUsdc, setQuoteUsdc] = useState('25.00');
+function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; activation: WorkerActivation | null }) {
+  const [repository, setRepository] = useState(activation?.repository ?? '');
+  const [quoteUsdc, setQuoteUsdc] = useState(activation?.quoteUsdc ?? '25.00');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<HireWorkerResult | null>(null);
   const [error, setError] = useState('');
+  const activeResult = result ?? activation;
   const valid = validHireInput(repository, quoteUsdc);
+
+  useEffect(() => {
+    if (!activation) return;
+    setRepository(activation.repository);
+    setQuoteUsdc(activation.quoteUsdc);
+  }, [activation]);
 
   async function hire() {
     if (!valid || submitting) return;
@@ -89,8 +98,8 @@ function BuildMonitorCard({ manifest }: { manifest: WorkerManifest }) {
             <p>{manifest.category}</p>
           </div>
         </div>
-        <span className={`manifest-status${result ? ' is-active' : ''}`}>
-          <i />{result ? 'Watching' : 'Ready to hire'}
+        <span className={`manifest-status${activeResult ? ' is-active' : ''}`}>
+          <i />{activeResult ? activationLabel(activeResult.state) : 'Ready to hire'}
         </span>
       </div>
 
@@ -115,7 +124,7 @@ function BuildMonitorCard({ manifest }: { manifest: WorkerManifest }) {
             onChange={(event) => setRepository(event.target.value)}
             placeholder="/path/to/repository"
             autoComplete="off"
-            disabled={Boolean(result)}
+            disabled={Boolean(activeResult)}
           />
         </label>
         <div className="watcher-readonly">
@@ -130,19 +139,19 @@ function BuildMonitorCard({ manifest }: { manifest: WorkerManifest }) {
               value={quoteUsdc}
               onChange={(event) => setQuoteUsdc(event.target.value)}
               aria-label="Milestone quote in USDC"
-              disabled={Boolean(result)}
+              disabled={Boolean(activeResult)}
             />
             <b>USDC</b>
           </div>
         </label>
-        <button className="watcher-activate" type="button" onClick={hire} disabled={!valid || submitting || Boolean(result)}>
-          {result ? '✓ Watcher active' : submitting ? 'Activating…' : 'Activate watcher'}
+        <button className="watcher-activate" type="button" onClick={hire} disabled={!valid || submitting || Boolean(activeResult)}>
+          {activeResult ? `✓ ${activationLabel(activeResult.state)}` : submitting ? 'Activating…' : 'Activate watcher'}
         </button>
         <div className="watcher-feedback" aria-live="polite">
           {error ? <p className="is-error">{error}</p> : null}
-          {result ? (
+          {activeResult ? (
             <p className="is-success">
-              Build Monitor is watching this repository. <code>{result.jobId}</code>
+              Build Monitor: {activationLabel(activeResult.state).toLowerCase()}. <code>{activeResult.jobId}</code>
             </p>
           ) : (
             <p>Activation opens milestone 1 and records the owner-confirmed assignment.</p>
@@ -174,14 +183,16 @@ function ComingSoonCard({ worker, index }: { worker: (typeof COMING_SOON_WORKERS
 
 export default function WorkforcePage() {
   const [manifests, setManifests] = useState<WorkerManifest[]>([BUILD_MONITOR_MANIFEST]);
+  const [activations, setActivations] = useState<WorkerActivation[]>([]);
 
   useEffect(() => {
     let active = true;
     fetch('/api/workforce', { cache: 'no-store' })
       .then(async (response) => {
         if (!response.ok) return;
-        const body = await response.json() as { manifests?: WorkerManifest[] };
+        const body = await response.json() as { manifests?: WorkerManifest[]; activations?: WorkerActivation[] };
         if (active && body.manifests?.length) setManifests(body.manifests);
+        if (active && body.activations) setActivations(body.activations);
       })
       .catch(() => {
         // The committed catalog remains visible; activation reports daemon availability.
@@ -192,6 +203,10 @@ export default function WorkforcePage() {
   const buildMonitor = useMemo(
     () => manifests.find((manifest) => manifest.id === 'build-monitor') ?? BUILD_MONITOR_MANIFEST,
     [manifests],
+  );
+  const buildMonitorActivation = useMemo(
+    () => activations.find((activation) => activation.manifestId === 'build-monitor') ?? null,
+    [activations],
   );
 
   return (
@@ -216,7 +231,7 @@ export default function WorkforcePage() {
           <span className="gallery-count">1 available · 3 upcoming</span>
         </div>
         <div className="manifest-grid">
-          <BuildMonitorCard manifest={buildMonitor} />
+          <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} />
           {COMING_SOON_WORKERS.map((worker, index) => (
             <ComingSoonCard key={worker.id} worker={worker} index={index} />
           ))}

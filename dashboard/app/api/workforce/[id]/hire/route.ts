@@ -7,7 +7,29 @@ function ownerHeaders(): Headers {
   return headers;
 }
 
+function isTrustedMutation(req: Request): boolean {
+  const contentType = req.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  if (contentType !== 'application/json') return false;
+
+  const fetchSite = req.headers.get('sec-fetch-site')?.toLowerCase();
+  if (fetchSite) return fetchSite === 'same-origin';
+
+  const origin = req.headers.get('origin');
+  if (!origin) return false;
+  try {
+    return new URL(origin).origin === new URL(req.url).origin;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+  if (!isTrustedMutation(req)) {
+    return Response.json(
+      { error: { code: 'FORBIDDEN', message: 'Workforce activation requires a same-origin JSON request.' } },
+      { status: 403 },
+    );
+  }
   const base = process.env.SNAPFALL_OWNER_API_URL?.replace(/\/$/, '');
   if (!base) {
     return Response.json(

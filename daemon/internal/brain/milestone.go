@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -27,6 +29,21 @@ type Milestone struct {
 type MilestoneCycle struct {
 	JobID      string
 	VaultJobID string
+}
+
+// ErrMilestoneExists identifies a duplicate deterministic milestone cycle.
+var ErrMilestoneExists = errors.New("milestone already exists")
+
+// MilestoneStatus is the durable owner-facing projection of one standing-pipeline
+// cycle. Stage is Brain's actual lifecycle stage, never a synthetic watcher state.
+type MilestoneStatus struct {
+	JobID                 string
+	VaultJobID            string
+	StandingInstructionID string
+	Number                uint64
+	Repository            string
+	QuoteUSDC             string
+	Stage                 JobStage
 }
 
 type milestoneObservationGate struct {
@@ -53,25 +70,9 @@ func (b *Brain) SetMilestoneOracle(oracle MilestoneOracle) {
 // OpenMilestone scopes one fresh Build-Monitor job and binds its unique bytes32 chain
 // identity. It never confirms, funds, advances, settles, or releases the job.
 func (b *Brain) OpenMilestone(ctx context.Context, milestone Milestone) (MilestoneCycle, error) {
-	instruction := strings.TrimSpace(milestone.StandingInstructionID)
-	repository := strings.TrimSpace(milestone.Repository)
-	quote := strings.TrimSpace(milestone.QuoteUSDC)
-	switch {
-	case instruction == "":
-		return MilestoneCycle{}, fmt.Errorf("standing instruction id is required")
-	case milestone.Number == 0:
-		return MilestoneCycle{}, fmt.Errorf("milestone number must be one-based")
-	case repository == "":
-		return MilestoneCycle{}, fmt.Errorf("milestone repository is required")
-	case quote == "":
-		return MilestoneCycle{}, fmt.Errorf("milestone quote is required")
-	}
-	identity := instruction + "\x00" + strconv.FormatUint(milestone.Number, 10)
-	localHash := sha256.Sum256([]byte("snapfall:local-milestone:v1\x00" + identity))
-	vaultHash := sha256.Sum256([]byte("snapfall:vault-milestone:v1\x00" + identity))
-	cycle := MilestoneCycle{
-		JobID:      fmt.Sprintf("milestone_%s_%d", hex.EncodeToString(localHash[:16]), milestone.Number),
-		VaultJobID: "0x" + hex.EncodeToString(vaultHash[:]),
+	cycle, instruction, repository, quote, err := milestoneIdentity(milestone)
+	if err != nil {
+		return MilestoneCycle{}, err
 	}
 	if err := b.frozenErr(cycle.JobID, worker.BuildMonitorKind); err != nil {
 		return MilestoneCycle{}, err
@@ -82,7 +83,7 @@ func (b *Brain) OpenMilestone(ctx context.Context, milestone Milestone) (Milesto
 		return MilestoneCycle{}, err
 	}
 	if existing.Scope != "" || existing.Stage != "" || existing.VaultJobID != "" {
-		return MilestoneCycle{}, fmt.Errorf("milestone %s already exists", cycle.JobID)
+		return MilestoneCycle{}, fmt.Errorf("%w: %s", ErrMilestoneExists, cycle.JobID)
 	}
 
 	state := &jobState{
@@ -92,7 +93,7 @@ func (b *Brain) OpenMilestone(ctx context.Context, milestone Milestone) (Milesto
 	b.mu.Lock()
 	if _, duplicate := b.jobs[cycle.JobID]; duplicate {
 		b.mu.Unlock()
-		return MilestoneCycle{}, fmt.Errorf("milestone %s already exists", cycle.JobID)
+		return MilestoneCycle{}, fmt.Errorf("%w: %s", ErrMilestoneExists, cycle.JobID)
 	}
 	// Reserve the deterministic identity before I/O so concurrent opens cannot both
 	// reach the event log. Roll back this exact reservation on a failed durable write.
@@ -136,6 +137,85 @@ func (b *Brain) OpenMilestone(ctx context.Context, milestone Milestone) (Milesto
 	}
 
 	return cycle, nil
+}
+
+func milestoneIdentity(milestone Milestone) (MilestoneCycle, string, string, string, error) {
+	instruction := strings.TrimSpace(milestone.StandingInstructionID)
+	repository := strings.TrimSpace(milestone.Repository)
+	quote := strings.TrimSpace(milestone.QuoteUSDC)
+	switch {
+	case instruction == "":
+		return MilestoneCycle{}, "", "", "", fmt.Errorf("standing instruction id is required")
+	case milestone.Number == 0:
+		return MilestoneCycle{}, "", "", "", fmt.Errorf("milestone number must be one-based")
+	case repository == "":
+		return MilestoneCycle{}, "", "", "", fmt.Errorf("milestone repository is required")
+	case quote == "":
+		return MilestoneCycle{}, "", "", "", fmt.Errorf("milestone quote is required")
+	}
+	identity := instruction + "\x00" + strconv.FormatUint(milestone.Number, 10)
+	localHash := sha256.Sum256([]byte("snapfall:local-milestone:v1\x00" + identity))
+	vaultHash := sha256.Sum256([]byte("snapfall:vault-milestone:v1\x00" + identity))
+	cycle := MilestoneCycle{
+		JobID:      fmt.Sprintf("milestone_%s_%d", hex.EncodeToString(localHash[:16]), milestone.Number),
+		VaultJobID: "0x" + hex.EncodeToString(vaultHash[:]),
+	}
+	return cycle, instruction, repository, quote, nil
+}
+
+// EnsureMilestone opens a cycle or returns the exact matching durable cycle when a
+// previous attempt persisted it before owner confirmation completed.
+func (b *Brain) EnsureMilestone(ctx context.Context, milestone Milestone) (MilestoneCycle, error) {
+	cycle, instruction, repository, quote, err := milestoneIdentity(milestone)
+	if err != nil {
+		return MilestoneCycle{}, err
+	}
+	opened, err := b.OpenMilestone(ctx, milestone)
+	if err == nil {
+		return opened, nil
+	}
+	if !errors.Is(err, ErrMilestoneExists) {
+		return MilestoneCycle{}, err
+	}
+	existing, readErr := b.memory.Get(cycle.JobID)
+	if readErr != nil {
+		return MilestoneCycle{}, readErr
+	}
+	if existing.StandingInstructionID != instruction ||
+		existing.MilestoneNumber != milestone.Number ||
+		existing.Scope != repository ||
+		existing.QuoteUSDC != quote ||
+		existing.VaultJobID != cycle.VaultJobID ||
+		existing.AssignedWorker != worker.BuildMonitorKind {
+		return MilestoneCycle{}, fmt.Errorf("%w with different configuration: %s", ErrMilestoneExists, cycle.JobID)
+	}
+	return cycle, nil
+}
+
+// Milestones returns durable standing-pipeline state for owner surfaces.
+func (b *Brain) Milestones() ([]MilestoneStatus, error) {
+	ids, err := b.memory.List()
+	if err != nil {
+		return nil, err
+	}
+	statuses := make([]MilestoneStatus, 0)
+	for _, id := range ids {
+		jm, err := b.memory.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		if jm.StandingInstructionID == "" || jm.AssignedWorker != worker.BuildMonitorKind {
+			continue
+		}
+		statuses = append(statuses, MilestoneStatus{
+			JobID: id, VaultJobID: jm.VaultJobID,
+			StandingInstructionID: jm.StandingInstructionID,
+			Number:                jm.MilestoneNumber, Repository: jm.Scope,
+			QuoteUSDC: jm.QuoteUSDC, Stage: JobStage(jm.Stage),
+		})
+	}
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].JobID < statuses[j].JobID })
+	return statuses, nil
 }
 
 // observeMilestoneCompletion verifies the completed cycle and records the rate produced

@@ -1137,8 +1137,9 @@ table.t { width: 100%; border-collapse: collapse; }
 }
 
 @media (max-width: 1120px) {
-  .manifest-grid { grid-template-columns: minmax(390px, 1.35fr) repeat(2, minmax(190px, 0.8fr)); }
-  .manifest-soon:last-child { grid-column: 2 / 4; }
+  .manifest-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .manifest-featured { grid-column: 1 / -1; }
+  .manifest-soon:last-child { grid-column: auto; }
   .active-team-line { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
   .team-connector { display: none; }
 }

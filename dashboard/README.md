@@ -31,9 +31,10 @@ refresh; a 15-second read-only poll keeps the page current when the daemon relay
 hireable specialist; its activation form requires a local Git repository containing
 `.snapfall/milestone.json` and a milestone quote. The server-side `/api/workforce` adapter
 forwards the owner action to the daemon without exposing `SNAPFALL_OWNER_TOKEN` to browser
-JavaScript.
+JavaScript. The mutation proxy accepts only same-origin JSON requests, and durable daemon
+activation state is restored when the page reloads.
 
 With `SNAPFALL_OWNER_API_URL` configured as above, **Activate watcher** opens milestone 1,
-records the owner confirmation, and dispatches the registered Build-Monitor against the
+records the owner confirmation, and dispatches the registered Build Monitor against the
 repository. Without a daemon connection, the catalog remains visible but activation fails
 explicitly with `DAEMON_UNAVAILABLE`; the dashboard never pretends a watcher started.

@@ -63,8 +63,9 @@ type Server struct {
 	// WorkerCatalog is the reviewed manifest gallery exposed to the owner dashboard.
 	// HireWorker is the activation seam; the daemon wires it to Brain so the API never
 	// constructs or directly controls a worker.
-	WorkerCatalog []WorkerManifest
-	HireWorker    func(ctx context.Context, req HireWorkerRequest) (HireWorkerResult, error)
+	WorkerCatalog         []WorkerManifest
+	HireWorker            func(ctx context.Context, req HireWorkerRequest) (HireWorkerResult, error)
+	ListWorkerActivations func(ctx context.Context) ([]WorkerActivation, error)
 }
 
 // WorkerManifest is the owner-facing, capability-focused projection of one hireable
@@ -93,6 +94,16 @@ type HireWorkerResult struct {
 	State      string `json:"state"`
 }
 
+// WorkerActivation is one durable manifest activation rendered after dashboard reloads.
+type WorkerActivation struct {
+	ManifestID string `json:"manifestId"`
+	Repository string `json:"repository"`
+	QuoteUSDC  string `json:"quoteUsdc"`
+	JobID      string `json:"jobId"`
+	VaultJobID string `json:"vaultJobId"`
+	State      string `json:"state"`
+}
+
 // New builds the server.
 func New(life *approval.Lifecycle, st *store.Store, log *slog.Logger) *Server {
 	return &Server{life: life, st: st, log: log, token: os.Getenv("SNAPFALL_OWNER_TOKEN"), pollEvery: 200 * time.Millisecond}
@@ -116,6 +127,7 @@ func (s *Server) Handler() http.Handler {
 	owner.HandleFunc("POST /api/v1/jobs/{id}/accept-link", s.handleMintAcceptLink)
 	owner.HandleFunc("POST /api/v1/jobs/{id}/advance", s.handleProposeAdvance)
 	owner.HandleFunc("GET /api/v1/workforce/manifests", s.handleWorkerManifests)
+	owner.HandleFunc("GET /api/v1/workforce/activations", s.handleWorkerActivations)
 	owner.HandleFunc("POST /api/v1/workforce/{id}/hire", s.handleHireWorker)
 
 	root := http.NewServeMux()
@@ -132,6 +144,22 @@ func (s *Server) handleWorkerManifests(w http.ResponseWriter, _ *http.Request) {
 		manifests = []WorkerManifest{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"manifests": manifests})
+}
+
+func (s *Server) handleWorkerActivations(w http.ResponseWriter, r *http.Request) {
+	if s.ListWorkerActivations == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"activations": []WorkerActivation{}})
+		return
+	}
+	activations, err := s.ListWorkerActivations(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ACTIVATIONS_UNAVAILABLE", err.Error(), nil)
+		return
+	}
+	if activations == nil {
+		activations = []WorkerActivation{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"activations": activations})
 }
 
 func (s *Server) handleHireWorker(w http.ResponseWriter, r *http.Request) {

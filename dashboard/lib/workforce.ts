@@ -10,7 +10,13 @@ export interface WorkerManifest {
 export interface HireWorkerResult {
   jobId: string;
   vaultJobId: string;
-  state: 'watching';
+  state: 'scoped' | 'confirmed' | 'assigned' | 'complete' | 'failed' | 'rejected' | 'escalated';
+}
+
+export interface WorkerActivation extends HireWorkerResult {
+  manifestId: string;
+  repository: string;
+  quoteUsdc: string;
 }
 
 export const BUILD_MONITOR_MANIFEST: WorkerManifest = {
@@ -46,4 +52,16 @@ export const COMING_SOON_WORKERS = [
 export function validHireInput(repository: string, quoteUsdc: string): boolean {
   if (!repository.trim()) return false;
   return /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(quoteUsdc.trim()) && Number(quoteUsdc) > 0;
+}
+
+export function activationLabel(state: HireWorkerResult['state']): string {
+  switch (state) {
+    case 'scoped': return 'Awaiting confirmation';
+    case 'confirmed':
+    case 'assigned': return 'Check running';
+    case 'complete': return 'Check complete';
+    case 'failed': return 'Check failed';
+    case 'rejected': return 'Activation rejected';
+    case 'escalated': return 'Owner attention needed';
+  }
 }
