@@ -603,6 +603,18 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		if reader != nil {
 			oracle := chain.Oracle{Reader: reader, FloatPool: fpAddr, JobVault: jvAddr, Org: operator}
 			adv.SetOracle(oracle)
+			// Read the org's current advance rate at intent creation so the amount the
+			// owner approves matches what FloatPool draws (no hardcoded-50%-vs-55%
+			// divergence when the rate has climbed).
+			if operator != (common.Address{}) {
+				adv.SetRateOracle(func(ctx context.Context) (uint16, bool) {
+					bps, err := oracle.AdvanceRateBps(ctx)
+					if err != nil || bps == 0 || bps > 10_000 {
+						return 0, false
+					}
+					return uint16(bps), true
+				})
+			}
 			if operator != (common.Address{}) {
 				br.SetMilestoneOracle(oracle)
 			}
