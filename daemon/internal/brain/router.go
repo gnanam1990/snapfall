@@ -316,6 +316,10 @@ func (b *Brain) dispatchTask(ctx context.Context, jobID, kind string, bounceReas
 
 	h := &taskHandle{done: make(chan struct{})}
 	b.mu.Lock()
+	if _, exists := b.tasks[jobID]; exists {
+		b.mu.Unlock()
+		return nil
+	}
 	b.tasks[jobID] = h
 	b.mu.Unlock()
 

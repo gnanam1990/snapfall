@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -312,6 +313,16 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 	// inbox; the owner's approval mints the Grant and Funding stops honestly at
 	// advance.pending_chain until the deployment lands.
 	api.ProposeAdvance = br.ProposeAdvance
+	api.WorkerCatalog = []ownerapi.WorkerManifest{{
+		ID:            worker.BuildMonitorKind,
+		Name:          "Build Monitor",
+		Category:      "Engineering operations",
+		Description:   "Watches committed repository milestones and reports completion evidence to Brain.",
+		Permissions:   []string{"Read-only repo", "No payments", "No shell"},
+		ChecklistPath: ".snapfall/milestone.json",
+	}}
+	api.HireWorker = buildMonitorHire(br)
+	api.ListWorkerActivations = buildMonitorActivations(br)
 
 	// The funding-observed advance trigger. HONEST STATE: never fired for real — no
 	// deployment, no JobFunded rows, nothing writes vault ids — but it runs so funding
@@ -406,6 +417,70 @@ func (w workerFunc) Run(ctx context.Context) error {
 // TestMain_SingleBrainWiringSite): one Brain, one Recover, one escalation pass, then
 // serve. Constructing a second Brain over the same store would race two replays of the
 // same event log — the double-recovery hazard from #4.
+func buildMonitorHire(br *brain.Brain) func(context.Context, ownerapi.HireWorkerRequest) (ownerapi.HireWorkerResult, error) {
+	return func(hctx context.Context, req ownerapi.HireWorkerRequest) (ownerapi.HireWorkerResult, error) {
+		if req.ManifestID != worker.BuildMonitorKind {
+			return ownerapi.HireWorkerResult{}, fmt.Errorf("unknown worker manifest %q", req.ManifestID)
+		}
+		repository := strings.TrimSpace(req.Repository)
+		cycle, err := br.EnsureMilestone(hctx, brain.Milestone{
+			StandingInstructionID: "hire:" + repository,
+			Number:                1,
+			Repository:            repository,
+			QuoteUSDC:             req.QuoteUSDC,
+		})
+		if err != nil {
+			return ownerapi.HireWorkerResult{}, err
+		}
+		job, ok := br.Job(cycle.JobID)
+		if !ok {
+			return ownerapi.HireWorkerResult{}, fmt.Errorf("milestone %s disappeared after opening", cycle.JobID)
+		}
+		if job.Stage == brain.StageScoped {
+			if err := br.Confirm(hctx, cycle.JobID, req.By); err != nil {
+				return ownerapi.HireWorkerResult{}, err
+			}
+		} else if job.Stage == brain.StageConfirmed || job.Stage == brain.StageAssigned {
+			if err := br.ResumeMilestone(hctx, cycle.JobID); err != nil {
+				return ownerapi.HireWorkerResult{}, err
+			}
+		}
+		if job.Stage == brain.StageScoped || job.Stage == brain.StageConfirmed || job.Stage == brain.StageAssigned {
+			job, ok = br.Job(cycle.JobID)
+			if !ok {
+				return ownerapi.HireWorkerResult{}, fmt.Errorf("milestone %s disappeared after activation", cycle.JobID)
+			}
+		}
+		return ownerapi.HireWorkerResult{
+			JobID: cycle.JobID, VaultJobID: cycle.VaultJobID, State: string(job.Stage),
+		}, nil
+	}
+}
+
+func buildMonitorActivations(br *brain.Brain) func(context.Context) ([]ownerapi.WorkerActivation, error) {
+	return func(context.Context) ([]ownerapi.WorkerActivation, error) {
+		milestones, err := br.Milestones()
+		if err != nil {
+			return nil, err
+		}
+		activations := make([]ownerapi.WorkerActivation, 0, len(milestones))
+		for _, milestone := range milestones {
+			if !strings.HasPrefix(milestone.StandingInstructionID, "hire:") {
+				continue
+			}
+			activations = append(activations, ownerapi.WorkerActivation{
+				ManifestID: worker.BuildMonitorKind,
+				Repository: milestone.Repository,
+				QuoteUSDC:  milestone.QuoteUSDC,
+				JobID:      milestone.JobID,
+				VaultJobID: milestone.VaultJobID,
+				State:      string(milestone.Stage),
+			})
+		}
+		return activations, nil
+	}
+}
+
 func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, orgID, deployment string) (*brain.Brain, *approval.Lifecycle, error) {
 	mem, err := brain.NewMemoryStore(filepath.Join(filepath.Dir(dbPath), "memory"))
 	if err != nil {

@@ -107,6 +107,15 @@ observation rather than inventing a result. The AT-17 integration test drives tw
 through distinct advances and settlements and pins progress-before-release plus the second
 rate tick.
 
+The A12 owner API exposes the reviewed catalog at `GET /api/v1/workforce/manifests` and
+durable activation state at `GET /api/v1/workforce/activations`.
+`POST /api/v1/workforce/build-monitor/hire` accepts `repository`, `quoteUsdc`, and `by`;
+it opens the first standing-pipeline milestone and records the owner confirmation, which
+dispatches Build-Monitor immediately. Repeating the same activation resumes its deterministic
+cycle instead of creating a duplicate. Responses expose Brain's real lifecycle stage rather
+than claiming that the one-shot repository measurement watches indefinitely. These routes
+remain under the existing owner bearer or loopback-only boundary.
+
 ## Layout
 
 ```

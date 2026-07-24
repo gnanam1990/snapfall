@@ -3,6 +3,7 @@ package ownerapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -133,6 +134,106 @@ func TestAPI_ConflictUnknownAndBadRequest(t *testing.T) {
 	}
 	if w, _ := do(t, s.Handler(), "POST", "/api/v1/approvals/"+req.ID+"/decision", `{"kind":"maybe"}`); w.Code != 400 {
 		t.Fatalf("bad body: %d, want 400", w.Code)
+	}
+}
+
+func TestAPI_WorkforceCatalogAndHireStartConfiguredWatcher(t *testing.T) {
+	s, _ := newAPI(t)
+	s.WorkerCatalog = []WorkerManifest{{
+		ID:            "build-monitor",
+		Name:          "Build Monitor",
+		Category:      "Engineering operations",
+		Description:   "Reports committed milestone evidence to Brain.",
+		Permissions:   []string{"Read-only repo", "No payments", "No shell"},
+		ChecklistPath: ".snapfall/milestone.json",
+	}}
+	w, out := do(t, s.Handler(), "GET", "/api/v1/workforce/manifests", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("catalog status = %d, want 200", w.Code)
+	}
+	manifests := out["manifests"].([]any)
+	if len(manifests) != 1 || manifests[0].(map[string]any)["id"] != "build-monitor" {
+		t.Fatalf("catalog = %+v", manifests)
+	}
+
+	var hired HireWorkerRequest
+	s.HireWorker = func(_ context.Context, req HireWorkerRequest) (HireWorkerResult, error) {
+		hired = req
+		return HireWorkerResult{
+			JobID: "milestone_watch_1", VaultJobID: "0xwatch", State: "assigned",
+		}, nil
+	}
+	body := `{"repository":"/work/acme","quoteUsdc":"25.00","by":"anandan"}`
+	w, out = do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
+	if w.Code != http.StatusCreated || out["state"] != "assigned" || out["jobId"] != "milestone_watch_1" {
+		t.Fatalf("hire status=%d out=%+v", w.Code, out)
+	}
+	if hired.ManifestID != "build-monitor" || hired.Repository != "/work/acme" ||
+		hired.QuoteUSDC != "25.00" || hired.By != "anandan" {
+		t.Fatalf("hire request = %+v", hired)
+	}
+}
+
+func TestAPI_WorkforceHireRefusesBadOrUnwiredRequests(t *testing.T) {
+	s, _ := newAPI(t)
+	w, out := do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", `{}`)
+	if w.Code != http.StatusBadRequest || out["error"].(map[string]any)["code"] != "BAD_REQUEST" {
+		t.Fatalf("bad hire status=%d out=%+v", w.Code, out)
+	}
+
+	body := `{"repository":"/work/acme","quoteUsdc":"25.00","by":"anandan"}`
+	w, out = do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
+	if w.Code != http.StatusServiceUnavailable || out["error"].(map[string]any)["code"] != "NOT_WIRED" {
+		t.Fatalf("unwired hire status=%d out=%+v", w.Code, out)
+	}
+
+	s.HireWorker = func(context.Context, HireWorkerRequest) (HireWorkerResult, error) {
+		return HireWorkerResult{}, errors.New("confirmation temporarily unavailable")
+	}
+	w, out = do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
+	if w.Code != http.StatusConflict || out["error"].(map[string]any)["code"] != "HIRE_FAILED" {
+		t.Fatalf("failed hire status=%d out=%+v", w.Code, out)
+	}
+}
+
+func TestAPI_WorkforceHireRejectsInvalidQuotesBeforeActivation(t *testing.T) {
+	s, _ := newAPI(t)
+	called := false
+	s.HireWorker = func(context.Context, HireWorkerRequest) (HireWorkerResult, error) {
+		called = true
+		return HireWorkerResult{}, nil
+	}
+	for _, quote := range []string{"0", "0.00", "-1", "1.234", "nope"} {
+		body := `{"repository":"/work/acme","quoteUsdc":"` + quote + `","by":"anandan"}`
+		w, out := do(t, s.Handler(), "POST", "/api/v1/workforce/build-monitor/hire", body)
+		if w.Code != http.StatusBadRequest || out["error"].(map[string]any)["code"] != "BAD_REQUEST" {
+			t.Fatalf("quote %q status=%d out=%+v", quote, w.Code, out)
+		}
+	}
+	if called {
+		t.Fatal("invalid quote reached the activation callback")
+	}
+}
+
+func TestAPI_WorkforceActivationsExposeDurableHireState(t *testing.T) {
+	s, _ := newAPI(t)
+	s.ListWorkerActivations = func(context.Context) ([]WorkerActivation, error) {
+		return []WorkerActivation{{
+			ManifestID: "build-monitor", Repository: "/work/acme", QuoteUSDC: "25.00",
+			JobID: "milestone_watch_1", VaultJobID: "0xwatch", State: "complete",
+		}}, nil
+	}
+	w, out := do(t, s.Handler(), "GET", "/api/v1/workforce/activations", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("activation status = %d out=%+v, want 200", w.Code, out)
+	}
+	activations, ok := out["activations"].([]any)
+	if !ok || len(activations) != 1 {
+		t.Fatalf("activations = %#v, want one durable activation", out["activations"])
+	}
+	activation := activations[0].(map[string]any)
+	if activation["repository"] != "/work/acme" || activation["state"] != "complete" {
+		t.Fatalf("activation = %+v", activation)
 	}
 }
 
