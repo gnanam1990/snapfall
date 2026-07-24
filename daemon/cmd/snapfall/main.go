@@ -427,6 +427,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	if err := br.RegisterWorker(dd); err != nil {
 		return nil, nil, err
 	}
+	if err := br.RegisterWorker(worker.NewBuildMonitor(worker.GitChecklistSource{})); err != nil {
+		return nil, nil, err
+	}
 	if err := br.RegisterQAWorker(qa.Worker{}); err != nil {
 		return nil, nil, err
 	}
@@ -472,10 +475,12 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		jvAddr := common.HexToAddress(dep.Contracts.JobVault.Address)
 		var advanceLane, settleLane funding.Submitter
 		var reader *chain.Client
+		var operator common.Address
 		if treasury, err := chain.NewFromEnv("TREASURY_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
 			log.Warn("treasury chain lane NOT wired — advances stop at advance.pending_chain", "reason", err)
 		} else {
 			advanceLane, reader = lane{treasury, fpAddr}, treasury
+			operator = treasury.Address()
 			log.Info("treasury chain lane wired", "signer", treasury.Address().Hex(), "floatPool", fpAddr.Hex())
 		}
 		if customer, err := chain.NewFromEnv("SNAPFALL_CUSTOMER_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
@@ -489,7 +494,11 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		}
 		fund.SetChain(advanceLane, settleLane)
 		if reader != nil {
-			adv.SetOracle(chain.Oracle{Reader: reader, FloatPool: fpAddr, JobVault: jvAddr})
+			oracle := chain.Oracle{Reader: reader, FloatPool: fpAddr, JobVault: jvAddr, Org: operator}
+			adv.SetOracle(oracle)
+			if operator != (common.Address{}) {
+				br.SetMilestoneOracle(oracle)
+			}
 		}
 	}
 

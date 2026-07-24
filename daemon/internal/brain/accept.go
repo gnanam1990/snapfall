@@ -125,7 +125,22 @@ func (b *Brain) AcceptDelivery(ctx context.Context, jobID string) (string, error
 	if err := b.memory.Update(jobID, func(jm *JobMemory) { jm.Stage = string(StageAccepted) }); err != nil {
 		return "", err
 	}
-	return b.settleOnChain(ctx, jobID)
+	state, err := b.settleOnChain(ctx, jobID)
+	if err != nil {
+		return state, err
+	}
+	if state == "accepted-settled" {
+		if err := b.observeMilestoneCompletion(ctx, jobID); err != nil {
+			// Settlement already committed on chain. Observation failure is an alert,
+			// never grounds to misreport the actual settlement as failed.
+			_, _ = b.store.Append(context.WithoutCancel(ctx), store.Event{
+				Kind: "pipeline.milestone.observation_failed", EntityID: jobID, Actor: "brain",
+				Payload: map[string]any{"error": err.Error()},
+			})
+			b.log.Warn("milestone settled but chain observation failed", "job", jobID, "err", err)
+		}
+	}
+	return state, nil
 }
 
 // settleOnChain is the chain half of an authenticated, claimed Accept: submit

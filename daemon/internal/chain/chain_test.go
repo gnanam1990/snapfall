@@ -204,7 +204,8 @@ func TestOracle_ChainStateIsAuthoritative(t *testing.T) {
 	f, c := newFake(t)
 	fp := common.HexToAddress("0x00000000000000000000000000000000000000F0")
 	jv := common.HexToAddress("0x00000000000000000000000000000000000000F1")
-	o := Oracle{Reader: c, FloatPool: fp, JobVault: jv}
+	org := common.HexToAddress("0x00000000000000000000000000000000000000F2")
+	o := Oracle{Reader: c, FloatPool: fp, JobVault: jv, Org: org}
 	vaultID := "0x" + strings.Repeat("aa", 32)
 	id, _ := JobID32(vaultID)
 
@@ -213,6 +214,7 @@ func TestOracle_ChainStateIsAuthoritative(t *testing.T) {
 	f.mu.Lock()
 	f.views["0x"+strings.ToLower(fmt.Sprintf("%x", CalldataOpenAdvanceOf(id)))] = closed
 	f.views["0x"+strings.ToLower(fmt.Sprintf("%x", CalldataJobStatus(id)))] = "0x" + strings.Repeat("00", 31) + "04"
+	f.views["0x"+strings.ToLower(fmt.Sprintf("%x", CalldataAdvanceRate(org)))] = "0x" + strings.Repeat("00", 30) + "1770"
 	f.mu.Unlock()
 
 	landed, err := o.AdvanceLanded(context.Background(), vaultID)
@@ -222,5 +224,9 @@ func TestOracle_ChainStateIsAuthoritative(t *testing.T) {
 	settled, err := o.SettlementLanded(context.Background(), vaultID)
 	if err != nil || !settled {
 		t.Fatalf("Accepted status must read as settled: %v %v", settled, err)
+	}
+	rate, err := o.AdvanceRateBps(context.Background())
+	if err != nil || rate != 6_000 {
+		t.Fatalf("advance rate = %d err=%v, want 6000", rate, err)
 	}
 }

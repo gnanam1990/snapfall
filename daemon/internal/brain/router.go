@@ -59,6 +59,9 @@ type Brain struct {
 	// advanceFlow is the human-authorized advance path (internal/advancing) — held by
 	// Brain alone, invoked from the single ProposeAdvance site.
 	advanceFlow *advancing.Flow
+	// milestoneOracle verifies a standing-pipeline cycle from authoritative chain state
+	// after settlement and reads the resulting organization rate.
+	milestoneOracle MilestoneOracle
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).
