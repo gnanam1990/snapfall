@@ -25,11 +25,22 @@ else
   echo "PASS: no high-confidence secret patterns in the current tree"
 fi
 
-history_hits="$(
-  git rev-list --all |
-    xargs -r -n 40 git grep -l -I -E "$secret_pattern" -- 2>/dev/null |
-    sort -u || true
-)"
+scan_history() {
+  local revision output status
+  while IFS= read -r revision; do
+    if output="$(git grep -l -I -E "$secret_pattern" "$revision" --)"; then
+      printf '%s\n' "$output"
+      continue
+    fi
+    status=$?
+    if ((status > 1)); then
+      echo "ERROR: git grep failed while scanning revision $revision" >&2
+      return "$status"
+    fi
+  done < <(git rev-list --all)
+}
+
+history_hits="$(scan_history | sort -u)"
 if [[ -n "$history_hits" ]]; then
   echo "FAIL: high-confidence secret pattern(s) in reachable Git history:"
   printf '%s\n' "$history_hits"
@@ -42,14 +53,14 @@ sensitive_paths="$(
   git log --all --pretty=format: --name-only |
     sort -u |
     grep -E -i "$sensitive_path_pattern" |
-    grep -v -E '^sidecar/\.env\.example$' || true
+    grep -v -E '^(sidecar/\.env\.example|docs/A14-SECRET-INTEGRITY-AUDIT\.md)$' || true
 )"
 if [[ -n "$sensitive_paths" ]]; then
   echo "FAIL: sensitive filename(s) occurred in reachable Git history:"
   printf '%s\n' "$sensitive_paths"
   failed=1
 else
-  echo "PASS: no sensitive filenames in history (empty sidecar/.env.example allowed)"
+  echo "PASS: no sensitive filenames in history (empty env example and audit report allowed)"
 fi
 
 artifacts="$(

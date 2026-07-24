@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+audit_source="$repo_root/scripts/a14-audit"
+fixture_root="$(mktemp -d)"
+trap 'rm -rf "$fixture_root"' EXIT
+
+init_fixture() {
+  local target="$1"
+  mkdir -p "$target/scripts"
+  git -C "$target" init -q
+  git -C "$target" config user.name "A14 audit test"
+  git -C "$target" config user.email "a14-audit@example.invalid"
+  cp "$audit_source" "$target/scripts/a14-audit"
+  chmod +x "$target/scripts/a14-audit"
+}
+
+docs_repo="$fixture_root/documentation"
+init_fixture "$docs_repo"
+mkdir -p "$docs_repo/docs"
+printf '# A14 audit evidence\n' >"$docs_repo/docs/A14-SECRET-INTEGRITY-AUDIT.md"
+git -C "$docs_repo" add .
+git -C "$docs_repo" commit -q -m "Add audit documentation"
+
+failures=0
+if ! docs_output="$(cd "$docs_repo" && ./scripts/a14-audit 2>&1)"; then
+  echo "FAIL: the audit rejects its own documentation filename"
+  printf '%s\n' "$docs_output"
+  failures=$((failures + 1))
+fi
+
+history_repo="$fixture_root/history"
+init_fixture "$history_repo"
+git -C "$history_repo" add .
+git -C "$history_repo" commit -q -m "Add audit command"
+printf 'retired test credential: %s%s\n' 'AKIA' 'ABCDEFGHIJKLMNOP' >"$history_repo/retired.txt"
+git -C "$history_repo" add retired.txt
+git -C "$history_repo" commit -q -m "Add credential fixture"
+git -C "$history_repo" rm -q retired.txt
+git -C "$history_repo" commit -q -m "Remove credential fixture"
+
+if history_output="$(cd "$history_repo" && ./scripts/a14-audit 2>&1)"; then
+  echo "FAIL: the audit missed a high-confidence secret in reachable history"
+  printf '%s\n' "$history_output"
+  failures=$((failures + 1))
+elif [[ "$history_output" != *"reachable Git history"* ]]; then
+  echo "FAIL: history rejection did not identify the historical scan"
+  printf '%s\n' "$history_output"
+  failures=$((failures + 1))
+fi
+
+if ((failures != 0)); then
+  exit 1
+fi
+
+echo "A14 audit regression tests passed."
