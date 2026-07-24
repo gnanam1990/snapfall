@@ -95,14 +95,23 @@ export ARC_USDC_ADDRESS=0x3600000000000000000000000000000000000000
 ./scripts/redeploy-testnet --account snapfall-deployer
 ```
 
-The command independently requires Arc chain ID 5042002, compares the committed deployment
-timestamp against current chain-head time, and refuses to broadcast until 48 hours have
-elapsed. It passes an explicit `--sender` resolved from the encrypted `--account`, preventing
-a sender mismatch after contract creation. A successful broadcast immediately writes
-`deployments/arc-testnet.json.redeploy-guard.json`, so an unchanged deployment artifact cannot
-authorize a second broadcast. Verify all three contracts and update
-`deployments/arc-testnet.json` with the new addresses and start block before restarting the
-indexer.
+The command independently requires Arc chain ID 5042002 and refuses to broadcast until 48
+chain-hours have elapsed from the later of the committed deployment and last successful
+broadcast. It passes an explicit `--sender` resolved from the encrypted `--account`, preventing
+a sender mismatch after contract creation. Before Forge starts, it exclusively creates
+`deployments/arc-testnet.json.redeploy-guard.json.pending`; concurrent commands fail closed.
+After a successful broadcast it durably writes
+`deployments/arc-testnet.json.redeploy-guard.json`, then removes the pending reservation.
+
+These files are host-local safeguards, not shared deployment state: keep the checkout's
+deployment files on durable storage and use one operator host. A fresh checkout does not know
+about another host's marker. If Forge is interrupted, fails after submission, or the host
+restarts mid-command, the pending file intentionally remains. Do not remove it until the
+deployer's recent transactions and all three expected contract addresses have been checked on
+Arc. If no deployment transaction was submitted, or after the deployment artifact and
+successful-broadcast marker have been recovered from verified chain data, remove the pending
+file and rerun. Verify all three contracts and update `deployments/arc-testnet.json` with the
+new addresses and start block before restarting the indexer.
 
 Before restart, remove stale deployment overrides or update them to the new deployment:
 

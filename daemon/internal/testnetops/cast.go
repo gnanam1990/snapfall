@@ -44,13 +44,12 @@ func (f *CastFunder) Address(ctx context.Context) (string, error) {
 	return strings.ToLower(address), nil
 }
 
-// EstimateGasCost prices one native-USDC transfer at the current RPC gas price and adds
-// 20% headroom. Arc charges gas in native USDC, so this cost must be reserved separately
-// from the value sent or the configured funder reserve is not actually preserved.
-func (f *CastFunder) EstimateGasCost(ctx context.Context, address string, amount *big.Int) (*big.Int, error) {
+// EstimateGasBudget caps gas units and fee per gas with 20% headroom on each.
+// Passing those same caps to Send makes their product a hard native-USDC fee bound.
+func (f *CastFunder) EstimateGasBudget(ctx context.Context, address string, amount *big.Int) (GasBudget, error) {
 	from, err := f.Address(ctx)
 	if err != nil {
-		return nil, err
+		return GasBudget{}, err
 	}
 	gasUnits, err := f.castDecimal(
 		ctx, "estimate", address,
@@ -59,17 +58,25 @@ func (f *CastFunder) EstimateGasCost(ctx context.Context, address string, amount
 		"--from", from,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("estimating transfer gas: %w", err)
+		return GasBudget{}, fmt.Errorf("estimating transfer gas: %w", err)
 	}
 	gasPrice, err := f.castDecimal(ctx, "gas-price", "--rpc-url", f.rpcURL)
 	if err != nil {
-		return nil, fmt.Errorf("reading gas price: %w", err)
+		return GasBudget{}, fmt.Errorf("reading gas price: %w", err)
 	}
-	cost := new(big.Int).Mul(gasUnits, gasPrice)
-	// ceil(cost * 1.2) so rounding can never erase the safety margin.
-	cost.Mul(cost, big.NewInt(12))
-	cost.Add(cost, big.NewInt(9))
-	return cost.Quo(cost, big.NewInt(10)), nil
+	gasLimit := addTwentyPercent(gasUnits)
+	maxFeePerGas := addTwentyPercent(gasPrice)
+	return GasBudget{
+		GasLimit:     gasLimit,
+		MaxFeePerGas: maxFeePerGas,
+		MaxCost:      new(big.Int).Mul(gasLimit, maxFeePerGas),
+	}, nil
+}
+
+func addTwentyPercent(value *big.Int) *big.Int {
+	result := new(big.Int).Mul(value, big.NewInt(12))
+	result.Add(result, big.NewInt(9))
+	return result.Quo(result, big.NewInt(10))
 }
 
 func (f *CastFunder) castDecimal(ctx context.Context, args ...string) (*big.Int, error) {
@@ -90,11 +97,21 @@ func (f *CastFunder) castDecimal(ctx context.Context, args ...string) (*big.Int,
 
 // Send transfers native USDC. Cast inherits the terminal so it can securely prompt for the
 // encrypted keystore password; no password or private key appears in the process arguments.
-func (f *CastFunder) Send(ctx context.Context, address string, amount *big.Int) (string, error) {
+func (f *CastFunder) Send(
+	ctx context.Context,
+	address string,
+	amount *big.Int,
+	budget GasBudget,
+) (string, error) {
+	if err := validateGasBudget(budget); err != nil {
+		return "", fmt.Errorf("invalid gas budget: %w", err)
+	}
 	var stdout bytes.Buffer
 	command := exec.CommandContext(
 		ctx, "cast", "send", address,
 		"--value", amount.String(),
+		"--gas-limit", budget.GasLimit.String(),
+		"--gas-price", budget.MaxFeePerGas.String(),
 		"--rpc-url", f.rpcURL,
 		"--account", f.account,
 		"--json",

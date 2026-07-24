@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -28,7 +29,7 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, deploymentPath, contractsRoot, account string) error {
+func run(ctx context.Context, deploymentPath, contractsRoot, account string) (runErr error) {
 	account = strings.TrimSpace(account)
 	if account == "" {
 		return fmt.Errorf("deployer account is required; import one with cast wallet import")
@@ -55,6 +56,20 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string) err
 		return fmt.Errorf("RPC chain ID %d is not Arc testnet %d", chainID, arcTestnetChainID)
 	}
 	guardPath := deploymentPath + ".redeploy-guard.json"
+	reservation, err := testnetops.AcquireRedeployReservation(
+		guardPath+".pending", arcTestnetChainID,
+	)
+	if err != nil {
+		return err
+	}
+	releaseBeforeBroadcast := true
+	defer func() {
+		if releaseBeforeBroadcast {
+			if err := reservation.Release(); err != nil {
+				runErr = errors.Join(runErr, err)
+			}
+		}
+	}()
 	lastBroadcastAt, err := testnetops.ReadRedeployMarker(guardPath, arcTestnetChainID)
 	if err != nil {
 		return err
@@ -85,8 +100,12 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string) err
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
+	releaseBeforeBroadcast = false
 	if err := command.Run(); err != nil {
-		return fmt.Errorf("forge deployment: %w", err)
+		return fmt.Errorf(
+			"forge deployment: %w; pending reservation retained because broadcast status may be ambiguous",
+			err,
+		)
 	}
 	broadcastAt, err := source.LatestBlockTimestamp(ctx)
 	if err != nil {
@@ -94,6 +113,9 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string) err
 	}
 	if err := testnetops.WriteRedeployMarker(guardPath, arcTestnetChainID, broadcastAt); err != nil {
 		return fmt.Errorf("deployment broadcast succeeded but the redeploy guard was not recorded: %w", err)
+	}
+	if err := reservation.Release(); err != nil {
+		return fmt.Errorf("deployment guard recorded but pending reservation could not be removed: %w", err)
 	}
 	fmt.Println("Deployment broadcast. Verify the addresses, then update deployments/arc-testnet.json.")
 	return nil

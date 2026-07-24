@@ -2,6 +2,7 @@ package testnetops
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -102,5 +103,40 @@ func TestRedeployMarkerRoundTrip(t *testing.T) {
 	}
 	if !got.Equal(at) {
 		t.Fatalf("marker = %s, want %s", got, at)
+	}
+}
+
+func TestRedeployReservationRejectsConcurrentProcess(t *testing.T) {
+	path := t.TempDir() + "/guard.pending.json"
+	first, err := AcquireRedeployReservation(path, 5042002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := first.Release(); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	})
+
+	if _, err := AcquireRedeployReservation(path, 5042002); err == nil ||
+		!strings.Contains(err.Error(), "already pending") {
+		t.Fatalf("expected concurrent reservation failure, got %v", err)
+	}
+}
+
+func TestRedeployReservationPersistsUntilExplicitRelease(t *testing.T) {
+	path := t.TempDir() + "/guard.pending.json"
+	reservation, err := AcquireRedeployReservation(path, 5042002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("pending reservation was not persisted: %v", err)
+	}
+	if err := reservation.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("pending reservation still exists after release: %v", err)
 	}
 }

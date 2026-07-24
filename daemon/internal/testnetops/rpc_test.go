@@ -4,9 +4,11 @@ import "testing"
 
 func TestParseHexBigRejectsSignedQuantities(t *testing.T) {
 	for _, value := range []string{"0x-1", "0x+1"} {
-		if _, err := parseHexBig(value); err == nil {
-			t.Fatalf("expected signed quantity %q to fail", value)
-		}
+		t.Run(value, func(t *testing.T) {
+			if _, err := parseHexBig(value); err == nil {
+				t.Errorf("expected signed quantity %q to fail", value)
+			}
+		})
 	}
 }
 

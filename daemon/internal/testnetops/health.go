@@ -19,8 +19,15 @@ type BalanceSource interface {
 // Funder sends native USDC from a securely configured signer.
 type Funder interface {
 	Address(context.Context) (string, error)
-	EstimateGasCost(context.Context, string, *big.Int) (*big.Int, error)
-	Send(context.Context, string, *big.Int) (string, error)
+	EstimateGasBudget(context.Context, string, *big.Int) (GasBudget, error)
+	Send(context.Context, string, *big.Int, GasBudget) (string, error)
+}
+
+// GasBudget caps both gas units and price, making MaxCost a hard transaction-fee bound.
+type GasBudget struct {
+	GasLimit     *big.Int
+	MaxFeePerGas *big.Int
+	MaxCost      *big.Int
 }
 
 // Wallet describes the minimum native USDC required by one runtime role.
@@ -129,14 +136,14 @@ func EnsureWallets(
 			continue
 		}
 		deficit := new(big.Int).Sub(status.Minimum, status.Before)
-		gasCost, err := funder.EstimateGasCost(ctx, status.Address, deficit)
+		budget, err := funder.EstimateGasBudget(ctx, status.Address, deficit)
 		if err != nil {
 			return Report{}, fmt.Errorf("estimating gas to fund %s: %w", status.Role, err)
 		}
-		if gasCost == nil || gasCost.Sign() < 0 {
-			return Report{}, fmt.Errorf("estimated gas to fund %s must be non-negative", status.Role)
+		if err := validateGasBudget(budget); err != nil {
+			return Report{}, fmt.Errorf("gas budget to fund %s: %w", status.Role, err)
 		}
-		totalGasCost.Add(totalGasCost, gasCost)
+		totalGasCost.Add(totalGasCost, budget.MaxCost)
 	}
 	required := new(big.Int).Add(new(big.Int).Set(totalDeficit), totalGasCost)
 	required.Add(required, funderReserve)
@@ -153,7 +160,26 @@ func EnsureWallets(
 			continue
 		}
 		deficit := new(big.Int).Sub(status.Minimum, status.Before)
-		txHash, err := funder.Send(ctx, status.Address, deficit)
+		budget, err := funder.EstimateGasBudget(ctx, status.Address, deficit)
+		if err != nil {
+			return Report{}, fmt.Errorf("refreshing gas budget to fund %s: %w", status.Role, err)
+		}
+		if err := validateGasBudget(budget); err != nil {
+			return Report{}, fmt.Errorf("refreshed gas budget to fund %s: %w", status.Role, err)
+		}
+		currentFunderBalance, err := source.Balance(ctx, funderAddress)
+		if err != nil {
+			return Report{}, fmt.Errorf("rechecking funder balance before funding %s: %w", status.Role, err)
+		}
+		requiredForSend := new(big.Int).Add(new(big.Int).Set(deficit), budget.MaxCost)
+		requiredForSend.Add(requiredForSend, funderReserve)
+		if currentFunderBalance.Cmp(requiredForSend) < 0 {
+			return Report{}, fmt.Errorf(
+				"refusing to fund %s: funder has %s USDC; %s required for the deficit, capped gas, and %s USDC reserve",
+				status.Role, FormatUSDC(currentFunderBalance), FormatUSDC(requiredForSend), FormatUSDC(funderReserve),
+			)
+		}
+		txHash, err := funder.Send(ctx, status.Address, deficit, budget)
 		if err != nil {
 			return Report{}, fmt.Errorf("funding %s: %w", status.Role, err)
 		}
@@ -184,6 +210,23 @@ func EnsureWallets(
 	}
 	report.Healthy = true
 	return report, nil
+}
+
+func validateGasBudget(budget GasBudget) error {
+	if budget.GasLimit == nil || budget.GasLimit.Sign() < 0 {
+		return fmt.Errorf("gas limit must be non-negative")
+	}
+	if budget.MaxFeePerGas == nil || budget.MaxFeePerGas.Sign() < 0 {
+		return fmt.Errorf("maximum fee per gas must be non-negative")
+	}
+	if budget.MaxCost == nil || budget.MaxCost.Sign() < 0 {
+		return fmt.Errorf("maximum gas cost must be non-negative")
+	}
+	expected := new(big.Int).Mul(budget.GasLimit, budget.MaxFeePerGas)
+	if expected.Cmp(budget.MaxCost) != 0 {
+		return fmt.Errorf("maximum gas cost does not match gas limit multiplied by maximum fee")
+	}
+	return nil
 }
 
 // ParseUSDC converts a non-negative decimal USDC amount into Arc's 18-decimal native units.

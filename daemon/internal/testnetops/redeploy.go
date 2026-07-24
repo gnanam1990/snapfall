@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -60,6 +61,72 @@ type redeployMarker struct {
 	BroadcastAt string `json:"broadcastAt"`
 }
 
+type redeployReservationFile struct {
+	ChainID uint64 `json:"chainId"`
+	State   string `json:"state"`
+}
+
+// RedeployReservation is an exclusive, host-local pre-broadcast guard. If a process
+// disappears after broadcasting starts, the file intentionally remains in place so
+// another process cannot assume that no transaction was submitted.
+type RedeployReservation struct {
+	path string
+}
+
+// AcquireRedeployReservation atomically prevents concurrent or immediate retry broadcasts.
+func AcquireRedeployReservation(path string, chainID uint64) (*RedeployReservation, error) {
+	raw, err := json.Marshal(redeployReservationFile{ChainID: chainID, State: "pending"})
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf(
+			"redeployment is already pending at %s; verify the prior broadcast before recovery",
+			path,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("creating redeploy reservation: %w", err)
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			file.Close()
+			os.Remove(path)
+		}
+	}()
+	if _, err := file.Write(raw); err != nil {
+		return nil, fmt.Errorf("writing redeploy reservation: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return nil, fmt.Errorf("syncing redeploy reservation: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("closing redeploy reservation: %w", err)
+	}
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("syncing redeploy reservation directory: %w", err)
+	}
+	cleanup = false
+	return &RedeployReservation{path: path}, nil
+}
+
+// Release removes a reservation after a definitely pre-broadcast failure or after the
+// successful-broadcast marker has been durably installed.
+func (r *RedeployReservation) Release() error {
+	if r == nil || strings.TrimSpace(r.path) == "" {
+		return fmt.Errorf("redeploy reservation path is empty")
+	}
+	if err := os.Remove(r.path); err != nil {
+		return fmt.Errorf("removing redeploy reservation: %w", err)
+	}
+	if err := syncDirectory(filepath.Dir(r.path)); err != nil {
+		return fmt.Errorf("syncing redeploy reservation removal: %w", err)
+	}
+	return nil
+}
+
 // ReadRedeployMarker loads the durable guard written immediately after a successful
 // broadcast. A stale deployment artifact therefore cannot authorize an immediate repeat.
 func ReadRedeployMarker(path string, expectedChainID uint64) (time.Time, error) {
@@ -110,11 +177,27 @@ func WriteRedeployMarker(path string, chainID uint64, broadcastAt time.Time) err
 		temp.Close()
 		return fmt.Errorf("writing redeploy guard: %w", err)
 	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return fmt.Errorf("syncing redeploy guard: %w", err)
+	}
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("closing redeploy guard: %w", err)
 	}
 	if err := os.Rename(tempPath, path); err != nil {
 		return fmt.Errorf("installing redeploy guard: %w", err)
 	}
+	if err := syncDirectory(dir); err != nil {
+		return fmt.Errorf("syncing redeploy guard directory: %w", err)
+	}
 	return nil
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

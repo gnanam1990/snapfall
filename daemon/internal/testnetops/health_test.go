@@ -25,33 +25,47 @@ func (f *fakeBalances) Balance(_ context.Context, address string) (*big.Int, err
 }
 
 type fakeFunder struct {
-	source  *fakeBalances
-	address string
-	gasCost *big.Int
-	sends   []Funding
+	source          *fakeBalances
+	address         string
+	gasCosts        []*big.Int
+	estimateCalls   int
+	actualGasCost   *big.Int
+	sends           []Funding
+	submittedBudget []GasBudget
 }
 
 func (f *fakeFunder) Address(context.Context) (string, error) {
 	return f.address, nil
 }
 
-func (f *fakeFunder) EstimateGasCost(context.Context, string, *big.Int) (*big.Int, error) {
-	if f.gasCost == nil {
-		return new(big.Int), nil
+func (f *fakeFunder) EstimateGasBudget(context.Context, string, *big.Int) (GasBudget, error) {
+	cost := new(big.Int)
+	if len(f.gasCosts) > 0 {
+		index := f.estimateCalls
+		if index >= len(f.gasCosts) {
+			index = len(f.gasCosts) - 1
+		}
+		cost.Set(f.gasCosts[index])
 	}
-	return new(big.Int).Set(f.gasCost), nil
+	f.estimateCalls++
+	return GasBudget{
+		GasLimit:     big.NewInt(1),
+		MaxFeePerGas: new(big.Int).Set(cost),
+		MaxCost:      new(big.Int).Set(cost),
+	}, nil
 }
 
-func (f *fakeFunder) Send(_ context.Context, address string, amount *big.Int) (string, error) {
+func (f *fakeFunder) Send(_ context.Context, address string, amount *big.Int, budget GasBudget) (string, error) {
 	f.source.balances[f.address].Sub(f.source.balances[f.address], amount)
-	if f.gasCost != nil {
-		f.source.balances[f.address].Sub(f.source.balances[f.address], f.gasCost)
+	if f.actualGasCost != nil {
+		f.source.balances[f.address].Sub(f.source.balances[f.address], f.actualGasCost)
 	}
 	if f.source.balances[address] == nil {
 		f.source.balances[address] = new(big.Int)
 	}
 	f.source.balances[address].Add(f.source.balances[address], amount)
 	f.sends = append(f.sends, Funding{Address: address, Amount: new(big.Int).Set(amount)})
+	f.submittedBudget = append(f.submittedBudget, budget)
 	return "0xfeed", nil
 }
 
@@ -92,7 +106,10 @@ func TestEnsureWalletsFundsExactDeficitAndPreservesReserve(t *testing.T) {
 			"funder":   usdc(t, "6"),
 		},
 	}
-	funder := &fakeFunder{source: source, address: "funder", gasCost: usdc(t, "0.01")}
+	funder := &fakeFunder{
+		source: source, address: "funder",
+		gasCosts: []*big.Int{usdc(t, "0.01")}, actualGasCost: usdc(t, "0.01"),
+	}
 	report, err := EnsureWallets(context.Background(), source, 5042002, []Wallet{
 		{Role: "externalCustomer", Address: "customer", Minimum: usdc(t, "25.10")},
 	}, funder, usdc(t, "0.25"))
@@ -146,7 +163,10 @@ func TestEnsureWalletsIncludesGasWhenPreservingReserve(t *testing.T) {
 			"funder":   usdc(t, "5.35"),
 		},
 	}
-	funder := &fakeFunder{source: source, address: "funder", gasCost: usdc(t, "0.01")}
+	funder := &fakeFunder{
+		source: source, address: "funder",
+		gasCosts: []*big.Int{usdc(t, "0.01")}, actualGasCost: usdc(t, "0.01"),
+	}
 	_, err := EnsureWallets(context.Background(), source, 5042002, []Wallet{
 		{Role: "externalCustomer", Address: "customer", Minimum: usdc(t, "25.10")},
 	}, funder, usdc(t, "0.25"))
@@ -177,6 +197,37 @@ func TestEnsureWalletsRejectsFunderDestinationCollision(t *testing.T) {
 	}, funder, new(big.Int))
 	if err == nil || !strings.Contains(err.Error(), "self-funding") {
 		t.Fatalf("expected funder collision failure, got %v", err)
+	}
+}
+
+func TestEnsureWalletsRefreshesCappedGasBudgetBeforeSending(t *testing.T) {
+	source := &fakeBalances{
+		chainID: 5042002,
+		balances: map[string]*big.Int{
+			"customer": usdc(t, "20"),
+			"funder":   usdc(t, "6"),
+		},
+	}
+	funder := &fakeFunder{
+		source: source, address: "funder",
+		gasCosts:      []*big.Int{usdc(t, "0.01"), usdc(t, "0.02")},
+		actualGasCost: usdc(t, "0.02"),
+	}
+	_, err := EnsureWallets(context.Background(), source, 5042002, []Wallet{
+		{Role: "externalCustomer", Address: "customer", Minimum: usdc(t, "25.10")},
+	}, funder, usdc(t, "0.25"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if funder.estimateCalls != 2 {
+		t.Fatalf("gas budget estimates = %d, want preflight plus pre-send refresh", funder.estimateCalls)
+	}
+	if len(funder.submittedBudget) != 1 ||
+		funder.submittedBudget[0].MaxCost.Cmp(usdc(t, "0.02")) != 0 {
+		t.Fatalf("submitted budgets = %+v, want refreshed 0.02 maximum", funder.submittedBudget)
+	}
+	if source.balances["funder"].Cmp(usdc(t, "0.25")) < 0 {
+		t.Fatalf("funder balance %s fell below reserve", FormatUSDC(source.balances["funder"]))
 	}
 }
 

@@ -1,6 +1,9 @@
 package testnetops
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseCastTransactionHashReadsReceiptField(t *testing.T) {
 	const want = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -17,10 +20,13 @@ func TestParseCastTransactionHashRejectsWholeOrMalformedReceipt(t *testing.T) {
 	for _, raw := range []string{
 		`{"status":"0x1"}`,
 		`{"transactionHash":"0xfeed"}`,
+		`{"transactionHash":"0x` + strings.Repeat("g", 64) + `"}`,
 		`not-json`,
 	} {
-		if _, err := parseCastTransactionHash([]byte(raw)); err == nil {
-			t.Fatalf("expected invalid receipt %q to fail", raw)
-		}
+		t.Run(raw, func(t *testing.T) {
+			if _, err := parseCastTransactionHash([]byte(raw)); err == nil {
+				t.Errorf("expected invalid receipt %q to fail", raw)
+			}
+		})
 	}
 }
