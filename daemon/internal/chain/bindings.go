@@ -122,6 +122,26 @@ type Oracle struct {
 	Reader    *Client // any client works for views; no key material is used
 	FloatPool common.Address
 	JobVault  common.Address
+	Org       common.Address
+}
+
+// AdvanceRateBps reads the standing pipeline organization's current Float rate.
+func (o Oracle) AdvanceRateBps(ctx context.Context) (uint64, error) {
+	if o.Org == (common.Address{}) {
+		return 0, fmt.Errorf("advance-rate organization is not configured")
+	}
+	ret, err := o.Reader.CallView(ctx, o.FloatPool, CalldataAdvanceRate(o.Org))
+	if err != nil {
+		return 0, err
+	}
+	if len(ret) != 32 {
+		return 0, fmt.Errorf("advanceRate returned %d bytes, want 32", len(ret))
+	}
+	value := new(big.Int).SetBytes(ret)
+	if !value.IsUint64() {
+		return 0, fmt.Errorf("advanceRate does not fit uint64")
+	}
+	return value.Uint64(), nil
 }
 
 // AdvanceLanded reports whether the job's one permitted advance exists on chain.

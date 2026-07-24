@@ -2,15 +2,58 @@ package brain
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
+	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
 
 type fakeSettleLane struct{ out funding.ChainOutcome }
 
 func (f fakeSettleLane) Submit(context.Context, []byte) (funding.ChainOutcome, error) {
 	return f.out, nil
+}
+
+type transientMilestoneOracle struct {
+	advanceCalls int
+}
+
+func (o *transientMilestoneOracle) AdvanceLanded(context.Context, string) (bool, error) {
+	o.advanceCalls++
+	if o.advanceCalls == 1 {
+		return false, errors.New("temporary RPC failure")
+	}
+	return true, nil
+}
+
+func (*transientMilestoneOracle) SettlementLanded(context.Context, string) (bool, error) {
+	return true, nil
+}
+
+func (*transientMilestoneOracle) AdvanceRateBps(context.Context) (uint64, error) {
+	return 5_500, nil
+}
+
+type concurrentMilestoneOracle struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (o *concurrentMilestoneOracle) AdvanceLanded(context.Context, string) (bool, error) {
+	o.entered <- struct{}{}
+	<-o.release
+	return true, nil
+}
+
+func (*concurrentMilestoneOracle) SettlementLanded(context.Context, string) (bool, error) {
+	return true, nil
+}
+
+func (*concurrentMilestoneOracle) AdvanceRateBps(context.Context) (uint64, error) {
+	return 5_500, nil
 }
 
 // The fall's chain half: an authenticated, claimed Accept settles through Funding's
@@ -55,6 +98,157 @@ func TestAcceptChain_OutcomesAreDistinct(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAcceptChain_RetriesMilestoneObservationWithoutResettling(t *testing.T) {
+	b, st, jobID := acceptRig(t)
+	const vaultJobID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := b.memory.Update(jobID, func(jm *JobMemory) {
+		jm.VaultJobID = vaultJobID
+		jm.StandingInstructionID = "standing-build"
+		jm.MilestoneNumber = 1
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.funding.SetChain(nil, fakeSettleLane{out: funding.ChainOutcome{
+		Submitted: true,
+		TxHash:    "0xsettled",
+	}})
+	oracle := &transientMilestoneOracle{}
+	b.SetMilestoneOracle(oracle)
+
+	if state, err := b.AcceptDelivery(context.Background(), jobID); err != nil || state != "accepted-settled" {
+		t.Fatalf("first accept state=%q err=%v", state, err)
+	}
+	if n := countEvents(t, st, "pipeline.milestone.observation_failed", jobID); n != 1 {
+		t.Fatalf("failed observations = %d, want 1", n)
+	}
+	if n := countEvents(t, st, "pipeline.milestone.completed", jobID); n != 0 {
+		t.Fatalf("completed observations after transient failure = %d, want 0", n)
+	}
+
+	if _, err := b.AcceptDelivery(context.Background(), jobID); err != nil {
+		t.Fatalf("idempotent accept did not retry observation: %v", err)
+	}
+	if n := countEvents(t, st, "pipeline.milestone.completed", jobID); n != 1 {
+		t.Fatalf("completed observations after retry = %d, want 1", n)
+	}
+	if n := countEvents(t, st, "settlement.executed", jobID); n != 1 {
+		t.Fatalf("settlement executions = %d, want exactly 1", n)
+	}
+}
+
+func TestAcceptChain_ConcurrentObservationRetriesCompleteMilestoneOnce(t *testing.T) {
+	b, st, jobID := acceptRig(t)
+	const vaultJobID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	b.mu.Lock()
+	b.jobs[jobID].Stage = StageAccepted
+	b.mu.Unlock()
+	if err := b.memory.Update(jobID, func(jm *JobMemory) {
+		jm.Stage = string(StageAccepted)
+		jm.VaultJobID = vaultJobID
+		jm.StandingInstructionID = "standing-build"
+		jm.MilestoneNumber = 1
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(context.Background(), store.Event{
+		Kind: "settlement.executed", EntityID: jobID, Actor: "funding",
+		Payload: map[string]any{"tx_hash": "0xsettled"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oracle := &concurrentMilestoneOracle{
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	b.SetMilestoneOracle(oracle)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	retry := func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := b.AcceptDelivery(context.Background(), jobID)
+			errs <- err
+		}()
+	}
+	retry()
+	<-oracle.entered
+	retry()
+	select {
+	case <-oracle.entered:
+		// Without serialization both callers pass the prior-count check and reach
+		// the oracle before either can append.
+	case <-time.After(100 * time.Millisecond):
+		// With serialization the second caller waits for the first completion.
+	}
+	close(oracle.release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent observation retry: %v", err)
+		}
+	}
+	if n := countEvents(t, st, "pipeline.milestone.completed", jobID); n != 1 {
+		t.Fatalf("completed observations = %d, want exactly 1", n)
+	}
+	b.mu.Lock()
+	retainedGates := len(b.milestoneObservationGates)
+	b.mu.Unlock()
+	if retainedGates != 0 {
+		t.Fatalf("retained milestone observation gates = %d, want 0", retainedGates)
+	}
+}
+
+func TestMilestoneObservation_CanceledWaiterDoesNotBlockBehindOracle(t *testing.T) {
+	b, _, jobID := acceptRig(t)
+	if err := b.memory.Update(jobID, func(jm *JobMemory) {
+		jm.VaultJobID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		jm.StandingInstructionID = "standing-build"
+		jm.MilestoneNumber = 1
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oracle := &concurrentMilestoneOracle{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	b.SetMilestoneOracle(oracle)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- b.observeMilestoneCompletion(context.Background(), jobID)
+	}()
+	<-oracle.entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(started)
+		secondDone <- b.observeMilestoneCompletion(ctx, jobID)
+	}()
+	<-started
+	cancel()
+
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled observation error = %v, want context.Canceled", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		close(oracle.release)
+		<-firstDone
+		<-secondDone
+		t.Fatal("canceled observation remained blocked behind the in-flight oracle")
+	}
+	close(oracle.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first observation: %v", err)
 	}
 }
 

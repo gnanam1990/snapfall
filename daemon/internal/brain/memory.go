@@ -50,6 +50,10 @@ type JobMemory struct {
 	// chain gap: on-chain job creation never happens); it stays empty for real jobs
 	// until the chain-write path lands. Tests set it directly.
 	VaultJobID string `json:"vault_job_id,omitempty"`
+	// Standing-pipeline identity. Set only for A11 milestone jobs; together these fields
+	// make recovery and post-settlement chain observation independent of process memory.
+	StandingInstructionID string `json:"standing_instruction_id,omitempty"`
+	MilestoneNumber       uint64 `json:"milestone_number,omitempty"`
 	// AcceptTokenHash is the SHA-256 (hex) of the customer's accept credential — the
 	// plaintext is returned once at mint time and NEVER stored (pinned by test).
 	AcceptTokenHash string    `json:"accept_token_hash,omitempty"`

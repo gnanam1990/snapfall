@@ -112,6 +112,7 @@ func (b *Brain) AcceptDelivery(ctx context.Context, jobID string) (string, error
 	switch js.Stage {
 	case StageAccepted:
 		b.mu.Unlock()
+		b.retrySettledMilestoneObservation(ctx, jobID)
 		return "accepted-pending-chain", nil
 	case StageDeliveryReady:
 		js.Stage = StageAccepted // the claim
@@ -125,7 +126,43 @@ func (b *Brain) AcceptDelivery(ctx context.Context, jobID string) (string, error
 	if err := b.memory.Update(jobID, func(jm *JobMemory) { jm.Stage = string(StageAccepted) }); err != nil {
 		return "", err
 	}
-	return b.settleOnChain(ctx, jobID)
+	state, err := b.settleOnChain(ctx, jobID)
+	if err != nil {
+		return state, err
+	}
+	if state == "accepted-settled" {
+		b.recordMilestoneObservation(ctx, jobID)
+	}
+	return state, nil
+}
+
+// retrySettledMilestoneObservation repairs only the read-side milestone observation
+// after an idempotent Accept. The durable settlement event is the gate: pending or
+// reverted accepts never enter the observation path, and the chain write is not run
+// again.
+func (b *Brain) retrySettledMilestoneObservation(ctx context.Context, jobID string) {
+	var settled int
+	if err := b.store.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE kind='settlement.executed' AND entity_id=?`,
+		jobID).Scan(&settled); err != nil {
+		b.log.Warn("cannot inspect milestone settlement for observation retry", "job", jobID, "err", err)
+		return
+	}
+	if settled > 0 {
+		b.recordMilestoneObservation(ctx, jobID)
+	}
+}
+
+func (b *Brain) recordMilestoneObservation(ctx context.Context, jobID string) {
+	if err := b.observeMilestoneCompletion(ctx, jobID); err != nil {
+		// Settlement already committed on chain. Observation failure is an alert,
+		// never grounds to misreport the actual settlement as failed.
+		_, _ = b.store.Append(context.WithoutCancel(ctx), store.Event{
+			Kind: "pipeline.milestone.observation_failed", EntityID: jobID, Actor: "brain",
+			Payload: map[string]any{"error": err.Error()},
+		})
+		b.log.Warn("milestone settled but chain observation failed", "job", jobID, "err", err)
+	}
 }
 
 // settleOnChain is the chain half of an authenticated, claimed Accept: submit

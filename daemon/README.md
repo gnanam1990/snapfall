@@ -78,6 +78,35 @@ supported normalized H1 events, financial projections and next-block cursor. Rep
 inclusive range is safe by `(chainId, transactionHash, logIndex)`. The command requires an
 explicit `--deployment` path so its behavior does not depend on the process working directory.
 
+## Build-Monitor standing pipelines (A11)
+
+Brain's `OpenMilestone` interface scopes each milestone under a stable standing-instruction
+ID. The pair `(standingInstructionID, milestoneNumber)` deterministically produces a fresh
+local job ID and a fresh bytes32 JobVault job ID; reopening the same pair is refused. Opening
+does not confirm work, authorize an advance, or release escrow—the existing owner, funding,
+and customer gates remain unchanged.
+
+The registered `build-monitor` worker reads `<repository>/.snapfall/milestone.json`, checks
+the listed repository-relative artifacts without executing repository code, and reports the
+measured percentage and current Git revision to Brain before emitting its evidence report:
+
+```json
+{
+  "checks": [
+    { "name": "contract", "path": "dist/contract.json" },
+    { "name": "integration", "path": "reports/integration.txt" },
+    { "name": "release", "path": "reports/release.txt" }
+  ]
+}
+```
+
+After a milestone settlement, Brain verifies the advance and accepted JobVault state through
+the chain oracle, reads the organization's resulting FloatPool rate, and records
+`pipeline.milestone.completed`. If no chain oracle is wired, it records an explicitly pending
+observation rather than inventing a result. The AT-17 integration test drives two milestones
+through distinct advances and settlements and pins progress-before-release plus the second
+rate tick.
+
 ## Layout
 
 ```
@@ -87,6 +116,8 @@ internal/agents/       manifest loader + FR-ORG-006 validation; HeartbeatWorker 
 internal/chaincfg/      A1 deployment/config loader; resolves addresses from env
 internal/explorer/      A5 validated transaction/address explorer links for H2 rows
 internal/indexer/       H1 RPC adapter, decoder, projection, cursor, reconciliation
+internal/worker/        bounded workers, including A11 Build-Monitor repo measurement
+internal/integration/   cross-module acceptance paths, including A11 / AT-17
 internal/store/        SQLite (WAL), event log, transactional outbox
 internal/events/       typed bus + outbox publisher
 internal/supervisor/   worker lifecycle, restart-with-backoff, health
