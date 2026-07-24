@@ -38,6 +38,7 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/qa"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 	"github.com/gnanam1990/snapfall/daemon/internal/supervisor"
+	"github.com/gnanam1990/snapfall/daemon/internal/telegram"
 	"github.com/gnanam1990/snapfall/daemon/internal/worker"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -173,6 +174,11 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		return nil
 	}
 
+	telegramCfg, err := telegram.LoadConfig(os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("telegram approvals: %w", err)
+	}
+
 	// ── Local state ──
 	if dir := filepath.Dir(dbPath); dir != "." {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -232,6 +238,9 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 
 	// ── Supervisor ──
 	sup := supervisor.New(log, 5, 200*time.Millisecond)
+	if err := configureTelegramApprovals(telegramCfg, life, sup, log); err != nil {
+		return err
+	}
 
 	// The dummy heartbeat runs as the Research role. In one-shot serve mode it is
 	// INFRASTRUCTURE (the owner one-shot below is what the daemon exists to finish);
@@ -411,6 +420,29 @@ func (w workerFunc) Run(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+func configureTelegramApprovals(cfg telegram.Config, life *approval.Lifecycle, sup *supervisor.Supervisor, log *slog.Logger) error {
+	if !cfg.Enabled() {
+		return nil
+	}
+	notifier := telegram.New(cfg, log)
+	previousPending := life.Pending
+	life.Pending = func(req approval.Request) {
+		if previousPending != nil {
+			previousPending(req)
+		}
+		notifier.Enqueue(req)
+	}
+	for _, req := range life.PendingRequests() {
+		notifier.Enqueue(req)
+	}
+	if err := sup.Register(notifier); err != nil {
+		return fmt.Errorf("register telegram approvals: %w", err)
+	}
+	log.Info("telegram approval mirror enabled",
+		"dashboard_url", cfg.DashboardURL, "recovered_pending", len(life.PendingRequests()))
+	return nil
 }
 
 // wireBrain is THE single Brain wiring point in the daemon (pinned by
