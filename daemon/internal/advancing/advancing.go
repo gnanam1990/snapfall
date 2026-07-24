@@ -50,10 +50,22 @@ type Flow struct {
 	// claimed-but-unconfirmed advance actually landed.
 	oracle AdvanceOracle
 
+	// rateOracle reads the org's CURRENT advance rate (bps) from chain at intent
+	// creation, so the amount the owner approves matches what the contract draws.
+	// nil = fall back to the base rate.
+	rateOracle RateOracle
+
 	// afterExecute is a TEST-ONLY hook (nil in production), invoked after the await
 	// goroutine reaches its terminal outcome — tests await it deterministically.
 	afterExecute func()
 }
+
+// RateOracle reads the org's current advance rate in basis points from chain state.
+// Returns false when unavailable (no chain wired, RPC error, out-of-range).
+type RateOracle func(ctx context.Context) (uint16, bool)
+
+// SetRateOracle wires the on-chain advance-rate reader (main.go, from chain.Oracle).
+func (f *Flow) SetRateOracle(o RateOracle) { f.rateOracle = o }
 
 // AdvanceOracle is the chain-state reader the restart recovery consults
 // (chain.Oracle satisfies it; tests fake it).
@@ -77,7 +89,24 @@ const AdvanceRateBps = 5_000
 // Propose opens the human-authorized advance request and spawns the await that
 // executes on approval. Returns the pending request (its ID lands in the H2 inbox).
 func (f *Flow) Propose(ctx context.Context, jobID, vaultJobID, quoteUSDC string) (approval.Request, error) {
-	principal, err := principalMicros(quoteUSDC)
+	// Read the org's CURRENT advance rate from chain at intent-creation time, so the
+	// amount the owner approves matches what FloatPool.requestAdvance will draw. A
+	// hardcoded 50% diverged from the real rate the moment the org's rate climbed above
+	// the base (rate only ever climbs). Falls back to the base rate if unavailable.
+	//
+	// KNOWN LIMIT (logged for a post-recording design decision, not solved here): the
+	// contract recomputes the advance at EXECUTION time, so if the rate climbs between
+	// approval and execution (another job settles in the window), the draw exceeds the
+	// approved amount. The AT-05-shaped answer — verify the rate hasn't moved at
+	// execution and refuse if it has, or label the intent figure advisory — is a real
+	// design call deferred deliberately.
+	rateBps := int64(AdvanceRateBps)
+	if f.rateOracle != nil {
+		if bps, ok := f.rateOracle(ctx); ok {
+			rateBps = int64(bps)
+		}
+	}
+	principal, err := principalMicros(quoteUSDC, rateBps)
 	if err != nil {
 		return approval.Request{}, fmt.Errorf("advance proposal: %w", err)
 	}
@@ -91,8 +120,8 @@ func (f *Flow) Propose(ctx context.Context, jobID, vaultJobID, quoteUSDC string)
 		Kind:     policy.KindAdvance,
 		ChainRef: vaultJobID,
 		Resource: "FloatPool.requestAdvance",
-		Purpose: fmt.Sprintf("working-capital advance: 50%% of the %s USDC escrowed receivable (fee computed on-chain at submission)",
-			quoteUSDC),
+		Purpose: fmt.Sprintf("working-capital advance: %d%% of the %s USDC escrowed receivable (fee computed on-chain at submission)",
+			rateBps/100, quoteUSDC),
 		AmountMicros: principal, MaxAmountMicros: principal,
 		Nonce:     "0x" + hex.EncodeToString(nonce),
 		ExpiresAt: time.Now().Add(f.window),
@@ -280,7 +309,10 @@ func (f *Flow) resolveExecutedClaim(ctx context.Context, req approval.Request) (
 
 // principalMicros converts a human-facing USDC quote to the 50% advance principal in
 // micros, exactly (no floats near money).
-func principalMicros(quoteUSDC string) (int64, error) {
+func principalMicros(quoteUSDC string, rateBps int64) (int64, error) {
+	if rateBps <= 0 || rateBps > 10_000 {
+		return 0, fmt.Errorf("advance rate %d bps out of range", rateBps)
+	}
 	parts := strings.SplitN(strings.TrimSpace(quoteUSDC), ".", 2)
 	whole, ok := new(big.Int).SetString(parts[0], 10)
 	if !ok || whole.Sign() < 0 {
@@ -298,7 +330,7 @@ func principalMicros(quoteUSDC string) (int64, error) {
 		}
 		micros.Add(micros, f)
 	}
-	principal := micros.Mul(micros, big.NewInt(AdvanceRateBps)).Div(micros, big.NewInt(10_000))
+	principal := micros.Mul(micros, big.NewInt(rateBps)).Div(micros, big.NewInt(10_000))
 	if !principal.IsInt64() || principal.Int64() <= 0 {
 		return 0, fmt.Errorf("advance principal out of range for quote %q", quoteUSDC)
 	}
