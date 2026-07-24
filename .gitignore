@@ -29,3 +29,4 @@ daemon/snapfall.db
 daemon/snapfall.db-wal
 daemon/snapfall.db-shm
 daemon/snapfalld
+*.redeploy-guard.json

@@ -15,6 +15,7 @@ import (
 )
 
 const faucetURL = "https://faucet.circle.com"
+const arcTestnetChainID uint64 = 5042002
 
 func main() {
 	deploymentPath := flag.String("deployment", "../deployments/arc-testnet.json", "deployment artifact")
@@ -46,6 +47,12 @@ func run(
 	deployment, err := chaincfg.Load(deploymentPath, os.LookupEnv)
 	if err != nil {
 		return err
+	}
+	if deployment.Network.ChainID != arcTestnetChainID {
+		return fmt.Errorf(
+			"deployment artifact chain ID %d is not Arc testnet %d",
+			deployment.Network.ChainID, arcTestnetChainID,
+		)
 	}
 	minimums, err := walletMinimums(customerMinimum, treasuryMinimum)
 	if err != nil {
@@ -84,13 +91,13 @@ func run(
 		}
 	}
 	report, err := testnetops.EnsureWallets(
-		ctx, source, deployment.Network.ChainID, wallets, funder, reserve,
+		ctx, source, arcTestnetChainID, wallets, funder, reserve,
 	)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Arc testnet wallet health (chain %d)\n", deployment.Network.ChainID)
+	fmt.Printf("Arc testnet wallet health (chain %d)\n", arcTestnetChainID)
 	for _, status := range report.Wallets {
 		state := "HEALTHY"
 		if status.After.Cmp(status.Minimum) < 0 {

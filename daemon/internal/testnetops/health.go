@@ -19,6 +19,7 @@ type BalanceSource interface {
 // Funder sends native USDC from a securely configured signer.
 type Funder interface {
 	Address(context.Context) (string, error)
+	EstimateGasCost(context.Context, string, *big.Int) (*big.Int, error)
 	Send(context.Context, string, *big.Int) (string, error)
 }
 
@@ -76,10 +77,19 @@ func EnsureWallets(
 
 	report := Report{Healthy: true, Wallets: make([]WalletStatus, 0, len(wallets))}
 	totalDeficit := new(big.Int)
+	seenAddresses := make(map[string]string, len(wallets))
 	for _, wallet := range wallets {
 		if strings.TrimSpace(wallet.Role) == "" || strings.TrimSpace(wallet.Address) == "" {
 			return Report{}, fmt.Errorf("wallet role and address are required")
 		}
+		normalizedAddress := strings.ToLower(strings.TrimSpace(wallet.Address))
+		if priorRole, duplicate := seenAddresses[normalizedAddress]; duplicate {
+			return Report{}, fmt.Errorf(
+				"wallet roles %q and %q share address %s; refusing duplicate funding targets",
+				priorRole, wallet.Role, wallet.Address,
+			)
+		}
+		seenAddresses[normalizedAddress] = wallet.Role
 		if wallet.Minimum == nil || wallet.Minimum.Sign() < 0 {
 			return Report{}, fmt.Errorf("wallet %s minimum must be non-negative", wallet.Role)
 		}
@@ -105,15 +115,35 @@ func EnsureWallets(
 	if err != nil {
 		return Report{}, fmt.Errorf("resolving funder address: %w", err)
 	}
+	if role, collision := seenAddresses[strings.ToLower(strings.TrimSpace(funderAddress))]; collision {
+		return Report{}, fmt.Errorf("funder address is also the %q wallet; refusing a self-funding transfer", role)
+	}
 	funderBalance, err := source.Balance(ctx, funderAddress)
 	if err != nil {
 		return Report{}, fmt.Errorf("reading funder balance: %w", err)
 	}
-	required := new(big.Int).Add(new(big.Int).Set(totalDeficit), funderReserve)
+	totalGasCost := new(big.Int)
+	for i := range report.Wallets {
+		status := &report.Wallets[i]
+		if status.Before.Cmp(status.Minimum) >= 0 {
+			continue
+		}
+		deficit := new(big.Int).Sub(status.Minimum, status.Before)
+		gasCost, err := funder.EstimateGasCost(ctx, status.Address, deficit)
+		if err != nil {
+			return Report{}, fmt.Errorf("estimating gas to fund %s: %w", status.Role, err)
+		}
+		if gasCost == nil || gasCost.Sign() < 0 {
+			return Report{}, fmt.Errorf("estimated gas to fund %s must be non-negative", status.Role)
+		}
+		totalGasCost.Add(totalGasCost, gasCost)
+	}
+	required := new(big.Int).Add(new(big.Int).Set(totalDeficit), totalGasCost)
+	required.Add(required, funderReserve)
 	if funderBalance.Cmp(required) < 0 {
 		return Report{}, fmt.Errorf(
-			"funder has %s USDC; %s required to cover deficits and preserve %s USDC reserve",
-			FormatUSDC(funderBalance), FormatUSDC(required), FormatUSDC(funderReserve),
+			"funder has %s USDC; %s required to cover deficits, %s estimated gas, and preserve %s USDC reserve",
+			FormatUSDC(funderBalance), FormatUSDC(required), FormatUSDC(totalGasCost), FormatUSDC(funderReserve),
 		)
 	}
 
@@ -141,6 +171,16 @@ func EnsureWallets(
 		status.Funding = &Funding{
 			Address: status.Address, Amount: new(big.Int).Set(deficit), TxHash: strings.TrimSpace(txHash),
 		}
+	}
+	funderAfter, err := source.Balance(ctx, funderAddress)
+	if err != nil {
+		return Report{}, fmt.Errorf("verifying funder reserve: %w", err)
+	}
+	if funderAfter.Cmp(funderReserve) < 0 {
+		return Report{}, fmt.Errorf(
+			"funding completed but funder fell below reserve: got %s, require %s USDC",
+			FormatUSDC(funderAfter), FormatUSDC(funderReserve),
+		)
 	}
 	report.Healthy = true
 	return report, nil

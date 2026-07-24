@@ -73,12 +73,14 @@ cast wallet import snapfall-funder --interactive
 ./scripts/testnet-ops --fund --funder-account snapfall-funder
 ```
 
-The command verifies Arc chain ID 5042002, reads every balance before sending, checks that the
-funder can cover all deficits while retaining its gas reserve, sends only exact deficits, and
-re-reads each funded balance. Without a keystore it exits with the exact shortages and the
-Circle faucet URL. The faucet remains a human path because its reCAPTCHA and cooldown must not
-be automated. Arc uses USDC as its native gas token; Foundry recommends encrypted keystores
-instead of raw private keys:
+The command independently requires Arc chain ID 5042002, reads every balance before sending,
+estimates each transfer's native-USDC gas with 20% headroom, checks that the funder can cover
+all deficits while retaining its configured reserve, sends only exact deficits, and re-reads
+both funded and funder balances. A read-only invocation without `--fund` lists current/minimum
+balances and exits with the Circle faucet URL when a wallet is low. `--fund` additionally
+requires a named encrypted keystore account. The faucet remains a human path because its
+reCAPTCHA and cooldown must not be automated. Arc uses USDC as its native gas token; Foundry
+recommends encrypted keystores instead of raw private keys:
 
 - https://docs.arc.io/llms.txt
 - https://getfoundry.sh/guides/best-practices/writing-scripts/
@@ -93,8 +95,18 @@ export ARC_USDC_ADDRESS=0x3600000000000000000000000000000000000000
 ./scripts/redeploy-testnet --account snapfall-deployer
 ```
 
-The command verifies the RPC chain, reads the committed deployment block timestamp, and refuses
-to broadcast until 48 hours have elapsed. The Solidity deploy script now accepts Foundry's
-encrypted `--account` signer and no longer reads `TREASURY_PRIVATE_KEY`. After a successful
-broadcast, verify all three contracts and update `deployments/arc-testnet.json` with the new
-addresses and start block before restarting the indexer.
+The command independently requires Arc chain ID 5042002, compares the committed deployment
+timestamp against current chain-head time, and refuses to broadcast until 48 hours have
+elapsed. It passes an explicit `--sender` resolved from the encrypted `--account`, preventing
+a sender mismatch after contract creation. A successful broadcast immediately writes
+`deployments/arc-testnet.json.redeploy-guard.json`, so an unchanged deployment artifact cannot
+authorize a second broadcast. Verify all three contracts and update
+`deployments/arc-testnet.json` with the new addresses and start block before restarting the
+indexer.
+
+Before restart, remove stale deployment overrides or update them to the new deployment:
+
+```bash
+unset SNAPFALL_DEPLOYMENT_BLOCK
+unset SNAPFALL_AUDIT_ANCHOR_ADDRESS SNAPFALL_JOB_VAULT_ADDRESS SNAPFALL_FLOAT_POOL_ADDRESS
+```

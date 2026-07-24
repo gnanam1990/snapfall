@@ -18,8 +18,9 @@ import {FloatPool} from "../src/FloatPool.sol";
 ///   export ARC_TESTNET_RPC=https://rpc.testnet.arc.network
 ///   export ARC_USDC_ADDRESS=0x...        # the real USDC on Arc testnet
 ///   cast wallet import snapfall-deployer --interactive
+///   export DEPLOYER_ADDRESS=0x...        # output of cast wallet address --account snapfall-deployer
 ///   forge script script/Deploy.s.sol --rpc-url "$ARC_TESTNET_RPC" \
-///     --account snapfall-deployer --broadcast
+///     --account snapfall-deployer --sender "$DEPLOYER_ADDRESS" --broadcast
 ///
 /// Copy the logged addresses into docs/addresses.md and the README testnet notes.
 contract Deploy is Script {

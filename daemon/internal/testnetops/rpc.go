@@ -107,10 +107,20 @@ func (r *RPCClient) Balance(ctx context.Context, address string) (*big.Int, erro
 
 // BlockTimestamp returns the UTC timestamp recorded on one Arc block.
 func (r *RPCClient) BlockTimestamp(ctx context.Context, block uint64) (time.Time, error) {
+	return r.blockTimestamp(ctx, fmt.Sprintf("0x%x", block))
+}
+
+// LatestBlockTimestamp returns the chain head's timestamp, avoiding local-clock skew in
+// cadence decisions.
+func (r *RPCClient) LatestBlockTimestamp(ctx context.Context) (time.Time, error) {
+	return r.blockTimestamp(ctx, "latest")
+}
+
+func (r *RPCClient) blockTimestamp(ctx context.Context, block string) (time.Time, error) {
 	var result struct {
 		Timestamp string `json:"timestamp"`
 	}
-	if err := r.call(ctx, "eth_getBlockByNumber", []any{fmt.Sprintf("0x%x", block), false}, &result); err != nil {
+	if err := r.call(ctx, "eth_getBlockByNumber", []any{block, false}, &result); err != nil {
 		return time.Time{}, err
 	}
 	seconds, err := parseHexBig(result.Timestamp)
@@ -124,6 +134,9 @@ func parseHexBig(value string) (*big.Int, error) {
 	value = strings.TrimSpace(value)
 	if len(value) < 3 || !strings.HasPrefix(value, "0x") {
 		return nil, fmt.Errorf("%q is not 0x hex", value)
+	}
+	if strings.HasPrefix(value[2:], "-") || strings.HasPrefix(value[2:], "+") {
+		return nil, fmt.Errorf("signed hex quantity %q is not allowed", value)
 	}
 	parsed, ok := new(big.Int).SetString(value[2:], 16)
 	if !ok {

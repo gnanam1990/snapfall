@@ -14,19 +14,21 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/testnetops"
 )
 
+const arcTestnetChainID uint64 = 5042002
+
 func main() {
 	deploymentPath := flag.String("deployment", "../deployments/arc-testnet.json", "current deployment artifact")
 	contractsRoot := flag.String("contracts-root", "../contracts", "Foundry project root")
 	account := flag.String("account", os.Getenv("SNAPFALL_DEPLOYER_ACCOUNT"), "Foundry keystore account name")
 	flag.Parse()
 
-	if err := run(context.Background(), *deploymentPath, *contractsRoot, *account, time.Now()); err != nil {
+	if err := run(context.Background(), *deploymentPath, *contractsRoot, *account); err != nil {
 		fmt.Fprintln(os.Stderr, "redeploy testnet:", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, deploymentPath, contractsRoot, account string, now time.Time) error {
+func run(ctx context.Context, deploymentPath, contractsRoot, account string) error {
 	account = strings.TrimSpace(account)
 	if account == "" {
 		return fmt.Errorf("deployer account is required; import one with cast wallet import")
@@ -34,6 +36,12 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string, now
 	deployment, err := chaincfg.Load(deploymentPath, os.LookupEnv)
 	if err != nil {
 		return err
+	}
+	if deployment.Network.ChainID != arcTestnetChainID {
+		return fmt.Errorf(
+			"deployment artifact chain ID %d is not Arc testnet %d",
+			deployment.Network.ChainID, arcTestnetChainID,
+		)
 	}
 	source, err := testnetops.NewRPCClient(deployment.Network.RPCURL, nil)
 	if err != nil {
@@ -43,13 +51,26 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string, now
 	if err != nil {
 		return err
 	}
-	if chainID != deployment.Network.ChainID {
-		return fmt.Errorf("RPC chain ID %d does not match deployment chain ID %d", chainID, deployment.Network.ChainID)
+	if chainID != arcTestnetChainID {
+		return fmt.Errorf("RPC chain ID %d is not Arc testnet %d", chainID, arcTestnetChainID)
+	}
+	guardPath := deploymentPath + ".redeploy-guard.json"
+	lastBroadcastAt, err := testnetops.ReadRedeployMarker(guardPath, arcTestnetChainID)
+	if err != nil {
+		return err
 	}
 	if err := testnetops.CheckRedeployCadence(
-		ctx, source, deployment.Network.StartBlock, now, 48*time.Hour,
+		ctx, source, deployment.Network.StartBlock, lastBroadcastAt, 48*time.Hour,
 	); err != nil {
 		return err
+	}
+	signer, err := testnetops.NewCastFunder(account, deployment.Network.RPCURL)
+	if err != nil {
+		return err
+	}
+	sender, err := signer.Address(ctx)
+	if err != nil {
+		return fmt.Errorf("resolving deployment sender: %w", err)
 	}
 
 	command := exec.CommandContext(
@@ -58,6 +79,7 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string, now
 		"--root", contractsRoot,
 		"--rpc-url", deployment.Network.RPCURL,
 		"--account", account,
+		"--sender", sender,
 		"--broadcast",
 	)
 	command.Stdin = os.Stdin
@@ -65,6 +87,13 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string, now
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("forge deployment: %w", err)
+	}
+	broadcastAt, err := source.LatestBlockTimestamp(ctx)
+	if err != nil {
+		return fmt.Errorf("deployment broadcast succeeded but reading chain time for the redeploy guard failed: %w", err)
+	}
+	if err := testnetops.WriteRedeployMarker(guardPath, arcTestnetChainID, broadcastAt); err != nil {
+		return fmt.Errorf("deployment broadcast succeeded but the redeploy guard was not recorded: %w", err)
 	}
 	fmt.Println("Deployment broadcast. Verify the addresses, then update deployments/arc-testnet.json.")
 	return nil
