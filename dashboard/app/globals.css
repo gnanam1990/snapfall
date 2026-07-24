@@ -156,7 +156,7 @@ a { color: inherit; text-decoration: none; }
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.activity-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.activity-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
 .activity-live.is-waiting { color: var(--warn); border-color: #574314; background: #201806; }
 .activity-filters { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .activity-filter {
@@ -188,6 +188,7 @@ a { color: inherit; text-decoration: none; }
 }
 .activity-item {
   --actor-color: var(--accent);
+
   position: relative;
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) minmax(126px, auto);
@@ -228,9 +229,9 @@ a { color: inherit; text-decoration: none; }
 .activity-copy { min-width: 0; }
 .activity-identity { display: flex; align-items: baseline; gap: 8px; }
 .activity-identity strong { font-size: 14px; }
-.activity-identity span { color: var(--muted-2); font-size: 11.5px; }
+.activity-identity span { color: var(--muted); font-size: 11.5px; }
 .activity-copy p { margin: 5px 0 0; color: #cfdae4; font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
-.activity-meta { min-width: 126px; color: var(--muted-2); text-align: right; font-size: 11.5px; }
+.activity-meta { min-width: 126px; color: var(--muted); text-align: right; font-size: 11.5px; }
 .activity-meta time { font-variant-numeric: tabular-nums; }
 .activity-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-top: 8px; }
 .activity-job {

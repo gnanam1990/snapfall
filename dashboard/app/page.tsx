@@ -13,30 +13,24 @@ import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
 import ActiveJobs from '@/components/ActiveJobs';
 
-const EMPTY_POOL: PoolStats = {
-  tvlUsdc: '0',
-  utilizationBps: 0,
-  feesAccruedUsdc: '0',
-  reserveUsdc: '0',
-  orgRateBps: 0,
-};
-
 export default function OverviewPage() {
   const [snap, setSnap] = useState<OverviewSnapshot | null>(null);
-  const [treasury, setTreasury] = useState('0');
+  const [treasury, setTreasury] = useState<string | null>(null);
   const [pool, setPool] = useState<PoolStats | null>(null);
-  const [advances, setAdvances] = useState<OpenAdvance[]>([]);
+  const [advances, setAdvances] = useState<OpenAdvance[] | null>(null);
   const [activity, setActivity] = useState<ActivityMessage[]>([]);
 
   const onMessage = useCallback((msg: StreamMessage) => {
     if (msg.kind === 'snapshot') {
       setSnap(msg.snapshot);
-      setTreasury(msg.snapshot.treasuryUsdc ?? '0');
-      // The real H2 daemon starts before chain projections, so null money aggregates
-      // are a valid snapshot—not a reason to hide daemon activity behind a loader.
-      setPool(msg.snapshot.pool ?? EMPTY_POOL);
-      setAdvances(msg.snapshot.openAdvances ?? []);
-      setActivity((msg.snapshot.recentEvents ?? []).map(humanizeLegacyEvent));
+      setTreasury(msg.snapshot.treasuryUsdc);
+      setPool(msg.snapshot.pool);
+      setAdvances(msg.snapshot.openAdvances);
+      const recent = (msg.snapshot.recentEvents ?? []).map(humanizeLegacyEvent);
+      setActivity((previous) => {
+        const ids = new Set(recent.map((item) => item.id));
+        return [...recent, ...previous.filter((item) => !ids.has(item.id))].slice(0, 30);
+      });
     } else {
       const next = humanizeStreamEvent(msg);
       setActivity((prev) => [next, ...prev.filter((item) => item.id !== next.id)].slice(0, 30));
@@ -60,7 +54,7 @@ export default function OverviewPage() {
 
   const status = useEventStream('/api/events/stream', onMessage);
 
-  if (!snap || !pool) {
+  if (!snap) {
     return (
       <>
         <div className="topbar">
@@ -85,15 +79,23 @@ export default function OverviewPage() {
         )}
       </div>
 
-      <TreasuryHero treasuryUsdc={treasury} orgRateBps={pool.orgRateBps} />
+      <TreasuryHero treasuryUsdc={treasury} orgRateBps={pool?.orgRateBps ?? null} />
 
       <div className="grid cols-4 mt">
-        <StatCard label="Pool TVL" value={<>{formatUsdc(pool.tvlUsdc)} <span className="u">USDC</span></>} sub="seeded by demo LPs" />
-        <StatCard label="Utilization" value={formatBps(pool.utilizationBps)} sub="drawn / TVL · cap 80%" />
+        <StatCard
+          label="Pool TVL"
+          value={pool ? <>{formatUsdc(pool.tvlUsdc)} <span className="u">USDC</span></> : '—'}
+          sub={pool ? 'seeded by demo LPs' : 'awaiting chain indexer'}
+        />
+        <StatCard
+          label="Utilization"
+          value={pool ? formatBps(pool.utilizationBps) : '—'}
+          sub={pool ? 'drawn / TVL · cap 80%' : 'awaiting chain indexer'}
+        />
         <StatCard
           label="Fees accrued"
-          value={<>{formatUsdc(pool.feesAccruedUsdc)} <span className="u">USDC</span></>}
-          sub={`first-loss reserve ${formatUsdc(pool.reserveUsdc)}`}
+          value={pool ? <>{formatUsdc(pool.feesAccruedUsdc)} <span className="u">USDC</span></> : '—'}
+          sub={pool ? `first-loss reserve ${formatUsdc(pool.reserveUsdc)}` : 'awaiting chain indexer'}
         />
         <StatCard label="Pending approvals" value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
       </div>
@@ -107,7 +109,7 @@ export default function OverviewPage() {
           </div>
           <div className="card">
             <p className="card-title">Open advances</p>
-            <AdvancesTable advances={advances} />
+            {advances === null ? <div className="empty">Awaiting chain indexer.</div> : <AdvancesTable advances={advances} />}
           </div>
           <div className="card">
             <p className="card-title">Active jobs</p>

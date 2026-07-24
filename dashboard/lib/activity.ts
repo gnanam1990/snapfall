@@ -281,7 +281,7 @@ export function humanizeStreamEvent(message: Extract<StreamMessage, { kind: 'eve
     amountUsdc: amount,
     at: event.at,
     kind: event.kind,
-    jobId: event.jobId || event.entityId,
+    jobId: event.jobId || (event.kind === 'RateChanged' ? undefined : event.entityId),
     explorerUrl: pickString(event.payload, 'explorerUrl', 'explorer_url'),
   };
 }

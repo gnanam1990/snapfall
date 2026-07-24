@@ -21,29 +21,46 @@ const REQUEST_ID = 'apr_demo_premium';
 const INTENT_HASH = `0x${'ab'.repeat(32)}`;
 
 function h2Event(event: FinancialEvent): { source: 'daemon' | 'chain'; event: StreamEvent } {
-  const base = { jobId: event.jobId, at: event.ts };
+  const daemonBase = { jobId: event.jobId, at: event.ts };
+  const chainBase = { entityId: event.jobId, at: event.ts };
   const amount = event.amountUsdc;
   switch (event.type) {
     case 'job.funded':
       return {
         source: 'chain',
-        event: { ...base, kind: 'JobFunded', actor: 'funding', payload: { amountAtomic: amount, explorerUrl: event.explorerUrl } },
+        event: {
+          ...chainBase,
+          kind: 'JobFunded',
+          actor: 'funding',
+          payload: { amountAtomic: amount, explorerUrl: event.explorerUrl },
+        },
       };
     case 'advance.issued':
       return {
         source: 'chain',
-        event: { ...base, kind: 'AdvanceIssued', actor: 'funding', payload: { amountAtomic: amount, explorerUrl: event.explorerUrl } },
+        event: {
+          ...chainBase,
+          kind: 'AdvanceIssued',
+          actor: 'funding',
+          payload: {
+            org: '0x0000000000000000000000000000000000000000',
+            principalAtomic: amount,
+            feeAtomic: '250000',
+            rateBps: 5000,
+            explorerUrl: event.explorerUrl,
+          },
+        },
       };
     case 'payment.delivered':
       return {
         source: 'daemon',
-        event: { ...base, kind: 'payment.executed', actor: 'approval', payload: { amountUsdc: amount } },
+        event: { ...daemonBase, kind: 'payment.executed', actor: 'approval', payload: { amountUsdc: amount } },
       };
     case 'approval.requested':
       return {
         source: 'daemon',
         event: {
-          ...base,
+          ...daemonBase,
           kind: 'approval.requested',
           actor: 'approval',
           payload: {
@@ -64,7 +81,7 @@ function h2Event(event: FinancialEvent): { source: 'daemon' | 'chain'; event: St
       return {
         source: 'daemon',
         event: {
-          ...base,
+          ...daemonBase,
           kind: 'approval.request_alternative',
           actor: 'approval',
           payload: { request_id: REQUEST_ID, by: 'anandan', reason: 'Too expensive — find a cheaper source.' },
@@ -74,7 +91,7 @@ function h2Event(event: FinancialEvent): { source: 'daemon' | 'chain'; event: St
       return {
         source: 'daemon',
         event: {
-          ...base,
+          ...daemonBase,
           kind: 'approval.requested',
           actor: 'worker:due-diligence',
           payload: {
@@ -94,18 +111,33 @@ function h2Event(event: FinancialEvent): { source: 'daemon' | 'chain'; event: St
     case 'job.accepted':
       return {
         source: 'chain',
-        event: { ...base, kind: 'JobSettled', actor: 'funding', payload: { amountAtomic: amount, explorerUrl: event.explorerUrl } },
+        event: {
+          ...chainBase,
+          kind: 'JobSettled',
+          actor: 'funding',
+          payload: {
+            advanceRepaidAtomic: amount,
+            operatorNetAtomic: '12250000',
+            explorerUrl: event.explorerUrl,
+          },
+        },
       };
     case 'rate.updated':
       return {
         source: 'chain',
-        event: { ...base, kind: 'RateChanged', actor: 'funding', payload: {} },
+        event: {
+          entityId: '0x0000000000000000000000000000000000000000',
+          at: event.ts,
+          kind: 'RateChanged',
+          actor: 'funding',
+          payload: { org: '0x0000000000000000000000000000000000000000', rateBps: 5500 },
+        },
       };
     default:
       return {
         source: 'daemon',
         event: {
-          ...base,
+          ...daemonBase,
           kind: 'brain.msg.brain.job_update',
           actor: 'brain',
           payload: { payload: { message: event.summary } },

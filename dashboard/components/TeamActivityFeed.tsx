@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ActivityFilter, ActivityMessage } from '@/lib/activity';
 import { formatUsdc, isSafeExplorerUrl, relativeTime } from '@/lib/format';
 
@@ -29,10 +29,16 @@ export default function TeamActivityFeed({
   live?: boolean;
 }) {
   const [filter, setFilter] = useState<ActivityFilter>('all');
+  const [now, setNow] = useState(() => Date.now());
   const visible = useMemo(
     () => (filter === 'all' ? messages : messages.filter((message) => message.filter === filter)),
     [filter, messages],
   );
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   return (
     <section className="activity" aria-labelledby="activity-title">
@@ -41,7 +47,7 @@ export default function TeamActivityFeed({
           <h2 id="activity-title">Team activity</h2>
           <span className={live ? 'activity-live' : 'activity-live is-waiting'}>{live ? 'Live' : 'Reconnecting'}</span>
         </div>
-        <div className="activity-filters" aria-label="Filter team activity">
+        <div className="activity-filters" role="group" aria-label="Filter team activity">
           {FILTERS.map((item) => (
             <button
               className={filter === item.value ? 'activity-filter is-active' : 'activity-filter'}
@@ -82,7 +88,7 @@ export default function TeamActivityFeed({
                 ) : null}
               </div>
               <div className="activity-meta">
-                <time dateTime={message.at}>{relativeTime(message.at)}</time>
+                <time dateTime={message.at}>{relativeTime(message.at, now)}</time>
                 <div className="activity-tags">
                   {message.jobId ? <span className="activity-job">{message.jobId}</span> : null}
                   {message.amountUsdc ? <strong>{formatUsdc(message.amountUsdc)} USDC</strong> : null}
