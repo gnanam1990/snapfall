@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatBps, formatUsdcExact, isSafeExplorerUrl, relativeTime } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import Badge from '@/components/Badge';
 import type {
   FloatLossTotals,
   FloatOpenAdvance,
@@ -214,7 +215,11 @@ function OpenAdvances({
                     <td>{formatUsdcExact(advance.feeUsdc)} <span className="u">USDC</span></td>
                     <td>{formatBps(advance.rateBps)}</td>
                     <td>{openedAt ? relativeTime(openedAt) : '—'}</td>
-                    <td><span className="float-issued"><i />{advance.status}</span></td>
+                    {/* Was a hand-rolled dot-plus-label span, .float-issued, which painted every
+                        row in the positive tint. advance.status is AdvanceStatus, so it can also be
+                        Repaid or WrittenOff, and a written-off advance rendering green is a lie the
+                        markup could tell. Badge keys the tint off the state name, so it cannot. */}
+                    <td><Badge kind={advance.status} /></td>
                     <td>
                       {explorerUrl && isSafeExplorerUrl(explorerUrl) ? (
                         <a href={explorerUrl} target="_blank" rel="noreferrer">View ↗</a>

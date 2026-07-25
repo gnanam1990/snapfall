@@ -80,3 +80,29 @@ jobs:
       - name: Verify the real Circle V1 fixture when supplied
         if: ${{ hashFiles('sidecar/fixtures/v1-circle-payment.json') != '' }}
         run: npm run verify:circle-facilitator-fixture -- fixtures/v1-circle-payment.json
+
+  # dashboard/ had no CI job at all, so its ~45 TS/TSX/CSS files were never typechecked,
+  # tested or built by anything but the author's machine: PRs #40, #42, #43 and #44 all
+  # landed on local verification alone. This job closes that gap and makes the owner-facing
+  # surface fail the same way the sidecar does. Note the build step is the first place the
+  # native SWC path runs at all, since Windows Application Control blocks that binary on the
+  # author's machine, so a break here is expected to surface in CI before anywhere else.
+  dashboard:
+    name: Dashboard typecheck, tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

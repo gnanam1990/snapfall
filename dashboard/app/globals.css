@@ -36,11 +36,25 @@
   --border-2: #2a3947;
   --border-3: #263544;
 
-  /* type */
+  /* type. In dark the worst case is the LIGHTEST surface a token can land on, the mirror of
+     light's rule, so these are checked against --panel-2 #161e29 and the page radial's
+     --bg-glow-top #10202a rather than against --bg.
+     --muted-2 was #5f7186: 3.56:1 on --panel, 3.35:1 on --panel-2, 3.32:1 on --bg-glow-top. It
+     shipped that way because fixing it changes existing dark rendering, and only light was
+     corrected at the time (deferred from review #43). The large-text 3:1 exemption never applied:
+     this token styles .float-metric small at 10.5px, .job-event-meta and .ring-hint at 11.5px and
+     .sidebar-foot at 12px, all normal text. #75879a is the MINIMAL lightening that clears 4.5:1 on
+     every surface the token actually lands on (--panel 4.83, --panel-2 4.54, --bg-glow-top 4.51,
+     --bg-2 5.05, --well 4.79, --scrim over --well 4.82), which preserves the largest separation
+     still available from --muted, 1.23:1. Light's ramp separation is 1.32:1 and dark cannot match
+     it while clearing AA, the same squeeze documented in the light block. Dark captions therefore
+     render slightly lighter than before: that is the intended, visible cost of the fix.
+     --panel-3 measures 4.25:1 and is not a counter-example, it carries no --muted-2 text (its one
+     use is the .utilization-track bar). */
   --text: #e6edf3;
   --text-2: #c9d4df;
   --muted: #8697a8;
-  --muted-2: #5f7186;
+  --muted-2: #75879a;
 
   /* accent (teal): the brand hue and the money-in-motion hue */
   --accent: #2dd4bf;
@@ -86,6 +100,13 @@
 
   --violet: #a78bfa;
   --tick: rgba(134, 151, 168, 0.45);
+  /* The soft focus wash used where a field cannot carry a full outline (.watcher-config packs its
+     inputs against a hairline grid). It has to be a per-theme token, not one shared alpha: the
+     same 45% mix measured 2.67:1 in dark and 2.03:1 in light against the composited field, and the
+     alpha that reaches the 3:1 a focus indicator owes is 50% in dark but 67% in light, so one
+     bumped number would fix dark and leave light failing (deferred from review #43). Both values
+     carry margin over their own floor: dark 55% = 3.37:1, light 70% = 3.23:1. */
+  --focus-wash: color-mix(in srgb, var(--sky) 55%, transparent);
   /* the activity-feed avatar plate: how much actor hue, mixed into what */
   --avatar-tint: 16%;
   --avatar-tint-base: var(--bg-2);
@@ -134,18 +155,25 @@
   --border-2: #cbd3dc;
   --border-3: #d5dce4;
 
-  /* The type ramp. Every step clears 4.5:1 against the DARKEST surface it can land on
-     (--well-2 #eaeef3), not merely against white: 14.13 / 8.12 / 5.98 / 4.54.
+  /* The type ramp. Every step clears 4.5:1 against the DARKEST surface it can land on, not merely
+     against white. That surface is --bg-glow-top #e6ecf4, the page radial's 0% stop, and not
+     --well-2 #eaeef3 as this note previously said: .float-live-meta small renders --muted-2 over
+     the radial in the top right of the float page, exactly where the stop is strongest. Measured
+     there the ramp is 13.85 / 7.96 / 5.86 / 4.58, and --muted-2 had to move from #5f6d7d, which
+     was 4.68 on --well-2 but 4.45 on --bg-glow-top: the AA miss was smaller than the dark one but
+     the same miss (found while fixing dark's --muted-2, see the note in :root).
      An earlier draft had --muted-2 at #7c8b9a (3.00:1 worst) and excused it as large-text-only.
      That was wrong: this token styles .float-metric small at 10.5px, .job-event-meta and
      .ring-hint at 11.5px and .sidebar-foot at 12px, all normal text (review: cubic on #43).
      Fixing only --muted-2 collapsed it into --muted, because AA on small text over light
      surfaces leaves little room below --muted, so --muted moved down too and the ramp keeps four
-     distinguishable steps. Light --muted at 5.98:1 now mirrors dark's 5.95:1. */
+     distinguishable steps. Light --muted at 5.86:1 worst still mirrors dark's 5.55:1 worst.
+     Separation between the bottom two steps is 1.28:1 here and 1.23:1 in dark: that is as much as
+     AA leaves, and it is why neither theme can push --muted-2 further from --muted. */
   --text: #16202b;
   --text-2: #3a4757;
   --muted: #4d5b69;
-  --muted-2: #5f6d7d;
+  --muted-2: #5d6b7b;
 
   /* 5.47:1 on white, 4.97:1 on the off-white well */
   --accent: #0f766e;
@@ -194,6 +222,9 @@
 
   --violet: #6d28d9;
   --tick: rgba(92, 107, 122, 0.4);
+  /* 70%, not dark's 55%: --sky is darker here but the field it washes is near white, so the same
+     alpha buys far less separation. 3.23:1 against the composited field (see the dark note). */
+  --focus-wash: color-mix(in srgb, var(--sky) 70%, transparent);
   /* less hue, and over --panel not --bg-2: a light plate must stay lighter than its glyph */
   --avatar-tint: 12%;
   --avatar-tint-base: var(--panel);
@@ -496,7 +527,12 @@ table.t { width: 100%; border-collapse: collapse; }
 .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--border-2); color: var(--muted); }
 .badge.Funded, .badge.Accepted, .badge.Repaid { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
 .badge.InProgress, .badge.Delivered, .badge.DeliveryReady { color: var(--sky); border-color: var(--sky-border); background: var(--sky-bg); }
-.badge.Issued { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+/* --accent-border, not --accent-dim: --accent-dim is a FILL token (it paints .nav-link.active) and
+   in light it is lighter than the --accent-bg it would edge, 1.11:1, so the pill lost its border
+   while every sibling state kept one (pos 1.38, warn 1.38, sky 1.40, neg 1.45). --accent-border
+   lands in that band at 1.41:1 light, and reads 2.19:1 in dark against 1.39-1.86 for the siblings,
+   a slightly firmer edge there rather than a missing one (deferred from review #43). */
+.badge.Issued { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg); }
 .badge.Failed, .badge.Refunded, .badge.Cancelled, .badge.WrittenOff { color: var(--neg); border-color: var(--neg-border); background: var(--neg-bg); }
 .badge.AwaitingFunding { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
 .badge.Draft { color: var(--muted-2); }
@@ -916,6 +952,10 @@ table.t { width: 100%; border-collapse: collapse; }
 .portal-status { margin: 20px 0; }
 .portal-body { color: var(--text); line-height: 1.55; margin: 0 0 20px; }
 .portal-accepted { color: var(--pos); }
+/* Deliberately still --accent-dim, unlike .badge.Issued and .job-chip.is-open. Here the border
+   sits on a solid --accent fill rather than a tint, and --accent-dim is the DARKER of the two
+   there: 6.52:1 dark / 4.62:1 light against the fill, where --accent-border would drop it to
+   4.18:1 / 3.64:1. Swapping it would weaken the primary CTA's edge, not fix it. */
 .portal-accept {
   width: 100%; min-height: 46px; border-radius: 10px; border: 1px solid var(--accent-dim);
   background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 700; font-size: 15px; cursor: pointer;
@@ -1261,7 +1301,7 @@ table.t { width: 100%; border-collapse: collapse; }
 .watcher-config input::placeholder { color: var(--muted-2); }
 .watcher-config input:focus-visible {
   border-radius: 4px;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sky) 45%, transparent);
+  box-shadow: 0 0 0 2px var(--focus-wash);
 }
 .watcher-config input:disabled { opacity: 0.7; }
 .watcher-readonly code {
@@ -1380,7 +1420,8 @@ table.t { width: 100%; border-collapse: collapse; }
 .job-figure { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .job-figure-muted { font-size: 17px; font-weight: 600; color: var(--muted); }
 .job-chip { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-2); }
-.job-chip.is-open { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+/* Same swap, same reason as .badge.Issued above. */
+.job-chip.is-open { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg); }
 .job-chip.is-repaid { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
 
 /* lifecycle rail */
@@ -1561,3 +1602,157 @@ table.t { width: 100%; border-collapse: collapse; }
 /* Sized in a block so the empty pre-mount span holds the same footprint and nothing reflows
    when the icon appears. */
 .theme-toggle-icon { width: 15px; height: 15px; display: block; fill: none; stroke: currentColor; stroke-width: 1.7; }
+
+/* ══ Card system ══
+ *
+ * Backs components/Card.tsx, components/Badge.tsx and components/PageHeader.tsx, ported from the
+ * feat/ui-rework branch. That branch expressed the same system in Tailwind utilities plus
+ * framer-motion; this dashboard has neither dependency and is staying that way, so what is ported
+ * is the visual system and the component API, not the implementation. Every colour resolves through
+ * a token that already existed: the port adds no literal and no hue.
+ *
+ * Mapping from the branch's token names: --color-card -> --panel, --color-border -> --border,
+ * --color-divider -> --border, --color-well -> --inset, --color-faint -> --muted-2,
+ * --color-muted -> --muted, --color-accent -> --accent, --shadow-card -> --shadow.
+ *
+ * Two things from the branch are deliberately dropped rather than translated. The card's "inset top
+ * highlight in dark" is a light-leak decoration, and the branch's filled status pills carried a
+ * tinted fill per state; both pull against the flat, monochrome, semantic-colour-only register this
+ * UI is built in, and the highlight would have needed a new white literal to express. Surfaces here
+ * are flat fills separated by hairlines and one shadow token, with no gradient and no glow.
+ *
+ * .card-shell is a sibling of .card, not a replacement: .card keeps its gradient and its 12px
+ * radius for the pages that already use it, and nothing here restyles it.
+ *
+ * Contrast, computed rather than eyeballed, dark / light, worst case across the three surfaces a
+ * card can paint (--panel, --panel-2, .card-well):
+ *   .card-heading, --text        14.20 / 15.19
+ *   .card-meta, --muted-2         4.54 / 5.03
+ *   .card-body prose, --text-2   11.16 / 8.74
+ *   .page-header-sub, --muted     5.55 / 5.86  (this one sits on the page radial, not a card)
+ *   .status-badge worst tint      4.54 / 4.63  (--muted-2 dark, --warn light)
+ * .page-header h1 in --text is 14.08 / 13.85 on the same radial. The hairlines are not text and are
+ * not held to 4.5: --border reads 1.24 / 1.28 on --panel.
+ */
+.card-shell {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+/* A real header row, so a card's title is a landmark a screen reader can jump to and not a styled
+   paragraph. 46px is the floor, not the height: a two-line title grows the row. */
+.card-head {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.card-heading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* CardTitle, the back-compat kicker, is the same heading standing alone inside a body. */
+.card-heading-block { margin-bottom: 16px; }
+.card-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.card-body { padding: 20px; }
+/* The nested canvas for visuals. --inset rather than --well because it is an alpha over whatever
+   surface it lands on, so it recedes from its parent in both themes instead of only in light:
+   1.03:1 dark and 1.08:1 light against --panel, where --well would give 1.01:1 dark. At that
+   separation the recession is really carried by the hairline, which is why the border is not
+   optional here. */
+.card-well {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--inset);
+}
+
+/* Status as a dot plus a label rather than a filled pill: the same information with one hue
+   instead of three, which is what keeps a table of twelve states quiet. The dot inherits
+   currentcolor, so each state is a single declaration and the tint cannot drift from the text.
+   The kind names are the contract's state names, so they are the class names too, matching the
+   .badge.<State> convention this file already uses. */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.status-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: currentcolor;
+}
+.status-badge.Funded, .status-badge.Accepted, .status-badge.Repaid { color: var(--pos); }
+.status-badge.InProgress, .status-badge.Delivered, .status-badge.DeliveryReady { color: var(--sky); }
+.status-badge.Issued { color: var(--accent); }
+.status-badge.AwaitingFunding { color: var(--warn); }
+.status-badge.Failed, .status-badge.Refunded, .status-badge.WrittenOff { color: var(--neg); }
+.status-badge.Draft, .status-badge.Cancelled { color: var(--muted-2); }
+
+/* Page header: one bold line and a muted lede, the register the rest of the product uses. Sibling
+   of .topbar/.page-title, which the current pages still use. */
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0 24px;
+}
+.page-header-text { min-width: 0; }
+.page-header h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 3.4vw, 2.2rem);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+.page-header-sub {
+  max-width: 560px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: clamp(0.9rem, 2vw, 1rem);
+  line-height: 1.65;
+}
+.page-header-aside { flex: none; }
+@media (min-width: 640px) {
+  .page-header { padding-top: 16px; }
+}
+/* The branch animated these three nodes with framer-motion's fadeUp and a per-node stagger. Two
+   keyframes and a delay reproduce it without the dependency, and without making PageHeader a
+   client component: it has no state, so as plain CSS it renders on the server. */
+@keyframes page-header-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+/* Staggered on the three leaves, not on the wrapper: nesting one rise inside another would
+   compound both the transform and the opacity. */
+.page-header h1, .page-header-sub, .page-header-aside {
+  animation: page-header-rise 0.32s ease-out both;
+}
+.page-header-sub { animation-delay: 0.06s; }
+.page-header-aside { animation-delay: 0.12s; }
+/* Entry motion is decorative, and `animation: none` on a `both`-filled animation returns the node
+   to its resting opacity rather than freezing it at 0. */
+@media (prefers-reduced-motion: reduce) {
+  .page-header h1, .page-header-sub, .page-header-aside { animation: none; }
+}
