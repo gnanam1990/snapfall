@@ -7,6 +7,7 @@ import { humanizeLegacyEvent, humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdc, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import TreasuryHero from '@/components/TreasuryHero';
+import MoneyGraph from '@/components/MoneyGraph';
 import StatCard from '@/components/StatCard';
 import TeamActivityFeed from '@/components/TeamActivityFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
@@ -80,6 +81,16 @@ export default function OverviewPage() {
       </div>
 
       <TreasuryHero treasuryUsdc={treasury} orgRateBps={pool?.orgRateBps ?? null} />
+
+      <div className="mt">
+        <MoneyGraph
+          latest={activity[0] ?? null}
+          treasuryUsdc={treasury}
+          pool={pool}
+          jobPriceUsdc={snap.activeJobs?.[0]?.priceUsdc ?? null}
+          live={status === 'live'}
+        />
+      </div>
 
       <div className="grid cols-4 mt">
         <StatCard
