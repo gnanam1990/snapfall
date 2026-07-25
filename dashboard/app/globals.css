@@ -1161,3 +1161,66 @@ table.t { width: 100%; border-collapse: collapse; }
   .watcher-config label,
   .watcher-readonly { grid-template-columns: 1fr; gap: 4px; padding: 8px 0; }
 }
+
+/* ── V7 job detail ── */
+.job-grid { display: grid; gap: 2px; }
+.job-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--border); }
+.job-row:first-child { border-top: none; }
+.job-row-label { color: var(--muted); font-size: 12.5px; }
+.job-row-value { font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; word-break: break-all; }
+
+.job-figure { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.job-figure-muted { font-size: 17px; font-weight: 600; color: var(--muted); }
+.job-chip { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-2); }
+.job-chip.is-open { color: var(--accent); border-color: var(--accent-dim); background: #0c1f1d; }
+.job-chip.is-repaid { color: var(--pos); border-color: #1c4634; background: #0e2018; }
+
+/* lifecycle rail */
+.job-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 0; }
+.job-stage { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 108px; font-size: 12.5px; position: relative; }
+.job-stage::after { content: ""; flex: 1; height: 2px; background: var(--border); margin-right: 6px; }
+.job-stage:last-child::after { display: none; }
+.job-stage-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border-2); flex: none; }
+.job-stage-name { color: var(--muted-2); white-space: nowrap; }
+.job-stage.is-done .job-stage-dot { background: var(--pos); }
+.job-stage.is-done .job-stage-name { color: var(--muted); }
+.job-stage.is-done::after { background: #1c4634; }
+.job-stage.is-current .job-stage-dot { background: var(--accent); box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.16); }
+.job-stage.is-current .job-stage-name { color: var(--text); font-weight: 700; }
+.job-alt-terminal { margin: 0; font-size: 13px; color: var(--warn); }
+
+/* budget bar */
+.job-budget { display: grid; gap: 8px; }
+.job-budget-bar { height: 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border); overflow: hidden; }
+.job-budget-fill { height: 100%; background: linear-gradient(90deg, var(--sky), var(--accent)); transition: width 0.4s ease; }
+.job-budget-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.job-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
+.job-links a { color: var(--sky); }
+
+/* per-job timeline */
+.job-timeline { list-style: none; margin: 0; padding: 0; position: relative; }
+.job-timeline::before { content: ""; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 1px; background: linear-gradient(var(--border-2), var(--border), transparent); }
+.job-event { display: flex; gap: 12px; padding: 8px 0; position: relative; }
+.job-event-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); margin-top: 5px; flex: none; z-index: 1; }
+.job-event.tone-funding .job-event-dot { background: var(--accent); }
+.job-event.tone-owner .job-event-dot { background: var(--warn); }
+.job-event.tone-qa .job-event-dot { background: var(--violet); }
+.job-event.tone-worker .job-event-dot { background: var(--sky); }
+.job-event.tone-brain .job-event-dot { background: var(--pos); }
+.job-event-body { min-width: 0; flex: 1; }
+.job-event-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.job-event-actor { font-size: 12.5px; font-weight: 700; }
+.job-event-text { font-size: 13px; flex: 1; min-width: 0; }
+.job-event-amount { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
+.job-event-meta { display: flex; gap: 8px; margin-top: 1px; font-size: 11.5px; color: var(--muted-2); }
+
+@media (max-width: 640px) {
+  .job-stages { flex-direction: column; }
+  .job-stage::after { display: none; }
+  .job-row { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .job-row-value { text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .job-budget-fill { transition: none; }
+}
