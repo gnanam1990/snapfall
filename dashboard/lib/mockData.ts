@@ -43,9 +43,15 @@ const ADVANCE_OPEN: OpenAdvance = {
   status: 'Issued',
 };
 
+/** The fixture carries a vault id so the V7 detail path is exercised locally exactly as it
+ *  will be in a real run; the chain will honestly report this id as unknown, and the detail
+ *  page says so and points at .demo/current.json for the seeded run's real id. */
+const DEMO_VAULT_JOB_ID = '0x' + 'd1'.repeat(32);
+
 const JOB = (state: JobSummary['state']): JobSummary[] => [
   {
     jobId: 'job_104',
+    vaultJobId: DEMO_VAULT_JOB_ID,
     customer: 'Acme Labs',
     title: 'Competitor analysis · 3 AI coding products',
     state,
