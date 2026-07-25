@@ -1,7 +1,6 @@
 package approval
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -264,7 +263,55 @@ func TestCanonicalWire_ShapeAndGoldenVector(t *testing.T) {
 		t.Fatalf("wire canonical form diverged from H3 §3.3:\n got: %s\nwant: %s", c, want)
 	}
 
-	// The golden pair for the cross-language test: JS must produce this exact hash from
-	// the same intent (keccak256 over utf8 of the canonical string).
-	fmt.Printf("GOLDEN VECTOR canonical=%s\nGOLDEN VECTOR wireHash=%s\n", c, WireHash(in))
+	// PINNED, not printed. This hash is asserted on the TypeScript side too, by
+	// sidecar/src/h3-golden-vector-test.ts (npm run test:h3-vectors), so a divergence in
+	// either canonicalizer fails a test in whichever language moved.
+	//
+	// It used to be a Printf, which meant nothing actually held the two implementations
+	// together. Every derived value hangs off this hash -- paymentId, authNonce and the
+	// approvalToken HMAC are all computed over it -- so a single escaping difference does not
+	// degrade gracefully. It makes every payment fail INTENT_HASH_MISMATCH, and it would
+	// surface for the first time when the daemon is first wired to the sidecar.
+	if got := WireHash(in); got != goldenGV1WireHash {
+		t.Fatalf("GV-1 wire hash diverged from the cross-language golden vector:\n got: %s\nwant: %s\n"+
+			"the TypeScript side asserts the same constant; whichever canonicalizer changed is wrong", got, goldenGV1WireHash)
+	}
+}
+
+// The cross-language golden vectors. The identical constants live in
+// sidecar/src/h3-golden-vector-test.ts.
+const (
+	goldenGV1WireHash = "0x1230b4badedc3411ed0cb4f53d6be2ad5f7fccda30e9569bbd66c785e97e9e04"
+	goldenGV2WireHash = "0x6a306e8ebe6e8f3b0ceadf22f9b7d7de490f19a7513e925c617232b6dd0893ed"
+)
+
+// GV-2 exists because GV-1 contains no character JSON has to escape, and escaping is exactly
+// where two independent canonicalizers drift.
+//
+// The specific trap: Go encoding/json escapes &, < and > as \u0026, \u003c, \u003e by
+// default, while JS JSON.stringify emits them literally. jsonString defends against that with
+// SetEscapeHTML(false) (hash.go:87), and normalizeLineSeparators handles the mirror-image case
+// where Go escapes U+2028/U+2029 and JS does not. Both defences are load-bearing, and neither
+// was pinned across languages until now.
+func TestCanonicalWire_GoldenVectorEscaping(t *testing.T) {
+	in := vectorIntent()
+	in.IntentID = "pi_esc_01"
+	in.Purpose = `Benchmark A&B <compare> "quoted" / 50% off`
+	in.Resource = "http://127.0.0.1:4021/v1/benchmark?a=1&b=2"
+
+	c := CanonicalWire(in)
+	// Literal, not \u0026 / \u003c / \u003e: SetEscapeHTML(false) doing its job.
+	if !strings.Contains(c, "A&B <compare>") {
+		t.Fatalf("HTML characters were escaped; JS leaves them literal so the hashes will diverge:\n%s", c)
+	}
+	// The double quote IS escaped, in both languages.
+	if !strings.Contains(c, `\"quoted\"`) {
+		t.Fatalf("double quotes are not backslash-escaped:\n%s", c)
+	}
+	if !strings.Contains(c, "?a=1&b=2") {
+		t.Fatalf("query string was altered:\n%s", c)
+	}
+	if got := WireHash(in); got != goldenGV2WireHash {
+		t.Fatalf("GV-2 wire hash diverged from the cross-language golden vector:\n got: %s\nwant: %s", got, goldenGV2WireHash)
+	}
 }
