@@ -76,8 +76,14 @@ type Beat = 'fund' | 'snap' | 'spend' | 'reject' | 'repay' | 'fall' | 'flywheel'
  * allowed to drain the escrow and pay the operator. Conflating them animated a full waterfall
  * twice and let a leg-only event zero the operator's share (review: PR #40).
  */
-function beatFor(kind: string): Beat | null {
-  switch (kind) {
+/**
+ * Maps a stream message to an animation beat.
+ *
+ * Takes the whole message, not just the kind, because the kind is not sufficient: the stream
+ * normalizes a pending approval and an executed purchase to the same `approval.requested`.
+ */
+function beatFor(msg: ActivityMessage): Beat | null {
+  switch (msg.kind) {
     case 'JobFunded':
     case 'job.funded':
       return 'fund';
@@ -89,6 +95,14 @@ function beatFor(kind: string): Beat | null {
     case 'payment.delivered':
     case 'approval.alternative_found':
       return 'spend';
+    // An approval request is only money leaving the treasury once it is APPROVED. The demo's
+    // 0.06 alternative purchase arrives this way (the route rewrites
+    // `approval.alternative_found` to `approval.requested` with state APPROVED), so without this
+    // the graph's API total stopped at 0.04 and the replacement purchase animated nothing. The
+    // pending 4.00 escalation normalizes to the SAME kind and must not be treated as a spend,
+    // which is exactly why the state is the discriminator rather than the kind.
+    case 'approval.requested':
+      return msg.approvalState === 'approved' ? 'spend' : null;
     case 'approval.reject':
     case 'approval.rejected':
     case 'approval.request_alternative':
@@ -107,6 +121,24 @@ function beatFor(kind: string): Beat | null {
       return null;
   }
 }
+
+/**
+ * Identity of a spend, used to avoid counting one purchase twice.
+ *
+ * A single x402 purchase is reported by BOTH the daemon (`payment.executed`) and the chain
+ * (`ExpenseRecorded`, once the expense is recorded against the vault), and the H2 envelope
+ * carries both vocabularies on one stream. Without this the API node accumulates double what was
+ * actually spent, which is the graph asserting money that never moved.
+ *
+ * Keyed on job plus amount because that is all the two sources share: the daemon event has no
+ * receipt hash to join on. The consequence is that two purchases of the SAME amount on the same
+ * job collapse into one, which is a visible under-count in a case the demo does not contain, and
+ * strictly better than over-counting every purchase in the case it does.
+ */
+function spendKey(msg: ActivityMessage): string {
+  return `${msg.jobId ?? '-'}|${msg.amountUsdc ?? '-'}`;
+}
+
 
 const CAPTION: Record<Beat, string> = {
   fund: 'The customer funded the JobVault',
@@ -142,6 +174,9 @@ export default function MoneyGraph({
   // discipline the rest of the Overview follows (review: PR #40).
   const [escrow, setEscrow] = useState<string | null>(null);
   const [spent, setSpent] = useState<string | null>(null);
+  // Spends already counted this cycle, so a purchase reported by both the daemon and the chain
+  // is animated and totalled exactly once.
+  const countedSpends = useRef<Set<string>>(new Set());
   const [operatorNet, setOperatorNet] = useState<string | null>(null);
   const [beat, setBeat] = useState<Beat | null>(null);
   const [drops, setDrops] = useState<Drop[]>([]);
@@ -163,7 +198,7 @@ export default function MoneyGraph({
     if (!latest || latest.id === lastId.current) return;
     lastId.current = latest.id;
 
-    const next = beatFor(latest.kind);
+    const next = beatFor(latest);
     if (!next) return;
 
     const spawn = (specs: Omit<Drop, 'id'>[]) => {
@@ -190,12 +225,19 @@ export default function MoneyGraph({
         setEscrow(amount > 0n ? amount.toString() : null);
         setSpent('0');
         setOperatorNet('0');
+        // New cycle, new ledger: the looping demo replays the same job id and amounts, so keeping
+        // the old keys would make every repeat take show zero spend.
+        countedSpends.current.clear();
         spawn([{ pipe: 'fund', kind: 'fund', dur: 1.1, begin: 0 }]);
         break;
       case 'snap':
         spawn([{ pipe: 'snap', kind: 'snap', dur: 0.75, begin: 0 }]);
         break;
-      case 'spend':
+      case 'spend': {
+        // One purchase, one count, whichever source reports it first.
+        const key = spendKey(latest);
+        if (countedSpends.current.has(key)) break;
+        countedSpends.current.add(key);
         // Accumulate only from a known base; before any spend event the total is unknown.
         setSpent((s) => (s === null ? amount.toString() : (atomic(s) + amount).toString()));
         spawn([
@@ -203,6 +245,7 @@ export default function MoneyGraph({
           { pipe: 'spend', kind: 'spend', dur: 1.0, begin: 0.18 },
         ]);
         break;
+      }
       case 'reject':
         // A refusal moves no money: caption only, deliberately no droplet.
         break;
@@ -241,6 +284,7 @@ export default function MoneyGraph({
         setEscrow('0');
         setSpent('0');
         setOperatorNet('0');
+        countedSpends.current.clear();
         break;
     }
   }, [latest]);

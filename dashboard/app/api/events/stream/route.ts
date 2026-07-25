@@ -122,6 +122,15 @@ function h2Event(event: FinancialEvent): { source: 'daemon' | 'chain'; event: St
           },
         },
       };
+    case 'job.draft.created':
+      // Preserved rather than falling through to the default rewrite below. The default turns
+      // every unrecognized kind into `brain.msg.brain.job_update`, which silently made the money
+      // graph's 'reset' beat dead code: the demo loop's closing "waiting for the next job" state
+      // could never be reached, and the graph relied on the NEXT funding event to clear itself.
+      return {
+        source: 'daemon',
+        event: { ...daemonBase, kind: 'job.draft.created', actor: 'brain', payload: {} },
+      };
     case 'rate.updated':
       return {
         source: 'chain',
