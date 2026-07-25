@@ -1,0 +1,921 @@
+#!/usr/bin/env bash
+# spine_run: run the whole demo spine on Arc testnet, once, and append one pass/fail
+# line to docs/spine-runs/spine-runs.tsv.
+#
+# WHY THIS EXISTS. docs/WORK-SPLIT.md §6 commits all three of us to a daily spine run from
+# Wed 29 Jul with "pass/fail logged in repo", and a red spine outranks every feature. Six
+# V-task done-when clauses (V1, V7, V9, V10, V11, V12) cannot be closed by a unit test at
+# all: they say "a full spine run", "a live spine run", "the real RateChanged event". Until
+# this existed the spine had only ever been driven by hand, one command at a time, which is
+# exactly how a green repo and a red demo coexist. See docs/SPINE-RUNS.md.
+#
+# WHAT IT IS NOT. It does not start the standing services and it does not judge the UI.
+# The sidecar, the paid seller API, the indexer and the dashboard are the operator's job
+# (docs/RUNBOOK.md); this refuses to start unless the two it must talk to already answer.
+# The dashboard beats (V7, V10, V11) end in a printed human checklist, never in a PASS this
+# script invented for a screen it cannot see.
+#
+# THE HONESTY RULE, load-bearing. A beat is PASS only when this script READ THE EFFECT BACK
+# from something other than the request it just made: chain state through chainops, a durable
+# sidecar payment record, an API response carrying the new state. Anything it could not read
+# back is UNVERIFIED, never PASS. The daemon's own honest stops (advance.pending_chain,
+# settlement.pending_chain, purchase.pending_settlement, approved-pending-integration) are
+# precisely the shapes that produce UNVERIFIED here, and the script greps the daemon log for
+# them so the operator gets the reason with the verdict.
+#
+# It composes what already exists rather than reimplementing it: scripts/seed_demo for the
+# fund beat (which does its own on-chain read-back), cmd/chainops for every chain assertion,
+# the H2 owner API for the owner's two clicks, the sidecar's durable store for the purchases.
+#
+#   ./scripts/spine_run --dry-run     print the plan and the preflight; touch nothing
+#   ./scripts/spine_run               one full run, one log line
+#   ./scripts/spine_run --no-seed     attach to the job already in .demo/current.json
+set -euo pipefail
+
+# ── identity, paths, endpoints ─────────────────────────────────────────────────
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+deployment="$repo_root/deployments/arc-testnet.json"
+deployment_rel="../deployments/arc-testnet.json"
+state_file="$repo_root/.demo/current.json"
+log_file="${SPINE_RUN_LOG:-$repo_root/docs/spine-runs/spine-runs.tsv}"
+
+owner_addr="${SNAPFALL_API_ADDR:-127.0.0.1:4010}"
+owner_base="http://$owner_addr"
+sidecar_base="${SIDECAR_BASE_URL:-http://127.0.0.1:4020}"
+seller_base="${SNAPFALL_SELLER_URL:-http://127.0.0.1:4021}"
+dashboard_base="${SNAPFALL_DASHBOARD_URL:-http://127.0.0.1:3000}"
+
+# The sidecar's own default is '.data/payments.json' relative to sidecar/, so a relative
+# SIDECAR_STORE_PATH is resolved the same way the sidecar resolves it.
+sidecar_store="${SIDECAR_STORE_PATH:-.data/payments.json}"
+case "$sidecar_store" in
+	/*|[A-Za-z]:[\\/]*) : ;;
+	*) sidecar_store="$repo_root/sidecar/$sidecar_store" ;;
+esac
+
+# The demo figures, from PRD §5.1. Micros, never floats: 40000 = 0.04 USDC.
+profile_micros=40000    # step 7, the auto-approved source
+premium_micros=4000000  # step 9, the escalation bait
+bench_micros=60000      # step 9, the cheaper alternative
+
+# Bounded waits, seconds. Every poll has a deadline: a spine run must end, red or green.
+wait_health=90
+wait_job_known=90
+wait_chain=180
+wait_purchase=300
+wait_approval=300
+wait_terminal="${SPINE_RUN_TASK_TIMEOUT:-900}"
+wait_ready=180
+
+# ── flags ─────────────────────────────────────────────────────────────────────
+dry_run=0
+do_seed=1
+check_wallets=1
+job_label=""
+
+usage() {
+	cat <<'EOF'
+usage: ./scripts/spine_run [options]
+
+  --dry-run              print the preflight and the beat plan; submit nothing, write nothing
+  --no-seed              skip beat 1's seed and attach to the job in .demo/current.json
+  --skip-wallet-check    skip the read-only wallet balance preflight (saves ~1 RPC round)
+  --job-label NAME       daemon-side job id (default: job_spine_<utc timestamp>)
+  --log PATH             pass/fail log to append to (default docs/spine-runs/spine-runs.tsv)
+  --timeout SECONDS      how long to wait for the DD task to reach its terminal stage
+  -h, --help             this text
+
+Environment: see the preflight output, which names every variable it needs and why.
+EOF
+}
+
+while (($#)); do
+	case "$1" in
+		--dry-run) dry_run=1 ;;
+		--no-seed) do_seed=0 ;;
+		--skip-wallet-check) check_wallets=0 ;;
+		--job-label) shift; job_label="${1:-}" ;;
+		--log) shift; log_file="${1:-}" ;;
+		--timeout) shift; wait_terminal="${1:-}" ;;
+		-h|--help) usage; exit 0 ;;
+		*) printf 'spine_run: unknown option %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+	esac
+	shift
+done
+
+run_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+[[ -n "$job_label" ]] || job_label="job_spine_$run_id"
+run_dir="$repo_root/.demo/spine-runs/$run_id"
+resp_file=""
+curl_log=""
+daemon_bin=""
+chainops_bin=""
+daemon_log=""
+daemon_pid=""
+
+# ── verdict bookkeeping ───────────────────────────────────────────────────────
+# verdict is the run's answer: PASS only if every beat was read back, FAIL on a hard error,
+# UNVERIFIED when a beat ran but could not be confirmed. first_bad names the beat the log
+# line blames: the FIRST non-PASS, because that is the one worth debugging in the morning.
+verdict="PASS"
+first_bad="-"
+first_note="all beats observed"
+beat_no="0"
+beat_name="PREFLIGHT"
+log_armed=0
+logged=0
+git_sha="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+git_dirty=""
+if ! git -C "$repo_root" diff --quiet HEAD 2>/dev/null; then git_dirty="+dirty"; fi
+
+say()  { printf '%s\n' "$*"; }
+info() { printf '   %s\n' "$*"; }
+
+beat() {
+	beat_no="$1"; beat_name="$2"
+	printf '\n── beat %s · %s · %s\n' "$1" "$2" "$3"
+}
+
+record_bad() { # record_bad FAIL|UNVERIFIED <note>
+	local kind="$1"; shift
+	if [[ "$first_bad" == "-" ]]; then
+		first_bad="$beat_no-$beat_name"
+		first_note="$*"
+	fi
+	if [[ "$kind" == "FAIL" ]]; then
+		verdict="FAIL"
+	elif [[ "$verdict" == "PASS" ]]; then
+		verdict="UNVERIFIED"
+	fi
+}
+
+pass()       { printf '   PASS        %s\n' "$*"; }
+unverified() { printf '   UNVERIFIED  %s\n' "$*"; record_bad UNVERIFIED "$*"; }
+soft_fail()  { printf '   FAIL        %s\n' "$*"; record_bad FAIL "$*"; }
+die()        { printf '   FAIL        %s\n' "$*" >&2; record_bad FAIL "$*"; exit 1; }
+
+refuse() { # preflight refusal: nothing ran, so nothing is logged
+	printf '\nspine_run REFUSED before beat 1: %s\n' "$*" >&2
+	printf 'Nothing was submitted and nothing was logged. A missing prerequisite is not a red spine.\n' >&2
+	exit 2
+}
+
+# ── small helpers ─────────────────────────────────────────────────────────────
+now() { date -u +%s; }
+
+# usdc_to_micros turns a 6dp decimal string into integer micros. Integer arithmetic only,
+# because money in this repo is never a float.
+usdc_to_micros() {
+	local v="${1:-}" whole frac
+	v="${v//[[:space:]]/}"
+	case "$v" in
+		*.*) whole="${v%%.*}"; frac="${v#*.}"
+		     # A trailing dot is malformed, exactly as cmd/chainops' usdcMicros treats it:
+		     # "1." must not silently become 1.000000.
+		     [[ "$frac" =~ ^[0-9]{1,6}$ ]] || { printf 'invalid USDC amount %s\n' "$1" >&2; return 1; } ;;
+		*)   whole="$v"; frac="" ;;
+	esac
+	[[ "$whole" =~ ^[0-9]+$ ]] || { printf 'invalid USDC amount %s\n' "$1" >&2; return 1; }
+	while ((${#frac} < 6)); do frac="${frac}0"; done
+	printf '%s' "$(( (10#$whole * 1000000) + 10#$frac ))"
+}
+
+micros_to_usdc() { printf '%d.%06d' "$(( ${1} / 1000000 ))" "$(( ${1} % 1000000 ))"; }
+
+# usdc_short is for PROSE ONLY: "0.04" and "4.00" instead of "0.040000" in a beat header,
+# keeping at least the cents so the demo figures read as money. Every comparison and every
+# log field uses micros or the full 6dp string; a trimmed figure never reaches an assertion.
+usdc_short() {
+	local v whole frac
+	v="$(micros_to_usdc "$1")"
+	whole="${v%.*}"
+	frac="${v#*.}"
+	while ((${#frac} > 2)) && [[ "$frac" == *0 ]]; do frac="${frac%0}"; done
+	printf '%s.%s' "$whole" "$frac"
+}
+
+# jsonq evaluates a JavaScript expression over the parsed document in `d` and prints the
+# result ('' for null/undefined). node is already a hard dependency of this repo, and this
+# keeps the script free of a jq requirement the other scripts do not have.
+jsonq() { # jsonq <js-expr over d> <file>
+	node -e '
+const fs = require("fs");
+const d = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const out = Function("d", "return (" + process.argv[1] + ");")(d);
+process.stdout.write(out === undefined || out === null ? "" : String(out));
+' -- "$1" "$2"
+}
+
+# req performs one HTTP call, leaves the body in $resp_file and prints the status code.
+# 000 is curl's own code for "the transport never got a response" (nothing listening,
+# timeout, DNS) and is never treated as success. curl prints that 000 itself, so the
+# failure path must NOT append another one.
+req() { # req METHOD URL [BEARER] [JSON-BODY]
+	local method="$1" url="$2" bearer="${3:-}" body="${4:-}" code=""
+	local -a args=(-sS -m 30 -o "$resp_file" -w '%{http_code}' -X "$method")
+	if [[ -n "$bearer" ]]; then args+=(-H "Authorization: Bearer $bearer"); fi
+	if [[ -n "$body" ]]; then args+=(-H 'Content-Type: application/json' --data "$body"); fi
+	code="$(curl "${args[@]}" "$url" 2>>"$curl_log")" || true
+	printf '%s' "${code:-000}"
+}
+
+probe() { # probe URL -> status code only, no auth, no body (read-only preflight)
+	local code=""
+	code="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null)" || true
+	printf '%s' "${code:-000}"
+}
+
+# chainops reads and writes chain state through the command that already prints tx hashes,
+# explorer links and a loud REVERTED on receipt status 0. Every call runs with cwd=daemon/
+# and the SAME relative deployment path the other scripts use, so config and ABI paths
+# resolve identically no matter where spine_run was invoked from. The built binary is
+# preferred because the chain assertions are polled: `go run` would rebuild per poll.
+chainops() {
+	if [[ -n "$chainops_bin" && -x "$chainops_bin" ]]; then
+		( cd "$repo_root/daemon" && "$chainops_bin" --deployment "$deployment_rel" "$@" )
+	else
+		( cd "$repo_root/daemon" && GOTOOLCHAIN=auto go run ./cmd/chainops --deployment "$deployment_rel" "$@" )
+	fi
+}
+
+# pending_approval finds one PENDING inbox item by its exact atomic amount and prints
+# "requestId<TAB>intentHash<TAB>resource<TAB>expiresAt". The decision POST must carry the
+# intentHash the owner was SHOWN (H2 decision 2), so it is read from the inbox, never assumed.
+pending_approval() { # pending_approval <amount-micros>
+	local code row
+	code="$(req GET "$owner_base/api/v1/approvals" "${SNAPFALL_OWNER_TOKEN:-}")"
+	[[ "$code" == "200" ]] || return 1
+	row="$(jsonq "(() => { const a = (d.approvals || []).find(x => x.amountUsdc === '$1'); return a ? [a.requestId, a.intentHash, a.resource, a.expiresAt].join('\t') : ''; })()" "$resp_file")"
+	[[ -n "$row" ]] || return 1
+	printf '%s' "$row"
+}
+
+daemon_log_has() { # a grep over the daemon's own log; the daemon names its honest stops
+	[[ -n "$daemon_log" && -f "$daemon_log" ]] && grep -q -- "$1" "$daemon_log"
+}
+
+log_tail() {
+	if [[ -n "$daemon_log" && -f "$daemon_log" ]]; then
+		printf '   last daemon lines (%s):\n' "$daemon_log"
+		tail -n 12 "$daemon_log" | sed 's/^/     /'
+	fi
+}
+
+api_alive() { [[ "$(req GET "$owner_base/api/v1/health" "${SNAPFALL_OWNER_TOKEN:-}")" == "200" ]]; }
+
+stop_daemon() {
+	[[ -n "$daemon_pid" ]] || return 0
+	if kill -0 "$daemon_pid" 2>/dev/null; then
+		kill "$daemon_pid" 2>/dev/null || true
+		local i
+		for i in 1 2 3 4 5 6 7 8 9 10; do
+			kill -0 "$daemon_pid" 2>/dev/null || break
+			sleep 1
+		done
+		if kill -0 "$daemon_pid" 2>/dev/null; then kill -9 "$daemon_pid" 2>/dev/null || true; fi
+	fi
+	wait "$daemon_pid" 2>/dev/null || true
+	daemon_pid=""
+}
+
+write_log_line() {
+	(( logged == 1 )) && return 0
+	logged=1
+	local note="${first_note//	/ }"
+	note="${note//$'\n'/ }"
+	mkdir -p "$(dirname "$log_file")"
+	if [[ ! -s "$log_file" ]]; then
+		printf '# Snapfall spine runs. One line per run, appended by scripts/spine_run.\n' >>"$log_file"
+		printf '# started_utc\tgit_sha\tverdict\tfirst_bad_beat\tvault_job_id\tnote\n' >>"$log_file"
+	fi
+	printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+		"$run_started" "$git_sha$git_dirty" "$verdict" "$first_bad" "${vault_job:--}" "$note" >>"$log_file"
+	say ""
+	say "logged to $log_file:"
+	tail -n 1 "$log_file" | sed 's/^/   /'
+}
+
+on_exit() {
+	local rc=$?
+	stop_daemon
+	# An unexpected abort (set -e) is a FAIL, not a silence: the log must not be able to
+	# say PASS for a run that died on line 300.
+	if (( rc != 0 )) && [[ "$verdict" != "FAIL" ]]; then
+		verdict="FAIL"
+		if [[ "$first_bad" == "-" ]]; then
+			first_bad="$beat_no-$beat_name"
+			first_note="aborted with exit code $rc"
+		fi
+	fi
+	if (( log_armed == 1 && dry_run == 0 )); then write_log_line; fi
+	if [[ -d "$run_dir" ]]; then say "run artifacts: $run_dir"; fi
+	return $rc
+}
+
+# ── the plan ──────────────────────────────────────────────────────────────────
+print_plan() {
+	cat <<EOF
+
+The plan, seven beats, in demo order (PRD §5.1):
+
+  1 FUND         scripts/seed_demo tops the pool to the exposure-cap floor, mints a fresh
+                 job id, funds the escrow from the customer wallet, and re-reads the chain.
+                 Closes V12's "reset -> full spine" half.
+  2 SNAP         POST /api/v1/jobs/$job_label/advance, approve it in the inbox, then read
+                 FloatPool.openAdvanceOf back from chain. Proves the snap and the H2 approval
+                 path; PASS needs principal == the seed's expected advance.
+  3 SPEND        the DD worker buys the $(usdc_short $profile_micros) source through the sidecar; verified from the
+                 sidecar's durable store, not from the worker's own report. Closes V1 live.
+  4 REJECT       the $(usdc_short $premium_micros) source escalates; this runner answers request_alternative with a
+                 cost reason (internal/worker/worker.go interpretReason keys the adaptation
+                 on the reason text). The rejection beat, end to end.
+  5 ALTERNATIVE  the worker adapts and buys the $(usdc_short $bench_micros) source; verified from the store again.
+  6 SETTLE       mint the customer accept credential, POST the customer Accept, then read
+                 JobVault status == Accepted and openAdvanceOf open == false from chain.
+                 The fall. Closes V9's "on-chain settlement tx" clause.
+  7 RATE         re-read the org's live advance rate keylessly (seed_demo --dry-run --org)
+                 and require it to have risen. The flywheel. Closes V11's RateChanged clause.
+
+Human-observed, never asserted here: V7 (job detail renders every transition), V10 (money
+graph animates with zero manual triggers), V11 (the ring moves on screen). Watch
+$dashboard_base during the run; the checklist prints at the end.
+EOF
+}
+
+# ── preflight ─────────────────────────────────────────────────────────────────
+# Refuse early and name exactly what to set. A run that dies at beat 6 because a key was
+# unset has burned a testnet cycle, a faucet cooldown, and twenty minutes.
+preflight_missing=0
+need_cmd() {
+	if ! command -v "$1" >/dev/null 2>&1; then
+		printf '   MISSING  command %-6s  %s\n' "$1" "$2"
+		preflight_missing=1
+	else
+		printf '   ok       command %s\n' "$1"
+	fi
+}
+need_env() {
+	local name="$1" why="$2"
+	if [[ -z "${!name:-}" ]]; then
+		printf '   MISSING  export %-32s %s\n' "$name=..." "$why"
+		preflight_missing=1
+	else
+		printf '   ok       %s is set\n' "$name"
+	fi
+}
+
+preflight() {
+	say "── beat 0 · PREFLIGHT · refuse now, not at beat 6"
+
+	# Commands. `go` is only checked for PRESENCE: this script never runs a version probe,
+	# it just needs the toolchain that seed_demo, chainops and the daemon build require.
+	need_cmd git  "the log line records the sha the run proves"
+	need_cmd curl "every H2 and health call"
+	need_cmd node "JSON parsing, so this script needs no jq the rest of the repo lacks"
+	need_cmd go   "scripts/seed_demo, cmd/chainops and the daemon build all need it"
+
+	# Keys and addresses. Three parties, because the contracts treat them as distinct
+	# (see scripts/README.md): the operator draws the advance, only the designated customer
+	# may fund its own escrow (SC-JV-001), and the LP supplies pool liquidity.
+	need_env TREASURY_PRIVATE_KEY          "operator: signs requestAdvance and createJob"
+	need_env SNAPFALL_CUSTOMER_PRIVATE_KEY "customer: funds its own escrow (SC-JV-001) and signs acceptDelivery"
+	need_env SNAPFALL_LP_PRIVATE_KEY       "pool LP: must NOT be the operator, or the 0.00 start is a lie"
+	need_env SNAPFALL_TREASURY_ADDRESS     "deployment fundedWallets.operatorTreasury"
+	need_env SNAPFALL_CUSTOMER_ADDRESS     "deployment fundedWallets.externalCustomer"
+
+	# The daemon's two lanes. Missing either wires NO payment lane, and every purchase then
+	# stops at purchase.pending_settlement: beats 3 and 5 could only ever be UNVERIFIED.
+	need_env SNAPFALL_OWNER_TOKEN "H2 bearer; this runner is the owner's two clicks"
+	need_env SIDECAR_AUTH_TOKEN   "H3 bearer, 32+ bytes, or the daemon wires no payment lane"
+	need_env H2_APPROVAL_SECRET   "HMAC key for the approvalToken, or every pay is 401"
+
+	if [[ -n "${SIDECAR_AUTH_TOKEN:-}" && ${#SIDECAR_AUTH_TOKEN} -lt 32 ]]; then
+		printf '   MISSING  SIDECAR_AUTH_TOKEN is %d bytes; the daemon requires 32+ and wires no lane below that\n' "${#SIDECAR_AUTH_TOKEN}"
+		preflight_missing=1
+	fi
+
+	# The deployment config, and the chain it claims to be.
+	if [[ ! -f "$deployment" ]]; then
+		printf '   MISSING  %s (A1 deployment config; every downstream reads chain config from it)\n' "$deployment"
+		preflight_missing=1
+	else
+		local chain_id
+		chain_id="$(jsonq 'd.network.chainId' "$deployment" 2>/dev/null || printf '')"
+		if [[ "$chain_id" != "5042002" ]]; then
+			printf '   MISSING  %s says chainId=%s; the spine runs on Arc testnet 5042002\n' "$deployment" "${chain_id:-unparseable}"
+			preflight_missing=1
+		else
+			printf '   ok       deployment config, chain 5042002, JobVault %s\n' \
+				"$(jsonq 'd.contracts.jobVault.address' "$deployment")"
+		fi
+	fi
+
+	# The standing services. Not started here on purpose: they are the operator's, per
+	# docs/RUNBOOK.md, and a runner that starts them hides which one was down.
+	local code
+	code="$(probe "$sidecar_base/health")"
+	if [[ "$code" != "200" ]]; then
+		printf '   MISSING  sidecar %s/health -> %s. Start it:  (cd sidecar && npm run service)\n' "$sidecar_base" "$code"
+		preflight_missing=1
+	else
+		printf '   ok       sidecar answers %s/health\n' "$sidecar_base"
+	fi
+
+	# A paid route must answer 402 unpaid. That is the seller's whole contract, and asking
+	# costs nothing: no payment header, no state change.
+	code="$(probe "$seller_base/v1/company-profile")"
+	if [[ "$code" != "402" ]]; then
+		printf '   MISSING  seller %s/v1/company-profile -> %s, expected 402. Start it:  (cd sidecar && npm run seller)\n' \
+			"$seller_base" "$code"
+		preflight_missing=1
+	else
+		printf '   ok       seller answers 402 payment-required on a paid route\n'
+	fi
+
+	# The owner API port must be FREE: this runner launches its own daemon, twice, and a
+	# stray daemon on 4010 would silently receive the owner's clicks.
+	code="$(probe "$owner_base/api/v1/health")"
+	if [[ "$code" != "000" ]]; then
+		printf '   MISSING  something already answers %s (code %s). Stop it; this run starts its own daemon.\n' \
+			"$owner_base" "$code"
+		preflight_missing=1
+	else
+		printf '   ok       %s is free, so this run owns the daemon it talks to\n' "$owner_base"
+	fi
+
+	# Advisory only. The indexer and the dashboard are what make V7/V10/V11 observable, but
+	# their absence does not make the money wrong, so it must not refuse the run.
+	code="$(probe "$dashboard_base/")"
+	if [[ "$code" == "000" ]]; then
+		printf '   note     dashboard %s is not answering: the V7/V10/V11 beats will have no witness\n' "$dashboard_base"
+	else
+		printf '   ok       dashboard answers at %s\n' "$dashboard_base"
+	fi
+
+	if (( do_seed == 0 )); then
+		if [[ ! -f "$state_file" ]]; then
+			printf '   MISSING  --no-seed needs %s from an earlier ./scripts/seed_demo\n' "$state_file"
+			preflight_missing=1
+		else
+			printf '   ok       attaching to the job in %s\n' "$state_file"
+		fi
+	fi
+
+	printf '   note     git %s%s, run id %s, job label %s\n' "$git_sha" "$git_dirty" "$run_id" "$job_label"
+	(( preflight_missing == 0 )) || return 1
+	return 0
+}
+
+# ── dry run stops here ────────────────────────────────────────────────────────
+if (( dry_run == 1 )); then
+	resp_file="/dev/null"
+	curl_log="/dev/null"
+	say "spine_run --dry-run · nothing is submitted, no file is written, no process is started"
+	say ""
+	set +e
+	preflight
+	pf=$?
+	set -e
+	print_plan
+	say ""
+	say "Not done in a dry run: no seed, no daemon, no purchase, no settlement, no log line."
+	if (( pf != 0 )); then
+		say "PREFLIGHT INCOMPLETE: fix every MISSING line above before a real run."
+		exit 1
+	fi
+	say "PREFLIGHT COMPLETE: a real run may proceed."
+	exit 0
+fi
+
+# ── real run ──────────────────────────────────────────────────────────────────
+mkdir -p "$run_dir"
+resp_file="$run_dir/http-last.json"
+curl_log="$run_dir/curl.log"
+: >"$curl_log"
+trap on_exit EXIT
+
+say "Snapfall spine run $run_id · git $git_sha$git_dirty"
+if ! preflight; then refuse "the preflight above lists what is missing"; fi
+
+if (( check_wallets == 1 )); then
+	say ""
+	say "── beat 0b · WALLETS · read-only balance check (./scripts/testnet-ops)"
+	if ! "$repo_root/scripts/testnet-ops"; then
+		refuse "a funded wallet is below its minimum; top up (faucet is a human path) then rerun"
+	fi
+fi
+
+print_plan
+
+# ── beat 1 · FUND ─────────────────────────────────────────────────────────────
+log_armed=1
+beat 1 FUND "external customer pays, escrow holds it, treasury still at 0.00"
+if (( do_seed == 1 )); then
+	if ! "$repo_root/scripts/seed_demo"; then
+		die "seed_demo failed; nothing was escrowed, so no later beat can mean anything"
+	fi
+else
+	info "--no-seed: attaching to the job already recorded in $state_file"
+	no_seed_attached=1
+fi
+[[ -f "$state_file" ]] || die "$state_file was not written; seed_demo records the run's job id there"
+
+vault_job="$(jsonq 'd.jobId' "$state_file")"
+price_usdc="$(jsonq 'd.priceUsdc' "$state_file")"
+advance_usdc="$(jsonq 'd.expectedAdvanceUsdc' "$state_file")"
+rate_before="$(jsonq 'd.advanceRateBps' "$state_file")"
+[[ -n "$vault_job" && -n "$advance_usdc" && -n "$rate_before" ]] || die "$state_file is missing jobId/expectedAdvanceUsdc/advanceRateBps"
+advance_micros="$(usdc_to_micros "$advance_usdc")"
+price_micros="$(usdc_to_micros "$price_usdc")"
+
+info "vault job    $vault_job"
+info "escrowed     $price_usdc USDC, rate $rate_before bps, the snap should draw $advance_usdc USDC"
+# seed_demo re-reads the chain itself (status Funded, no advance open, TVL above the floor)
+# and fails loudly otherwise, so its success IS a chain read-back, not a claim. Under --no-seed
+# nothing was read this run: the recorded state file can be days old and its escrow already
+# settled, so the beat is unverified rather than inherited from a previous run's evidence.
+if (( ${no_seed_attached:-0} == 1 )); then
+	unverified "--no-seed: the escrow was funded by an earlier run and was not re-read from chain, so beat 1 proves nothing about the current chain state"
+else
+	pass "escrow funded and re-read from chain by seed_demo (status Funded, no advance open)"
+fi
+
+# ── build both binaries once ───────────────────────────────────────────────────
+# The daemon is built rather than `go run`, because with `go run` the pid we hold is the
+# toolchain's, not the daemon's, and stopping it would leave the daemon holding the db.
+bin_suffix=""
+case "${OSTYPE:-}" in msys*|cygwin*|win32) bin_suffix=".exe" ;; esac
+daemon_bin="$run_dir/snapfalld$bin_suffix"
+chainops_bin="$run_dir/chainops$bin_suffix"
+say ""
+say "building the daemon and chainops once into $run_dir"
+( cd "$repo_root/daemon" && GOTOOLCHAIN=auto go build -o "$daemon_bin" ./cmd/snapfall ) \
+	|| die "go build ./cmd/snapfall failed; fix the build before spending a testnet cycle"
+( cd "$repo_root/daemon" && GOTOOLCHAIN=auto go build -o "$chainops_bin" ./cmd/chainops ) \
+	|| die "go build ./cmd/chainops failed; without it no beat can be checked against chain"
+
+start_daemon() { # start_daemon <phase-label> [extra daemon args...]
+	local label="$1"; shift
+	daemon_log="$run_dir/daemon-$label.log"
+	# cwd is daemon/ so the db, the memory dir beside it and the manifests resolve exactly
+	# as they do for every other command in the repo (docs/RUNBOOK.md's reset recipe).
+	# exec makes $! the daemon itself, so stop_daemon signals the real process.
+	( cd "$repo_root/daemon" && exec "$daemon_bin" \
+		--deployment "$deployment_rel" --api-addr "$owner_addr" "$@" ) >>"$daemon_log" 2>&1 &
+	daemon_pid=$!
+	info "daemon phase $label pid $daemon_pid, log $daemon_log"
+}
+
+await_api() {
+	local deadline=$(( $(now) + wait_health ))
+	while (( $(now) < deadline )); do
+		if api_alive; then return 0; fi
+		sleep 2
+	done
+	return 1
+}
+
+owner_request="Due diligence on a prospective vendor: competitive landscape, industry benchmark summary, and a compliance screen. Customer paid $price_usdc USDC."
+
+say ""
+say "starting the daemon one-shot: owner request -> scope -> owner confirm -> DD task"
+start_daemon a \
+	--owner-job "$job_label" \
+	--owner-vault "$vault_job" \
+	--owner-request "$owner_request"
+
+if ! await_api; then
+	log_tail
+	die "the daemon's H2 API never answered $owner_base/api/v1/health within ${wait_health}s"
+fi
+info "H2 owner API is up at $owner_base"
+
+# ── beat 2 · SNAP ─────────────────────────────────────────────────────────────
+beat 2 SNAP "FloatPool advances against the escrowed receivable, on the owner's approval"
+
+# The proposal 404s until Brain has the job; that is a race with startup, not an error.
+propose_code=""
+deadline=$(( $(now) + wait_job_known ))
+while (( $(now) < deadline )); do
+	propose_code="$(req POST "$owner_base/api/v1/jobs/$job_label/advance" "$SNAPFALL_OWNER_TOKEN")"
+	[[ "$propose_code" == "404" ]] || break
+	sleep 2
+done
+if [[ "$propose_code" != "200" ]]; then
+	info "POST /api/v1/jobs/$job_label/advance -> $propose_code"
+	sed 's/^/     /' "$resp_file" 2>/dev/null || true
+	log_tail
+	die "the advance proposal was refused; no advance can be approved, so the snap did not happen"
+fi
+adv_request="$(jsonq 'd.requestId' "$resp_file")"
+adv_principal="$(jsonq 'd.principalUsdc' "$resp_file")"
+info "proposal $adv_request, principal $adv_principal micros, pending human approval"
+
+# The decision POST binds to the intentHash the owner was SHOWN (H2 decision 2), so read it
+# from the inbox rather than assuming it.
+code="$(req GET "$owner_base/api/v1/approvals" "$SNAPFALL_OWNER_TOKEN")"
+[[ "$code" == "200" ]] || die "GET /api/v1/approvals -> $code"
+adv_hash="$(jsonq "(d.approvals.find(a => a.requestId === '$adv_request') || {}).intentHash" "$resp_file")"
+[[ -n "$adv_hash" ]] || die "the advance request $adv_request is not in the approvals inbox"
+
+code="$(req POST "$owner_base/api/v1/approvals/$adv_request/decision" "$SNAPFALL_OWNER_TOKEN" \
+	"$(printf '{"kind":"approve","by":"spine_run","reason":"the snap: working capital against the escrowed receivable","intentHash":"%s"}' "$adv_hash")")"
+if [[ "$code" != "200" ]]; then
+	sed 's/^/     /' "$resp_file" 2>/dev/null || true
+	die "approving the advance returned $code"
+fi
+info "owner approved $adv_request; Funding executes it under the same Grant gates as a payment"
+
+# Chain truth. The daemon reporting success is not the evidence; openAdvanceOf is.
+adv_open=""
+adv_seen_principal=""
+deadline=$(( $(now) + wait_chain ))
+while (( $(now) < deadline )); do
+	if chainops advance-of "$vault_job" >"$run_dir/advance-of.txt" 2>&1; then
+		sed 's/^/     /' "$run_dir/advance-of.txt"
+		adv_open="$(sed -n 's/.*open=\([a-z]*\).*/\1/p' "$run_dir/advance-of.txt" | tail -n 1)"
+		adv_seen_principal="$(sed -n 's/.*principal=\([0-9]*\).*/\1/p' "$run_dir/advance-of.txt" | tail -n 1)"
+		[[ "$adv_open" == "true" ]] && break
+	else
+		sed 's/^/     /' "$run_dir/advance-of.txt" || true
+	fi
+	sleep 10
+done
+
+if [[ "$adv_open" == "true" && "$adv_seen_principal" == "$advance_micros" ]]; then
+	pass "FloatPool.openAdvanceOf reads principal=$adv_seen_principal micros, open=true, so the snap happened on chain"
+elif [[ "$adv_open" == "true" ]]; then
+	soft_fail "an advance is open but principal=$adv_seen_principal micros, expected $advance_micros (the seed's rate-derived figure)"
+elif daemon_log_has 'advance.pending_chain'; then
+	unverified "the daemon stopped honestly at advance.pending_chain: no chain lane, so no advance was drawn"
+else
+	unverified "openAdvanceOf never showed an open advance within ${wait_chain}s; principal read back: ${adv_seen_principal:-none}"
+fi
+
+# ── beat 3 · SPEND ────────────────────────────────────────────────────────────
+beat 3 SPEND "the DD worker buys the $(usdc_short $profile_micros) source; policy auto-approves"
+
+# The evidence is the sidecar's DURABLE record, not the worker's own progress note: the
+# worker also reports success for approved-pending-integration, which moves no money.
+# SETTLED only. DELIVERED is NOT settled: sidecar/src/seller.ts:217 returns
+# `settlement: 'NOT_BROADCAST'` because broadcasting transferWithAuthorization is the
+# facilitator's job and needs a funded Arc wallet, and H3 section 8 states plainly that
+# "consumers must not treat SETTLED as reachable yet". So a DELIVERED record proves the x402
+# handshake and the signature, and proves nothing about money reaching the chain. Counting it
+# as settled would print PASS for a payment that never left the process, which is the one
+# thing this runner exists not to do.
+paid_record() { # paid_record <micros> -> prints paymentId when a SETTLED record exists
+	[[ -f "$sidecar_store" ]] || return 1
+	local id
+	id="$(jsonq "((Array.isArray(d)?d:[]).find(r => (r.amountPaid || r.amountReserved) === '$1' && r.state === 'SETTLED') || {}).paymentId" "$sidecar_store" 2>/dev/null || printf '')"
+	[[ -n "$id" ]] || return 1
+	printf '%s' "$id"
+}
+
+# delivered_record finds the same payment resting at DELIVERED, so the runner can tell
+# "the handshake worked but nothing settled" apart from "no purchase happened at all".
+delivered_record() { # delivered_record <micros> -> prints paymentId when a DELIVERED record exists
+	[[ -f "$sidecar_store" ]] || return 1
+	local id
+	id="$(jsonq "((Array.isArray(d)?d:[]).find(r => (r.amountPaid || r.amountReserved) === '$1' && r.state === 'DELIVERED') || {}).paymentId" "$sidecar_store" 2>/dev/null || printf '')"
+	[[ -n "$id" ]] || return 1
+	printf '%s' "$id"
+}
+
+# await_paid waits for a settled record, and gives up EARLY when the third argument names an
+# amount that has appeared in the approvals inbox: that means the worker has moved on to the
+# next need, so this purchase will never settle and waiting only burns the next beat's
+# approval window (the inbox item expires on its own clock).
+# await_paid runs inside a command substitution, so it reports the early-bail through a
+# marker FILE, not a variable: a subshell's assignment never reaches this shell.
+bail_marker="$run_dir/await-bailed"
+
+await_paid() { # await_paid <micros> <seconds> [bail-when-this-amount-is-pending]
+	local target="$1" secs="$2" bail="${3:-}"
+	local deadline=$(( $(now) + secs )) id
+	while (( $(now) < deadline )); do
+		if id="$(paid_record "$target")"; then printf '%s' "$id"; return 0; fi
+		if [[ -n "$bail" ]] && pending_approval "$bail" >/dev/null 2>&1; then
+			: >"$bail_marker"
+			return 1
+		fi
+		# The daemon gone means no further purchase can happen. Look once more (the store
+		# write and the process exit race), then stop waiting for something impossible.
+		if ! api_alive; then
+			sleep 2
+			if id="$(paid_record "$target")"; then printf '%s' "$id"; return 0; fi
+			return 1
+		fi
+		sleep 3
+	done
+	return 1
+}
+
+rm -f "$bail_marker"
+if profile_payment="$(await_paid "$profile_micros" "$wait_purchase" "$premium_micros")"; then
+	pass "sidecar store holds a SETTLED $(usdc_short $profile_micros) USDC payment, id $profile_payment (V1's loop, live on chain)"
+elif profile_payment="$(delivered_record "$profile_micros")"; then
+	# The expected outcome until the facilitator broadcast is wired, and the honest one: the
+	# x402 handshake, the EIP-3009 signature and the resource delivery are all real, but the
+	# authorization was never broadcast, so no USDC moved on Arc.
+	unverified "the $(usdc_short $profile_micros) payment rests at DELIVERED, not SETTLED (id $profile_payment): seller.ts:217 returns settlement NOT_BROADCAST, so the x402 handshake and signature are real but nothing reached Arc. V1's clause stays open until a facilitator broadcast is wired; see docs/V3-CIRCLE-SETUP.md"
+elif daemon_log_has 'purchase.pending_settlement'; then
+	unverified "the purchase stopped at purchase.pending_settlement: approval consumed, no money moved, no H3 lane"
+elif daemon_log_has 'approved-pending-integration'; then
+	unverified "policy approved the source but the buy was recorded approved-pending-integration, not settled"
+elif [[ -f "$bail_marker" ]]; then
+	unverified "the worker had already escalated the $(usdc_short $premium_micros) need with no settled $(usdc_short $profile_micros) record on file"
+else
+	unverified "no settled $(usdc_short $profile_micros) record in $sidecar_store within ${wait_purchase}s"
+fi
+
+# ── beat 4 · REJECT ───────────────────────────────────────────────────────────
+beat 4 REJECT "the $(usdc_short $premium_micros) source escalates past policy and the owner refuses it"
+
+premium_row=""
+premium_request=""
+premium_hash=""
+premium_resource=""
+premium_expiry=""
+deadline=$(( $(now) + wait_approval ))
+while (( $(now) < deadline )); do
+	if premium_row="$(pending_approval "$premium_micros")"; then break; fi
+	if ! api_alive; then break; fi
+	sleep 3
+done
+if [[ -n "$premium_row" ]]; then
+	IFS=$'\t' read -r premium_request premium_hash premium_resource premium_expiry <<<"$premium_row"
+fi
+
+if [[ -z "$premium_request" ]]; then
+	unverified "no pending $(usdc_short $premium_micros) approval appeared within ${wait_approval}s; the rejection beat did not happen"
+else
+	info "escalated  $premium_request  $premium_resource  expires $premium_expiry"
+	# request_alternative, not reject: internal/worker/worker.go adapts only on
+	# code owner-alternative_requested AND a reason that mentions cost. A plain reject
+	# ends the branch with no cheaper buy, which is a different (also valid) beat.
+	code="$(req POST "$owner_base/api/v1/approvals/$premium_request/decision" "$SNAPFALL_OWNER_TOKEN" \
+		"$(printf '{"kind":"request_alternative","by":"spine_run","reason":"%s USDC is too expensive for this job budget, find a cheaper source","intentHash":"%s"}' \
+			"$(usdc_short $premium_micros)" "$premium_hash")")"
+	if [[ "$code" == "200" ]]; then
+		pass "owner answered request_alternative on $premium_request; state $(jsonq 'd.state' "$resp_file")"
+	else
+		sed 's/^/     /' "$resp_file" 2>/dev/null || true
+		soft_fail "the decision POST returned $code; the owner's refusal never landed"
+	fi
+fi
+
+# ── beat 5 · ALTERNATIVE ──────────────────────────────────────────────────────
+beat 5 ALTERNATIVE "the worker adapts and buys the $(usdc_short $bench_micros) source instead"
+if bench_payment="$(await_paid "$bench_micros" "$wait_purchase")"; then
+	pass "sidecar store holds a settled $(usdc_short $bench_micros) USDC payment, id $bench_payment, so the worker adapted"
+elif daemon_log_has 'source-abandoned'; then
+	unverified "the worker recorded source-abandoned: discovery found nothing under the rejected price, or the reason did not read as cost"
+else
+	unverified "no settled $(usdc_short $bench_micros) record in $sidecar_store within ${wait_purchase}s"
+fi
+
+# ── the QA gate, then the one-shot's own exit ──────────────────────────────────
+say ""
+say "── check · QA GATE · waiting for the DD task's terminal stage (the QA beat's gate)"
+terminal_line=""
+deadline=$(( $(now) + wait_terminal ))
+while (( $(now) < deadline )); do
+	if daemon_log_has 'dd task terminal'; then
+		terminal_line="$(grep -- 'dd task terminal' "$daemon_log" | tail -n 1)"
+		break
+	fi
+	if ! api_alive; then
+		sleep 3
+		if daemon_log_has 'dd task terminal'; then
+			terminal_line="$(grep -- 'dd task terminal' "$daemon_log" | tail -n 1)"
+		fi
+		break
+	fi
+	sleep 3
+done
+stop_daemon
+if [[ -z "$terminal_line" ]]; then
+	log_tail
+	die "the DD task never reported a terminal stage within ${wait_terminal}s; the delivery is not ready, so there is nothing to accept"
+fi
+info "$terminal_line"
+case "$terminal_line" in
+	*delivery_ready*) info "QA gate: stage delivery_ready, so the QA worker passed the draft (FR-QA-001)" ;;
+	*) info "QA gate: NOT delivery_ready, so beat 6 will refuse, which is the correct behavior" ;;
+esac
+
+# ── beat 6 · SETTLE ───────────────────────────────────────────────────────────
+beat 6 SETTLE "the customer clicks Accept and one atomic tx pays the pool first"
+# Phase B: the one-shot exits when its DD task ends, taking the API with it. The customer's
+# Accept is a SECOND owner-session action, so serve the same db again and let Brain replay
+# the job from the event log, which is also a real test of that replay.
+say ""
+say "restarting the daemon in serve mode over the same db (Brain replays the job from the log)"
+start_daemon b
+if ! await_api; then
+	log_tail
+	die "the serve-mode daemon never answered $owner_base/api/v1/health"
+fi
+
+# The mint 409s while the job is not delivery-ready (a race with replay, worth waiting on)
+# but 503 NOT_WIRED is a build without the customer surface: waiting cannot fix that.
+accept_token=""
+deadline=$(( $(now) + wait_ready ))
+while (( $(now) < deadline )); do
+	code="$(req POST "$owner_base/api/v1/jobs/$job_label/accept-link" "$SNAPFALL_OWNER_TOKEN")"
+	if [[ "$code" == "200" ]]; then
+		accept_token="$(jsonq 'd.acceptToken' "$resp_file")"
+		break
+	fi
+	if [[ "$code" == "503" ]]; then
+		info "accept-link -> 503: the customer surface is not wired in this build"
+		break
+	fi
+	sleep 3
+done
+
+if [[ -z "$accept_token" ]]; then
+	sed 's/^/     /' "$resp_file" 2>/dev/null || true
+	unverified "no customer accept credential could be minted (job not delivery-ready): the fall did not happen"
+else
+	info "minted the per-job customer credential (owner-gated, shown once, never logged)"
+	code="$(req POST "$owner_base/api/v1/customer/jobs/$job_label/accept" "$accept_token")"
+	if [[ "$code" != "200" ]]; then
+		sed 's/^/     /' "$resp_file" 2>/dev/null || true
+		soft_fail "the customer Accept returned $code"
+	else
+		info "customer Accept accepted; daemon state $(jsonq 'd.state' "$resp_file")"
+		# Chain truth for the fall: the job reaches Accepted and the advance is closed.
+		job_status=""
+		settled_open=""
+		deadline=$(( $(now) + wait_chain ))
+		while (( $(now) < deadline )); do
+			if chainops job-status "$vault_job" >"$run_dir/job-status.txt" 2>&1; then
+				sed 's/^/     /' "$run_dir/job-status.txt"
+				job_status="$(cat "$run_dir/job-status.txt")"
+			fi
+			case "$job_status" in *Accepted*) break ;; esac
+			sleep 10
+		done
+		if chainops advance-of "$vault_job" >"$run_dir/advance-of-after.txt" 2>&1; then
+			sed 's/^/     /' "$run_dir/advance-of-after.txt"
+			settled_open="$(sed -n 's/.*open=\([a-z]*\).*/\1/p' "$run_dir/advance-of-after.txt" | tail -n 1)"
+		fi
+		case "$job_status" in
+			*Accepted*)
+				if [[ "$settled_open" == "false" ]]; then
+					pass "JobVault reads Accepted and openAdvanceOf reads open=false: the waterfall repaid the pool first, on chain"
+				else
+					unverified "JobVault reads Accepted but openAdvanceOf still reads open=${settled_open:-unknown}; the repayment leg is unconfirmed"
+				fi
+				;;
+			*)
+				if daemon_log_has 'settlement.pending_chain'; then
+					unverified "the daemon stopped honestly at settlement.pending_chain: no customer chain lane, so nothing settled"
+				else
+					unverified "JobVault never read Accepted within ${wait_chain}s: ${job_status:-no status read}"
+				fi
+				;;
+		esac
+	fi
+fi
+
+# ── beat 7 · RATE ─────────────────────────────────────────────────────────────
+beat 7 RATE "the flywheel: the org's advance rate ticks up after a clean settlement"
+# Keyless and submits nothing: seed_demo --dry-run --org reads the LIVE rate for the org
+# and prints it. Same source of truth the seed used, so the comparison is apples to apples.
+if "$repo_root/scripts/seed_demo" --dry-run --org "$SNAPFALL_TREASURY_ADDRESS" >"$run_dir/rate-after.txt" 2>&1; then
+	rate_after="$(sed -n 's/.*live rate *\([0-9]*\) bps.*/\1/p' "$run_dir/rate-after.txt" | tail -n 1)"
+else
+	sed 's/^/     /' "$run_dir/rate-after.txt" || true
+	rate_after=""
+fi
+if [[ -z "$rate_after" ]]; then
+	unverified "could not read the org's live rate back; see $run_dir/rate-after.txt"
+elif (( rate_after > rate_before )); then
+	next_micros=$(( price_micros * rate_after / 10000 ))
+	pass "rate $rate_before -> $rate_after bps; the next job of $price_usdc USDC unlocks $(usdc_short $next_micros) USDC ($next_micros micros)"
+else
+	unverified "rate is still $rate_after bps (was $rate_before): the flywheel did not tick, so V11's RateChanged clause stays open"
+fi
+
+stop_daemon
+
+# ── the human half ────────────────────────────────────────────────────────────
+cat <<EOF
+
+── watch-with-your-eyes checklist (this script cannot see a screen)
+   V7   job detail rendered every transition: Funded, advance card, expense rows, delivery
+   V10  the money graph animated fund -> snap -> spend droplets -> waterfall, no manual triggers
+   V11  the score ring moved $rate_before -> ${rate_after:-?} bps and showed the next-job line
+   A9   the rejection beat read as a conversation in the activity feed
+   Record these in the log line's note by hand if a human was watching; the script will not.
+
+── verdict
+   $verdict   first non-PASS beat: $first_bad
+   $first_note
+EOF
+
+exit 0

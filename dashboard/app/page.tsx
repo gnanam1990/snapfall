@@ -9,6 +9,7 @@ import { useEventStream } from '@/lib/useEventStream';
 import TreasuryHero from '@/components/TreasuryHero';
 import MoneyGraph from '@/components/MoneyGraph';
 import StatCard from '@/components/StatCard';
+import Card, { CardHeader, CardBody } from '@/components/Card';
 import TeamActivityFeed from '@/components/TeamActivityFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
@@ -113,19 +114,29 @@ export default function OverviewPage() {
 
       <div className="activity-layout mt">
         <TeamActivityFeed messages={activity} live={status === 'live'} />
+        {/* The right rail is three plain surfaces with a kicker, which is exactly what the Card
+            primitives express. Adopting them turns each kicker from a styled <p> into a real <h3>
+            inside a header row, so the rail becomes three headings a screen reader can jump between
+            instead of three anonymous divs. Titles and bodies are unchanged. */}
         <div className="grid" style={{ gap: 16, alignContent: 'start' }}>
-          <div className="card">
-            <p className="card-title">Workforce</p>
-            <WorkforceStrip agents={snap.workforce ?? []} />
-          </div>
-          <div className="card">
-            <p className="card-title">Open advances</p>
-            {advances === null ? <div className="empty">Awaiting chain indexer.</div> : <AdvancesTable advances={advances} />}
-          </div>
-          <div className="card">
-            <p className="card-title">Active jobs</p>
-            <ActiveJobs jobs={snap.activeJobs ?? []} />
-          </div>
+          <Card>
+            <CardHeader title="Workforce" />
+            <CardBody>
+              <WorkforceStrip agents={snap.workforce ?? []} />
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader title="Open advances" />
+            <CardBody>
+              {advances === null ? <div className="empty">Awaiting chain indexer.</div> : <AdvancesTable advances={advances} />}
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader title="Active jobs" />
+            <CardBody>
+              <ActiveJobs jobs={snap.activeJobs ?? []} />
+            </CardBody>
+          </Card>
         </div>
       </div>
     </>
