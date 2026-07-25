@@ -28,6 +28,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -149,23 +150,21 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 	// The rate is chain-authoritative, and so is the exposure the pool already carries. Both
 	// FloatPool caps are checked against the position AFTER issuance, so planning from the new
 	// principal alone can print "ready" and still revert CapExceeded (review finding, PR #41).
-	rateBps, err := readRate(ctx, operator, fp, orgAddr)
+	// One block for all four reads. The floor is a function of the rate, pool assets and both
+	// outstanding balances TOGETHER, so reading them at "latest" four times over can compose a
+	// position that never existed on chain: another org drawing mid-sequence yields a floor that
+	// is arithmetically correct for nothing, and the command prints "ready" anyway
+	// (review: PR #41).
+	at, err := operator.BlockNumber(ctx)
 	if err != nil {
-		return fmt.Errorf("read advanceRate: %w", err)
+		return fmt.Errorf("read block number: %w", err)
 	}
-	currentTVL, err := readUint(ctx, operator, fp, chain.CalldataTotalAssets())
+	snap, err := readPosition(ctx, operator, fp, orgAddr, at)
 	if err != nil {
-		return fmt.Errorf("read totalAssets: %w", err)
+		return err
 	}
-	orgOutstanding, err := readUint(ctx, operator, fp, chain.CalldataOrgOutstanding(orgAddr))
-	if err != nil {
-		return fmt.Errorf("read orgOutstanding: %w", err)
-	}
-	totalOutstanding, err := readUint(ctx, operator, fp, chain.CalldataTotalOutstanding())
-	if err != nil {
-		return fmt.Errorf("read totalOutstanding: %w", err)
-	}
-	exposure := demoseed.Exposure{OrgOutstandingMicros: orgOutstanding, TotalOutstandingMicros: totalOutstanding}
+	rateBps, currentTVL := snap.rateBps, snap.totalAssets
+	exposure := snap.exposure()
 
 	plan, err := demoseed.BuildPlan(priceMicros, rateBps, currentTVL, desiredTVL, exposure)
 	if err != nil {
@@ -173,7 +172,10 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 	}
 
 	if runID == "" {
-		runID = time.Now().UTC().Format("20060102T150405Z")
+		runID, err = newRunID()
+		if err != nil {
+			return err
+		}
 	}
 	jobID := demoseed.JobID(runID)
 	jobHex := "0x" + hex.EncodeToString(jobID[:])
@@ -271,7 +273,8 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 
 	// ── 4. verify the chain agrees before claiming the demo is ready ──
 	fmt.Println()
-	if err := verify(ctx, operator, jv, fp, orgAddr, jobID, plan); err != nil {
+	observedTVL, err := verify(ctx, operator, jv, fp, orgAddr, jobID, plan)
+	if err != nil {
 		return err
 	}
 
@@ -284,7 +287,7 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 		BudgetUSDC:     demoseed.FormatUSDC(budgetMicros),
 		AdvanceUSDC:    demoseed.FormatUSDC(plan.AdvanceMicros),
 		RateBps:        plan.RateBps,
-		PoolTVLUSDC:    demoseed.FormatUSDC(plan.TargetTVLMicros),
+		PoolTVLUSDC:    demoseed.FormatUSDC(observedTVL),
 		RequiredTVL:    demoseed.FormatUSDC(plan.RequiredTVLMicros),
 		ExplorerJobURL: fmt.Sprintf("%s/address/%s", explorer, dep.Contracts.JobVault.Address),
 		SeededAt:       time.Now().UTC().Format(time.RFC3339),
@@ -299,82 +302,123 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 	return nil
 }
 
-// verify re-reads the chain so a green "ready" cannot be a hopeful assumption.
-func verify(ctx context.Context, c *chain.Client, jv, fp, org common.Address, jobID [32]byte, plan demoseed.Plan) error {
-	ret, err := c.CallView(ctx, jv, chain.CalldataJobStatus(jobID))
+// verify re-reads the chain so a green "ready" cannot be a hopeful assumption. It returns the
+// OBSERVED pool TVL, because the run state should record what the chain holds rather than what
+// the plan aimed for (review: PR #41).
+func verify(ctx context.Context, c *chain.Client, jv, fp, org common.Address, jobID [32]byte, plan demoseed.Plan) (*big.Int, error) {
+	// Pinned to one block for the same reason the plan is: the pool values are compared against
+	// each other, so they have to describe a single position.
+	at, err := c.BlockNumber(ctx)
 	if err != nil {
-		return fmt.Errorf("verify jobStatus: %w", err)
+		return nil, fmt.Errorf("verify block number: %w", err)
+	}
+	ret, err := c.CallViewAt(ctx, jv, chain.CalldataJobStatus(jobID), at)
+	if err != nil {
+		return nil, fmt.Errorf("verify jobStatus: %w", err)
 	}
 	status, err := chain.DecodeJobStatus(ret)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	const funded uint8 = 1
 	if status != funded {
-		return fmt.Errorf("verify: job status is %d, want %d (Funded) — the advance requires a Funded job (SC-FP-001)", status, funded)
+		return nil, fmt.Errorf("verify: job status is %d, want %d (Funded) — the advance requires a Funded job (SC-FP-001)", status, funded)
 	}
 	fmt.Printf("  %-16s ok    status=Funded\n", "verify job")
 
-	ret, err = c.CallView(ctx, fp, chain.CalldataOpenAdvanceOf(jobID))
+	ret, err = c.CallViewAt(ctx, fp, chain.CalldataOpenAdvanceOf(jobID), at)
 	if err != nil {
-		return fmt.Errorf("verify openAdvanceOf: %w", err)
+		return nil, fmt.Errorf("verify openAdvanceOf: %w", err)
 	}
 	_, _, open, err := chain.DecodeOpenAdvance(ret)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if open {
-		return fmt.Errorf("verify: this job already has an open advance; a fresh run id should have prevented that")
+		return nil, fmt.Errorf("verify: this job already has an open advance; a fresh run id should have prevented that")
 	}
 	fmt.Printf("  %-16s ok    no advance drawn yet\n", "verify advance")
 
 	// Re-read the whole position, not just TVL. The floor depends on exposure, and between the
 	// plan and now another org could have drawn against the same pool, so recomputing from fresh
 	// reads is what makes "ready" a claim about the chain rather than about the plan.
-	tvl, err := readUint(ctx, c, fp, chain.CalldataTotalAssets())
+	snap, err := readPosition(ctx, c, fp, org, at)
 	if err != nil {
-		return fmt.Errorf("verify totalAssets: %w", err)
+		return nil, fmt.Errorf("verify: %w", err)
 	}
-	orgOut, err := readUint(ctx, c, fp, chain.CalldataOrgOutstanding(org))
-	if err != nil {
-		return fmt.Errorf("verify orgOutstanding: %w", err)
+	floor := demoseed.RequiredPoolTVL(plan.AdvanceMicros, snap.exposure())
+	if snap.totalAssets.Cmp(floor) < 0 {
+		return nil, fmt.Errorf("verify: pool holds %s USDC but an advance of %s on top of %s org / %s pool-wide outstanding needs at least %s, so the snap would revert CapExceeded",
+			demoseed.FormatUSDC(snap.totalAssets), demoseed.FormatUSDC(plan.AdvanceMicros),
+			demoseed.FormatUSDC(snap.orgOutstanding), demoseed.FormatUSDC(snap.totalOutstanding), demoseed.FormatUSDC(floor))
 	}
-	totalOut, err := readUint(ctx, c, fp, chain.CalldataTotalOutstanding())
-	if err != nil {
-		return fmt.Errorf("verify totalOutstanding: %w", err)
-	}
-	floor := demoseed.RequiredPoolTVL(plan.AdvanceMicros, demoseed.Exposure{
-		OrgOutstandingMicros:   orgOut,
-		TotalOutstandingMicros: totalOut,
-	})
-	if tvl.Cmp(floor) < 0 {
-		return fmt.Errorf("verify: pool holds %s USDC but an advance of %s on top of %s org / %s pool-wide outstanding needs at least %s, so the snap would revert CapExceeded",
-			demoseed.FormatUSDC(tvl), demoseed.FormatUSDC(plan.AdvanceMicros),
-			demoseed.FormatUSDC(orgOut), demoseed.FormatUSDC(totalOut), demoseed.FormatUSDC(floor))
-	}
-	fmt.Printf("  %-16s ok    TVL %s >= floor %s (org %s / pool %s already lent)\n", "verify pool",
-		demoseed.FormatUSDC(tvl), demoseed.FormatUSDC(floor),
-		demoseed.FormatUSDC(orgOut), demoseed.FormatUSDC(totalOut))
-	return nil
+	fmt.Printf("  %-16s ok    TVL %s >= floor %s (org %s / pool %s already lent, block %s)\n", "verify pool",
+		demoseed.FormatUSDC(snap.totalAssets), demoseed.FormatUSDC(floor),
+		demoseed.FormatUSDC(snap.orgOutstanding), demoseed.FormatUSDC(snap.totalOutstanding), at)
+	return snap.totalAssets, nil
 }
 
-func readRate(ctx context.Context, c *chain.Client, fp, org common.Address) (uint64, error) {
-	v, err := readUint(ctx, c, fp, chain.CalldataAdvanceRate(org))
-	if err != nil {
-		return 0, err
-	}
-	if !v.IsUint64() {
-		return 0, fmt.Errorf("advanceRate returned an implausible value %s", v)
-	}
-	return v.Uint64(), nil
+// position is every value the cap arithmetic depends on, all read at ONE block.
+type position struct {
+	rateBps          uint64
+	totalAssets      *big.Int
+	orgOutstanding   *big.Int
+	totalOutstanding *big.Int
 }
 
-func readUint(ctx context.Context, c *chain.Client, to common.Address, calldata []byte) (*big.Int, error) {
-	ret, err := c.CallView(ctx, to, calldata)
+func (p position) exposure() demoseed.Exposure {
+	return demoseed.Exposure{
+		OrgOutstandingMicros:   p.orgOutstanding,
+		TotalOutstandingMicros: p.totalOutstanding,
+	}
+}
+
+// readPosition reads the rate, pool assets and both outstanding balances against a single
+// block tag, so the floor is computed from a position that actually existed on chain.
+func readPosition(ctx context.Context, c *chain.Client, fp, org common.Address, at string) (position, error) {
+	rate, err := readUintAt(ctx, c, fp, chain.CalldataAdvanceRate(org), at)
+	if err != nil {
+		return position{}, fmt.Errorf("read advanceRate: %w", err)
+	}
+	if !rate.IsUint64() {
+		return position{}, fmt.Errorf("advanceRate returned an implausible value %s", rate)
+	}
+	assets, err := readUintAt(ctx, c, fp, chain.CalldataTotalAssets(), at)
+	if err != nil {
+		return position{}, fmt.Errorf("read totalAssets: %w", err)
+	}
+	orgOut, err := readUintAt(ctx, c, fp, chain.CalldataOrgOutstanding(org), at)
+	if err != nil {
+		return position{}, fmt.Errorf("read orgOutstanding: %w", err)
+	}
+	totalOut, err := readUintAt(ctx, c, fp, chain.CalldataTotalOutstanding(), at)
+	if err != nil {
+		return position{}, fmt.Errorf("read totalOutstanding: %w", err)
+	}
+	return position{rateBps: rate.Uint64(), totalAssets: assets, orgOutstanding: orgOut, totalOutstanding: totalOut}, nil
+}
+
+// readUintAt decodes a uint256 view call pinned to a block tag.
+func readUintAt(ctx context.Context, c *chain.Client, to common.Address, calldata []byte, at string) (*big.Int, error) {
+	ret, err := c.CallViewAt(ctx, to, calldata, at)
 	if err != nil {
 		return nil, err
 	}
 	return chain.DecodeUint256(ret)
+}
+
+// newRunID derives the default run identifier.
+//
+// Second granularity is not enough: two takes started inside the same second derive the same job
+// id, and createJob reverts JobExists on the second one, which is precisely the collision a fresh
+// id per run exists to prevent (review: PR #41). Nanoseconds plus four random bytes, because a
+// clock that is coarse, or has been stepped backwards, should not be the only guard.
+func newRunID() (string, error) {
+	var nonce [4]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("generate run id nonce: %w", err)
+	}
+	return time.Now().UTC().Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(nonce[:]), nil
 }
 
 // deadline is far enough out that a recording session never trips the refund path.

@@ -63,6 +63,14 @@ func main() {
 	}
 }
 
+// resolved is a target that has passed every check and is safe to remove.
+type resolved struct {
+	target
+	abs    string
+	link   bool // a symlink, removed as a link and never traversed
+	absent bool
+}
+
 func run(rootFlag string, targets []target, dryRun bool) error {
 	root, err := resolveRoot(rootFlag)
 	if err != nil {
@@ -71,47 +79,61 @@ func run(rootFlag string, targets []target, dryRun bool) error {
 	fmt.Println("Snapfall demo reset · local state only (Arc state is immutable by design)")
 	fmt.Printf("  project root  %s\n\n", root)
 
-	var removed, absent int
+	// PASS 1: resolve and validate everything, removing nothing.
+	//
+	// Validating and deleting in one loop means a target that fails halfway through leaves the
+	// earlier ones already destroyed and the reset half-applied, which for a tool whose whole
+	// job is getting to a known-clean state is the worst outcome: not clean, not the previous
+	// state either. Nothing is touched until every target is known-good (review: PR #41).
+	plan := make([]resolved, 0, len(targets))
 	for _, t := range targets {
 		abs, err := confine(root, t.path)
 		if err != nil {
 			return err
 		}
-		// Lstat, not Stat: a symlink is inspected as a link so it is never traversed. Removing
-		// the link itself is right and cannot reach whatever it points at.
+		// Lstat, not Stat: a symlink is inspected as a link so it is never traversed.
 		info, err := os.Lstat(abs)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			fmt.Printf("  %-26s absent   %s\n", t.what, t.path)
-			absent++
+			plan = append(plan, resolved{target: t, abs: abs, absent: true})
 			continue
 		case err != nil:
 			return fmt.Errorf("stat %s: %w", t.path, err)
 		}
 
-		isLink := info.Mode()&os.ModeSymlink != 0
-		if !isLink && info.IsDir() != t.dir {
+		link := info.Mode()&os.ModeSymlink != 0
+		if !link && info.IsDir() != t.dir {
 			kind, want := "a file", "a directory"
 			if info.IsDir() {
 				kind, want = "a directory", "a file"
 			}
 			return fmt.Errorf("refusing to remove %s: %s expects %s but found %s", abs, t.what, want, kind)
 		}
+		plan = append(plan, resolved{target: t, abs: abs, link: link})
+	}
 
+	// PASS 2: act. Every path here is confined, exists, and matches its declared kind.
+	var removed, absent int
+	for _, r := range plan {
+		if r.absent {
+			fmt.Printf("  %-26s absent   %s\n", r.what, r.path)
+			absent++
+			continue
+		}
 		if dryRun {
-			fmt.Printf("  %-26s WOULD REMOVE %s\n", t.what, abs)
+			fmt.Printf("  %-26s WOULD REMOVE %s\n", r.what, r.abs)
 			removed++
 			continue
 		}
 		// Only a genuine directory gets the recursive form.
 		remove := os.Remove
-		if t.dir && !isLink {
+		if r.dir && !r.link {
 			remove = os.RemoveAll
 		}
-		if err := remove(abs); err != nil {
-			return fmt.Errorf("remove %s: %w", abs, err)
+		if err := remove(r.abs); err != nil {
+			return fmt.Errorf("remove %s: %w", r.abs, err)
 		}
-		fmt.Printf("  %-26s removed  %s\n", t.what, abs)
+		fmt.Printf("  %-26s removed  %s\n", r.what, r.abs)
 		removed++
 	}
 
@@ -121,7 +143,7 @@ func run(rootFlag string, targets []target, dryRun bool) error {
 	}
 	fmt.Printf("\n%s %d item(s); %d already absent.\n", verb, removed, absent)
 	if !dryRun {
-		fmt.Println("Next: ./scripts/seed_demo — it mints a FRESH job id, so this take cannot collide with the last one.")
+		fmt.Println("Next: ./scripts/seed_demo, which mints a FRESH job id, so this take cannot collide with the last one.")
 	}
 	return nil
 }
@@ -161,9 +183,13 @@ func resolveRoot(rootFlag string) (string, error) {
 	}
 	// A Snapfall checkout has these. Requiring them means a root pointed at a general-purpose
 	// directory (a projects folder, /tmp, C:\) is rejected before any target is considered.
+	// Both markers must be DIRECTORIES. os.Stat succeeds for a regular file named "daemon", so
+	// a presence-only check let an unrelated directory pass the checkout guard and thereby
+	// authorize deletion of whatever its flags pointed at (review: PR #41).
 	for _, marker := range []string{"daemon", "sidecar"} {
-		if _, err := os.Stat(filepath.Join(abs, marker)); err != nil {
-			return "", fmt.Errorf("--root %s does not look like a Snapfall checkout (no %s/ inside); "+
+		info, err := os.Stat(filepath.Join(abs, marker))
+		if err != nil || !info.IsDir() {
+			return "", fmt.Errorf("--root %s does not look like a Snapfall checkout (no %s/ directory inside); "+
 				"pass --root pointing at the repository", abs, marker)
 		}
 	}

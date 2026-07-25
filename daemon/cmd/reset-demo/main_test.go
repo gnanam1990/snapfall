@@ -205,3 +205,85 @@ func TestRunRefusesATargetOutsideTheRoot(t *testing.T) {
 		t.Fatal("an out-of-tree directory was deleted")
 	}
 }
+
+// The two-pass finding on PR #41: validating and deleting in one loop leaves the reset
+// half-applied when a later target is invalid, which is the worst state for a tool whose job is
+// reaching a known-clean baseline.
+func TestRunValidatesEverythingBeforeRemovingAnything(t *testing.T) {
+	root := projectRoot(t)
+	db := filepath.Join(root, "daemon", "snapfall.db")
+	if err := os.WriteFile(db, []byte("sqlite"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A later target that fails its kind check: declared a file, actually a directory.
+	bad := filepath.Join(root, "sidecar", ".data")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := []target{
+		{db, "daemon event store", false},
+		{bad, "sidecar payment records", false}, // declared file, is a directory
+	}
+	if err := run(root, targets, false); err == nil {
+		t.Fatal("a kind mismatch on a later target must abort the reset")
+	}
+	// The valid FIRST target must still be intact: nothing may be removed until all pass.
+	if _, err := os.Stat(db); err != nil {
+		t.Fatal("the first target was deleted before a later target failed validation; " +
+			"validation and deletion are still interleaved")
+	}
+	if _, err := os.Stat(bad); err != nil {
+		t.Fatal("the mismatched target was removed anyway")
+	}
+
+	// Same for a target outside the root appearing after a valid one.
+	outside := filepath.Join(t.TempDir(), "unrelated")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(root, []target{{db, "daemon event store", false}, {outside, "sidecar payment records", true}}, false); err == nil {
+		t.Fatal("an out-of-tree target must abort the reset")
+	}
+	if _, err := os.Stat(db); err != nil {
+		t.Fatal("the first target was deleted before the out-of-tree target was rejected")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatal("an out-of-tree directory was deleted")
+	}
+}
+
+// A presence-only marker check let a regular file named "daemon" authorize a root, so any
+// directory could be dressed up to pass the checkout guard.
+func TestResolveRootRequiresMarkersToBeDirectories(t *testing.T) {
+	fake := t.TempDir()
+	if real, err := filepath.EvalSymlinks(fake); err == nil {
+		fake = real
+	}
+	// Regular FILES named daemon and sidecar, not directories.
+	for _, name := range []string{"daemon", "sidecar"} {
+		if err := os.WriteFile(filepath.Join(fake, name), []byte("not a directory"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := resolveRoot(fake); err == nil {
+		t.Fatal("files named daemon/sidecar must not qualify a directory as a Snapfall checkout")
+	} else if !strings.Contains(err.Error(), "directory inside") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// One real directory and one file is still not a checkout.
+	mixed := t.TempDir()
+	if real, err := filepath.EvalSymlinks(mixed); err == nil {
+		mixed = real
+	}
+	if err := os.MkdirAll(filepath.Join(mixed, "daemon"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mixed, "sidecar"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveRoot(mixed); err == nil {
+		t.Fatal("a file standing in for the sidecar directory must be refused")
+	}
+}
