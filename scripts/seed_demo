@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Seed one clean demo run: pool depth for the snap, a fresh job id, a funded escrow (V12).
+# Pass --dry-run to see the plan without submitting anything.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root/daemon"
+exec env GOTOOLCHAIN=auto go run ./cmd/seed-demo \
+  --deployment ../deployments/arc-testnet.json \
+  --state ../.demo/current.json \
+  "$@"

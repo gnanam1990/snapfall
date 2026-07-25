@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Clear local demo state between recording takes (V12). Arc state is immutable; seed_demo
+# mints a fresh job id per run, which is what makes repeated takes collision-free.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root/daemon"
+exec env GOTOOLCHAIN=auto go run ./cmd/reset-demo "$@"

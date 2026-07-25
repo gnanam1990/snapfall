@@ -77,6 +77,20 @@ func CalldataAdvanceRate(org common.Address) []byte {
 	return pack("advanceRate(address)", addrWord(org))
 }
 
+// CalldataTotalAssets reads the pool's LP-owned capital, which is the denominator of both
+// FloatPool caps and therefore what the demo seed (V12) has to reason about.
+func CalldataTotalAssets() []byte { return pack("totalAssets()") }
+
+// CalldataTotalOutstanding reads principal currently lent out.
+func CalldataTotalOutstanding() []byte { return pack("totalOutstanding()") }
+
+// CalldataOrgOutstanding reads one org's drawn principal. The exposure cap is checked against
+// this value PLUS the new principal, so a seed that ignores it can under-seed a pool that
+// already carries an open advance for the same org.
+func CalldataOrgOutstanding(org common.Address) []byte {
+	return pack("orgOutstanding(address)", addrWord(org))
+}
+
 // ── JobVault ──
 func CalldataCreateJob(jobID [32]byte, customer, operator common.Address, payment, budget *big.Int, termsHash [32]byte, deadline uint64) []byte {
 	return pack("createJob(bytes32,address,address,uint256,uint256,bytes32,uint64)",
@@ -133,6 +147,15 @@ func DecodeJobStatus(ret []byte) (uint8, error) {
 		return 0, fmt.Errorf("jobStatus returned %d bytes, want 32", len(ret))
 	}
 	return uint8(new(big.Int).SetBytes(ret).Uint64()), nil
+}
+
+// DecodeUint256 parses a single uint256 return word (totalAssets, totalOutstanding,
+// advanceRate — anything whose ABI return is one static word).
+func DecodeUint256(ret []byte) (*big.Int, error) {
+	if len(ret) != 32 {
+		return nil, fmt.Errorf("expected a single 32-byte word, got %d bytes", len(ret))
+	}
+	return new(big.Int).SetBytes(ret), nil
 }
 
 // JobStatusAccepted is JobVault's enum value for the settled terminal state.
