@@ -792,11 +792,20 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// two concurrent 4.00 intents against a 6.00 job budget must not both pass rule 1 by
 	// reading the same unheld state.
 	life.JobGate = led.JobGate
+	// Both scopes: rule 1 sums one job, rule 3 sums the whole org. Lock order is org then job,
+	// documented on Lifecycle.OrgGate. Without this the org-wide daily cap is racy across jobs.
+	life.OrgGate = led.OrgGate
 	// Hold at intake on any non-Deny outcome (V6 §1.A), durable BEFORE the request is
 	// visible. A hold with no payment.executing claim is therefore provably unattempted,
 	// which is the only thing that makes the expiry sweeper safe.
 	life.Reserve = reserveHook(led)
 	life.Freeze = reg
+	// The other half of the sweeper's safety proof, and the ONLY thing that makes releasing an
+	// expired hold sound rather than probably-sound (review finding, main.go:578 P0): the
+	// durable payment.executing claim is appended AFTER the lifecycle's expiry check passes, so
+	// the sweeper needs the executor's live view too. Wired here because the ledger deliberately
+	// does not import approval.
+	led.Claimed = executionClaimed(life)
 
 	// The H3 payment lane, wired onto Funding (the daemon's only holder of a spend
 	// capability) BEFORE the Purchaser exists, because the Purchaser's first act on a
@@ -1017,6 +1026,40 @@ func reserveHook(led *budget.Ledger) func(context.Context, approval.Intent, stri
 	}
 }
 
+// executionClaimed is the reservation ledger's in-process claim oracle, and it closes the one
+// window the durable claim cannot (review finding, main.go:578 P0): a payment admitted
+// immediately before its approval expires could lose its hold to the expiry sweeper and still
+// go on to sign, because the sweeper reads payment.executing, which the lifecycle appends only
+// AFTER its expiry check has already passed.
+//
+// The lifecycle decides expiry and sets the request's executed flag in ONE critical section
+// under its own mutex, and Snapshot reads that flag under the same mutex. So consulting it
+// after the sweeper has established now >= ExpiresAt leaves exactly two interleavings, and both
+// are safe: an execution whose critical section ran first is visible here and its hold is
+// retained, and an execution whose section runs after this read sees a clock at or past
+// ExpiresAt and refuses unconditionally. Both sides read time.Now, which is the precondition
+// the Claimed hook documents.
+//
+// LOCK ORDER PRESERVED: gates -> ledger mutex -> (nothing). The sweeper calls this while
+// holding NO ledger lock, so the ledger mutex is never held while acquiring the lifecycle's,
+// and the lifecycle never holds its own mutex across a call into the ledger (Spend, Reserve and
+// the executor all run outside it). Intake's documented order, org gate then job gate then the
+// ledger, is untouched: this adds no gate acquisition anywhere.
+//
+// A request the lifecycle does not know reports NOT claimed, and that is correct rather than
+// merely convenient: Execute refuses an unknown request outright, so such a hold can never
+// acquire a claim, and it is precisely the reclaimable artifact the reserve-before-append
+// ordering was chosen to produce (a hold whose approval.requested append failed).
+func executionClaimed(life *approval.Lifecycle) func(string) bool {
+	return func(requestID string) bool {
+		req, ok := life.Snapshot(requestID)
+		if !ok {
+			return false
+		}
+		return req.Executed
+	}
+}
+
 // wirePayer wires the H3 payment lane onto Funding from the environment and returns the
 // read-only status lane the reclaim paths poll (nil when no lane exists).
 //
@@ -1087,6 +1130,8 @@ func wirePayer(ctx context.Context, log *slog.Logger, fund *funding.Agent) statu
 //	FAILED / EXPIRED                            nothing settled: release, NOT pre-sign.
 //	SIGNED / SUBMITTED / RECONCILING            the outcome is unknown: the hold STANDS.
 //	any transport or decode failure             the outcome is unknown: the hold STANDS.
+//	ANY OTHER state, including ""               the vocabulary changed under a live hold: the
+//	                                            hold STANDS and the owner is escalated.
 //
 // It returns the state each STILL-OPEN hold reported, keyed by request id, with "" for a hold
 // nothing could answer for, so the stall escalation can name a state without polling again.
@@ -1163,11 +1208,12 @@ func reconcileUnresolved(ctx context.Context, led *budget.Ledger, poller statusP
 			log.Warn("a claimed budget hold is still unresolved at the sidecar: it stands and is never auto-released",
 				"request", h.RequestID, "job", h.JobID, "payment_id", h.PaymentID, "state", res.State)
 			open[h.RequestID] = res.State
-		default:
-			// FAILED or EXPIRED: the sidecar's own record says nothing settled. The release is
-			// NOT pre-sign (a key may well have been used), so the event records that
-			// honestly, and `code` carries the terminal STATE because a status poll returns no
-			// error code to carry.
+		case res.State == h3.StateFailed || res.State == h3.StateExpired:
+			// The two states, and ONLY these two, that are a PROVEN terminal failure (review
+			// finding, main.go:1166 P1): the sidecar's own durable record says nothing settled.
+			// The release is NOT pre-sign (a key may well have been used), so the event records
+			// that honestly, and `code` carries the terminal STATE because a status poll returns
+			// no error code to carry.
 			reason := fmt.Sprintf("the sidecar's durable record reports %s, so nothing settled (reason: %q)",
 				res.State, res.Reason)
 			if rerr := led.Release(ctx, h.RequestID, reason, res.State, false); rerr != nil {
@@ -1179,6 +1225,30 @@ func reconcileUnresolved(ctx context.Context, led *budget.Ledger, poller statusP
 			log.Info("released the budget hold of a payment the sidecar reports as not settled",
 				"request", h.RequestID, "job", h.JobID, "payment_id", h.PaymentID, "state", res.State,
 				"released_usdc", policy.FormatUSDC(h.ReserveMicros))
+		default:
+			// A state this daemon's vocabulary does not contain, INCLUDING the empty string.
+			// Releasing here would reopen budget behind a payment that may well have settled,
+			// which is the bearer-instrument rule the whole reclaim design rests on: only a
+			// PROVEN terminal failure (the case above) or a proven absence of any record
+			// (PAYMENT_NOT_FOUND) licenses returning post-sign money to the budget. A sidecar
+			// that grows a state, or a response that decoded into no state at all, proves
+			// neither. So the hold PINS, visibly, on path 3's terms rather than silently.
+			state := res.State
+			if state == "" {
+				state = "UNKNOWN"
+			}
+			log.Warn("the sidecar reports a payment state this daemon does not recognize: the budget hold STANDS and needs "+
+				"an OWNER decision, because an unknown state is not proof that nothing settled",
+				"request", h.RequestID, "job", h.JobID, "payment_id", h.PaymentID, "state", state,
+				"held_usdc", policy.FormatUSDC(h.ReserveMicros))
+			// Escalated exactly like a post-sign hold past the reconcile deadline, and without
+			// waiting for it: an unrecognized state is already a fact only an owner can act on.
+			// The record is deduped inside the ledger, so the reconcile ticker does not re-page.
+			if nerr := led.NoteReconcileStalled(ctx, h, state); nerr != nil {
+				log.Warn("could not record the unrecognized-state escalation; the hold stands and the next reconcile retries",
+					"request", h.RequestID, "payment_id", h.PaymentID, "state", state, "err", nerr)
+			}
+			open[h.RequestID] = res.State
 		}
 	}
 	return open

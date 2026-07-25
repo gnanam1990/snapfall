@@ -376,15 +376,19 @@ func (p *Purchaser) execute(ctx context.Context, intent approval.Intent, reqID s
 	// paid is written by the executor before Execute returns (the executor runs
 	// synchronously inside it), so reading it afterwards needs no synchronization.
 	var paid funding.PaymentOutcome
-	// bookkeeping records a durable-write failure that happened AFTER the money moved. It
-	// is deliberately NOT the executor's error: see settle.
+	// bookkeeping records a failure that must NOT fail the execution but must not vanish
+	// either: a durable write that failed after the money moved (see settle), or a budget
+	// hold the honest stop could not release (see pendingSettlement). Every switch arm below
+	// folds it into the reported reason, so no arm returns a clean outcome over a gap.
 	var bookkeeping error
 
 	execErr := p.life.Execute(shielded, intent, reqID, func(ctx context.Context, g approval.Grant) error {
 		if p.fund == nil {
 			// No money boundary wired at all (a degraded wiring, or a test of the pipeline
 			// without the lane): the same honest stop, for the same reason.
-			return p.pendingSettlement(ctx, g, intent)
+			unreleased, aerr := p.pendingSettlement(ctx, g, intent)
+			bookkeeping = unreleased
+			return aerr
 		}
 		out, err := p.fund.ExecutePayment(ctx, g)
 		paid = out
@@ -406,40 +410,61 @@ func (p *Purchaser) execute(ctx context.Context, intent approval.Intent, reqID s
 		}
 		if !out.Submitted {
 			// THE HONEST STOP, preserved key-for-key: no payer wired, nothing moved.
-			return p.pendingSettlement(ctx, g, intent)
+			unreleased, aerr := p.pendingSettlement(ctx, g, intent)
+			bookkeeping = unreleased
+			return aerr
 		}
 		bookkeeping = p.settle(ctx, g, intent, out)
 		return nil
 	})
 
 	switch {
-	case paid.Submitted && h3.Committed(paid.State):
-		// The money MOVED and the sidecar's record is final. Report it as delivered even
-		// when execErr is non-nil, because the only error reachable here is a failed
-		// post-payment append (approval.Execute's audit-gap error): reporting a completed
-		// purchase as denied would send the worker shopping for a second copy of a thing
-		// it already bought.
+	case settledKnown(paid):
+		// The money MOVED, the sidecar's record is final AND it named a real figure. Report
+		// it as delivered even when execErr is non-nil, because the only error reachable
+		// here is a failed post-payment append (approval.Execute's audit-gap error):
+		// reporting a completed purchase as denied would send the worker shopping for a
+		// second copy of a thing it already bought.
 		out := deliveredOutcome(intent, reqID, d, paid)
 		if gap := errors.Join(execErr, bookkeeping); gap != nil {
 			out.Reason += fmt.Sprintf("; audit gap, reconcile from /v1/status: %v", gap)
 		}
 		return out, nil
-	case execErr == nil && paid.Submitted:
-		// A 200 whose state is not committed (SIGNED / RECONCILING): the payment left the
-		// process and its outcome is UNKNOWN. No receipt is fabricated and no failure is
-		// claimed; the hold stands and the reconciler owns it.
+	case paid.Submitted && (execErr == nil || h3.Committed(paid.State)):
+		// UNRESOLVED: the payment left the process and the settled figure is NOT known. Two
+		// shapes reach here and they mean the same thing.
+		//   - a 200 whose state is not committed (SIGNED / RECONCILING);
+		//   - a committed state carrying no usable amount (settledKnown false). funding
+		//     refuses to guess when amountPaid will not parse, so it answers with a
+		//     committed State, PaidMicros 0 and a plain error; that must not become a
+		//     receipt claiming 0 settled, which would misstate settled spend to Billing as
+		//     nothing at all.
+		// No receipt is fabricated and no failure is claimed; the hold stands and the boot
+		// status reconciler owns it. Every failure that got us here rides the reason, so an
+		// approved-pending outcome never hides a dropped purchase.unresolved append.
+		reason := fmt.Sprintf("the payment %s left the daemon and the sidecar reports %s: the outcome is not yet known, "+
+			"so nothing is recorded as bought and the budget stays held", paid.PaymentID, paid.State)
+		if gap := errors.Join(execErr, bookkeeping); gap != nil {
+			reason += fmt.Sprintf("; audit gap, reconcile from /v1/status: %v", gap)
+		}
 		return worker.PurchaseOutcome{
 			Decision: decisionLabel(d), Status: "approved-pending-integration", Code: "payment-unresolved",
-			Reason: fmt.Sprintf("the payment %s left the daemon and the sidecar reports %s: the outcome is not yet known, "+
-				"so nothing is recorded as bought and the budget stays held", paid.PaymentID, paid.State),
+			Reason:    reason,
 			RequestID: reqID,
 		}, nil
 	case execErr == nil:
-		return worker.PurchaseOutcome{
+		// The honest stop. Status and payload are frozen, so a failed release cannot change
+		// either; it rides the reason instead, because on this path nothing else will ever
+		// report it (see pendingSettlement).
+		out := worker.PurchaseOutcome{
 			Decision: decisionLabel(d), Status: "approved-pending-integration",
 			Reason:    "approved by policy/owner; money movement pending the F2 sidecar client",
 			RequestID: reqID,
-		}, nil
+		}
+		if bookkeeping != nil {
+			out.Reason += fmt.Sprintf("; the budget hold is still held and no reconciler owns it, release it by hand: %v", bookkeeping)
+		}
+		return out, nil
 	case errors.Is(execErr, approval.ErrExpired):
 		return expiredOutcome(), nil
 	default:
@@ -450,7 +475,16 @@ func (p *Purchaser) execute(ctx context.Context, intent approval.Intent, reqID s
 		// sidecar or the wiring is the thing to look at.
 		code := "execution-refused"
 		var he *h3.Error
-		if errors.As(execErr, &he) {
+		switch {
+		case errors.As(execErr, &he):
+			code = "payment-failed"
+		// An INTERNAL from /v1/pay arrives as a PLAIN error, not an *h3.Error: decodeEnvelope
+		// refuses to classify it because it straddles the sidecar write-ahead upsert, so the
+		// caller keeps the hold and reconciles by status. Submitted stays true, which is the
+		// signal that the request DID leave the process. Without this arm an INTERNAL read as
+		// "the gates refused", pointing the reader at a freeze instead of at the sidecar,
+		// which is the opposite of what this code exists to distinguish.
+		case paid.Submitted:
 			code = "payment-failed"
 		}
 		return worker.PurchaseOutcome{
@@ -458,6 +492,20 @@ func (p *Purchaser) execute(ctx context.Context, intent approval.Intent, reqID s
 			Reason: execErr.Error(), RequestID: reqID,
 		}, nil
 	}
+}
+
+// settledKnown reports whether a payment's settled figure is KNOWN: the request left the
+// process, the sidecar's record is committed-final, AND it named a positive amount.
+//
+// The positive-amount clause is load-bearing, not defensive tidying. funding answers an
+// unreadable amountPaid with a COMMITTED State, PaidMicros 0 and a plain error, on purpose:
+// it refuses to commit a budget at a guessed figure. So "committed" alone is not proof of a
+// known settlement, and treating it as one produces a receipt whose AmountAtomic is "0",
+// which tells Billing the purchase settled for nothing. A zero is an unknown figure, and
+// the unresolved path is where unknown figures belong: hold kept, gap reported, the boot
+// status reconciler resolves it from the sidecar's own record.
+func settledKnown(out funding.PaymentOutcome) bool {
+	return out.Submitted && h3.Committed(out.State) && out.PaidMicros > 0
 }
 
 // pendingSettlement records the honest stop: an approval consumed exactly once, no money
@@ -470,20 +518,28 @@ func (p *Purchaser) execute(ctx context.Context, intent approval.Intent, reqID s
 // an execution claim, so the expiry sweeper is forbidden to touch it (correctly: it cannot
 // tell a claimed hold from a signed one), and the stall escalation would page the owner
 // about money that never moved.
-func (p *Purchaser) pendingSettlement(ctx context.Context, g approval.Grant, intent approval.Intent) error {
-	if _, err := p.store.Append(ctx, store.Event{
+//
+// It returns TWO errors and the split is the whole point.
+//   - err is the EXECUTOR's: with no durable pending_settlement record there is no honest
+//     stop, so the execution must fail rather than claim a stop it never wrote.
+//   - unreleased is NOT the executor's: failing the execution over it would turn the honest
+//     stop into a denial and change the status string four readers depend on. But it must
+//     not be swallowed either, because on THIS path the pinned hold has no owner at all:
+//     it carries approval.Execute's write-ahead claim, so Sweep is forbidden to reclaim it,
+//     and with no payer wired there is no /v1/status for the reconciler to poll. Dropped, it
+//     consumes the job's budget permanently. The caller folds it into the reported reason.
+func (p *Purchaser) pendingSettlement(ctx context.Context, g approval.Grant, intent approval.Intent) (unreleased error, err error) {
+	if _, aerr := p.store.Append(ctx, store.Event{
 		Kind: kindPendingSettlement, EntityID: g.RequestID(), Actor: actorPurchaser,
 		Payload: map[string]any{
 			"job_id": intent.JobID, "merchant": intent.Merchant,
 			"amount_micros": intent.AmountMicros, "note": "approved; money movement pending F2 sidecar client",
 		},
-	}); err != nil {
-		return err
+	}); aerr != nil {
+		return nil, aerr
 	}
-	// Swallowed on purpose: the purchase itself succeeded (as far as an unwired lane can),
-	// and an unreleased hold is conservative rather than lost.
-	_ = p.release(ctx, g.RequestID(), "no payment lane is wired: the approval was consumed but nothing was sent", codeNoPayerWired, true)
-	return nil
+	return p.release(ctx, g.RequestID(),
+		"no payment lane is wired: the approval was consumed but nothing was sent", codeNoPayerWired, true), nil
 }
 
 // settle turns a submitted payment into durable records: the budget commit at the figure
@@ -498,9 +554,12 @@ func (p *Purchaser) pendingSettlement(ctx context.Context, g approval.Grant, int
 // payment id, reads DELIVERED and commits at the same authoritative figure. The caller
 // folds this error into the outcome's reason so the audit gap is visible, not silent.
 func (p *Purchaser) settle(ctx context.Context, g approval.Grant, intent approval.Intent, out funding.PaymentOutcome) error {
-	if !h3.Committed(out.State) {
+	if !settledKnown(out) {
 		// Submitted, outcome unknown. Record exactly that: no commit (nothing is proven
-		// spent), no release (money may have moved), no receipt.
+		// spent), no release (money may have moved), no receipt. A committed state with no
+		// usable amountPaid belongs here too, and for the same reason the caller reports it
+		// as unresolved: committing a hold at 0 would close it while declaring that the
+		// purchase settled for nothing, when the settled figure is simply not known yet.
 		_, err := p.store.Append(ctx, store.Event{
 			Kind: kindUnresolved, EntityID: intent.JobID, Actor: actorPurchaser,
 			Payload: map[string]any{

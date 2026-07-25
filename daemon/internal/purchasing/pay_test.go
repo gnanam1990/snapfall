@@ -190,6 +190,7 @@ func newPayFixture(t *testing.T, payer *fakePayer) *payFixture {
 	life.Spend = led.Spend
 	life.JobGate = led.JobGate
 	life.Reserve = reserveHook(led)
+	life.OrgGate = led.OrgGate
 
 	fund := funding.New()
 	if payer == nil {

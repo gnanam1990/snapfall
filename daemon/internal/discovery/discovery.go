@@ -23,7 +23,8 @@
 //
 // SCRIPTED-MODE DETERMINISM (design pin 3): Find is a pure function, no randomness,
 // no clock, no network; the catalog and DemoNeed are committed constants, except that
-// V2StandIn's resource ORIGIN is env-overridable (SellerBaseURL) so the daemon can point
+// V2StandIn's resource ORIGIN is overridable by env to another LOOPBACK origin
+// (SellerBaseURL) so the daemon can point
 // at whatever port the demo seller actually bound, matching reads only the need and the
 // Description, so that override cannot move a score or a selection; ordering is
 // total and explicit (score desc, then cheaper first, then lexicographic resource);
@@ -35,6 +36,8 @@ package discovery
 import (
 	"context"
 	"math"
+	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -76,16 +79,19 @@ type Service struct {
 // origin in V2StandIn. Set it when the paid demo API is not on its default loopback
 // port (sidecar/src/seller.ts:31 reads PAID_API_PORT, default 4021); the two must
 // agree or every purchase fails pre-sign with RESOURCE_NOT_FOUND.
+//
+// The override is LOOPBACK-ONLY, and that bound is a security property rather than a
+// convenience: see the WHY LOOPBACK-ONLY note on SellerBaseURL.
 const SellerBaseURLEnv = "SNAPFALL_SELLER_BASE_URL"
 
 // DefaultSellerBaseURL is the loopback origin sidecar/src/seller.ts binds by default.
 const DefaultSellerBaseURL = "http://127.0.0.1:4021"
 
 // SellerBaseURL is the origin V2StandIn's resource URLs are built on: SellerBaseURLEnv
-// when set to a non-empty value, else DefaultSellerBaseURL. A trailing slash is trimmed
-// so joining can never emit a double slash, the sidecar hashes the resource string
-// byte-for-byte into intentHash, so "…:4021//v1/x" is a DIFFERENT intent, not a
-// cosmetic wart.
+// when it names a bare LOOPBACK http(s) origin, else DefaultSellerBaseURL. A trailing
+// slash is trimmed so joining can never emit a double slash, the sidecar hashes the
+// resource string byte-for-byte into intentHash, so "…:4021//v1/x" is a DIFFERENT
+// intent, not a cosmetic wart.
 //
 // This is the one impurity in an otherwise constant catalog (see the SCRIPTED-MODE
 // DETERMINISM note in the package doc): it is deliberate and bounded to the origin.
@@ -93,12 +99,73 @@ const DefaultSellerBaseURL = "http://127.0.0.1:4021"
 // Description, so scores, the MinScore cut and the demo selections cannot move. The
 // lexicographic Resource tie-break is likewise unmoved, because all three URLs share
 // this same prefix, exactly as all three previously shared "GET /v1/".
+//
+// WHY LOOPBACK-ONLY (cubic P1 on this function). The policy allowlist matches
+// Service.Merchant, a HOST compared by exact string (policy.go:317), while the resource
+// became a URL in V6 and now carries an origin of its OWN. Unbounded, those two
+// identities diverge: one env value aims the $0.04 profile purchase, which is below
+// policy/demo.go's 0.10 ApprovalAboveMicros and so auto-approves with no human in the
+// loop, at any host on the internet while the allowlist still reads
+// "api.research-data.example" and still answers "approved". The sidecar does not close
+// this, and cannot: it compares the PAYEE ADDRESS from the live 402 challenge against
+// the approved intent (buyer.ts:199), but an attacker-chosen server writes that
+// challenge, so the check proves only that the intent agrees with whoever answered. The
+// defence has to be refusing to ask that server in the first place.
+//
+// Binding the URL's host to Merchant instead was the other candidate and is not
+// available: the allowlisted literals are reserved-TLD hosts that deliberately never
+// resolve ("api.research-data.example", "api.benchmarks.example") while the seller
+// really answers on 127.0.0.1, so host equality would reject the DEFAULT origin and
+// every demo purchase with it. Merchant must also stay a host (policy/demo.go,
+// TestDemoPolicy_AllowlistsEveryDemoMerchant). Loopback is the trust anchor that IS
+// available: the sidecar that does the probing binds 127.0.0.1 only (service.ts:486),
+// the demo seller's origin is loopback too (seller.ts:226, and it is this file's
+// default), this override's whole documented purpose is a PORT change, and a loopback
+// origin cannot be an attacker's server unless the attacker already runs code on this
+// host, in which case the env var is not their cheapest move.
+//
+// A rejected override falls back to the default rather than returning an error, so this
+// stays the pure function the package doc promises. The fallback is not silent in
+// effect: purchases then probe 127.0.0.1:4021 and fail PRE-SIGN with
+// UPSTREAM_UNREACHABLE or RESOURCE_NOT_FOUND when nothing is bound there, which moves
+// no money and names the misconfiguration in the failure.
 func SellerBaseURL() string {
-	base := strings.TrimSpace(os.Getenv(SellerBaseURLEnv))
-	if base == "" {
-		base = DefaultSellerBaseURL
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv(SellerBaseURLEnv)), "/")
+	if base == "" || !isLoopbackOrigin(base) {
+		return DefaultSellerBaseURL
 	}
-	return strings.TrimRight(base, "/")
+	return base
+}
+
+// isLoopbackOrigin reports whether raw is a bare http(s) origin whose host is LITERALLY
+// loopback: an IP literal for which net.IP.IsLoopback holds (127.0.0.0/8, ::1), or
+// "localhost". A DNS name is refused even when it would resolve to 127.0.0.1, because
+// resolution needs a network and can change between the check and the purchase, while
+// this decision must be pure and stable (package doc, design pin 3). That also refuses
+// the near-miss shapes an attacker reaches for, "127.0.0.1.evil.example" and the
+// decimal form "2130706433", since neither is an IP literal.
+//
+// Userinfo, a path, a query and a fragment are refused too: this value is an ORIGIN and
+// gets concatenated with a verbatim seller path, and the result is hashed into
+// intentHash byte-for-byte, so anything past scheme+host+port would silently rewrite the
+// resource identity rather than merely relocate it.
+func isLoopbackOrigin(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Opaque != "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Catalog is the discovery source seam. Today: the V2 stand-in snapshot. Later: the

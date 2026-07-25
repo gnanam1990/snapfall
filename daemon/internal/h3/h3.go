@@ -346,6 +346,12 @@ var postSign = map[string]bool{
 // caller polls Status on its own precomputed paymentId, where a PAYMENT_NOT_FOUND means
 // "no durable record, safe to release" (that is exactly the in-flight-lock case).
 func (e *Error) PreSign() bool {
+	// INTERNAL never reaches here from this package: decodeEnvelope strips it to a plain error
+	// because it straddles the sidecar's write-ahead SIGNED upsert. Refuse it here too, so a
+	// hand-constructed one can never read as "nothing was signed".
+	if e.Code == CodeInternal {
+		return false
+	}
 	if e.Code == CodePaymentInProgress {
 		return false
 	}

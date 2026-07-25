@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -41,16 +42,24 @@ type Client struct {
 
 // New builds the client.
 //
-// baseURL is the loopback sidecar origin, DefaultBaseURL when empty; the sidecar binds
-// 127.0.0.1 only (service.ts:486), so an off-host origin is unreachable by construction
-// rather than by policy. token is SIDECAR_AUTH_TOKEN, sent as "Bearer "+token: one
-// space, case-sensitive, compared constant-time against a >=32-byte secret
-// (h3.ts:102-107, service.ts:51). It is never logged by this package. A nil hc receives
-// a bounded default.
+// baseURL is the loopback sidecar origin, DefaultBaseURL when empty. token is
+// SIDECAR_AUTH_TOKEN, sent as "Bearer "+token: one space, case-sensitive, compared
+// constant-time against a >=32-byte secret (h3.ts:102-107, service.ts:51). It is never
+// logged by this package. A nil hc receives a bounded default.
 //
-// A base URL that is not http(s) is not a panic and not a silent fallback: it is
-// recorded and returned from every call, so the operator sees the wiring mistake at the
-// first payment attempt with the URL in the message.
+// A base URL that is not http(s), or whose host is not loopback, is not a panic and not a
+// silent fallback: it is recorded and returned from every call, so the operator sees the
+// wiring mistake at the first payment attempt with the URL in the message.
+//
+// The loopback requirement is the lane's own contract, not a preference. H3 §1.1: the
+// sidecar "binds 127.0.0.1 (loopback only) ... MUST NOT bind 0.0.0.0 or any external
+// interface" (service.ts:486). §1.2 chooses a bearer token OVER mTLS *because* the channel
+// is loopback-only, and names mTLS "the documented upgrade path if the sidecar ever moves
+// off-host (which the freeze forbids without a version bump)". §1.3 then makes the token's
+// safety conditional on exactly that: "A leaked token is inert off-host." So an off-host
+// origin does not merely fail to connect, it would put a spend capability on the wire
+// unprotected on the first /v1 call. Refuse it here, before Health can report a lane, which
+// is what keeps main.go's wirePayer from handing the token to a payer at all.
 func New(baseURL, token string, hc *http.Client) *Client {
 	if hc == nil {
 		hc = &http.Client{Timeout: DefaultTimeout}
@@ -72,8 +81,34 @@ func New(baseURL, token string, hc *http.Client) *Client {
 		c.cfgErr = refuse(CodeBadRequest, "sidecar base URL %q must be http(s), got scheme %q", orig, parsed.Scheme)
 	case parsed.Host == "":
 		c.cfgErr = refuse(CodeBadRequest, "sidecar base URL %q has no host", orig)
+	case !isLoopbackHost(parsed.Hostname()):
+		c.cfgErr = refuse(CodeBadRequest,
+			"sidecar base URL %q is off-host (host %q is not loopback): the H3 lane is loopback-only (§1.1) and its bearer "+
+				"token is only inert off-host because of that (§1.3), so refusing to send SIDECAR_AUTH_TOKEN there. "+
+				"Moving the sidecar off-host needs mTLS and an x-h3-version bump (§1.2); point SIDECAR_BASE_URL at a "+
+				"127.0.0.0/8, ::1 or localhost origin, or unset it for the %s default",
+			orig, parsed.Hostname(), DefaultBaseURL)
 	}
 	return c
+}
+
+// isLoopbackHost reports whether host (a URL hostname, so no port and no brackets) names
+// this machine's loopback interface.
+//
+// Three spellings, all of them things an operator legitimately writes: a literal in
+// 127.0.0.0/8, the IPv6 "::1", and "localhost". The name is matched textually rather than
+// resolved: a DNS lookup at construction time would make the refusal depend on a resolver
+// (and on /etc/hosts), and "localhost" resolving to something non-loopback is a
+// host-configuration fault we cannot fix by sending the token anyway. Everything else,
+// including 0.0.0.0 and any routable address, is off-host for this purpose.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	// net.ParseIP handles both families; IsLoopback covers all of 127.0.0.0/8 and ::1,
+	// including the IPv4-mapped "::ffff:127.0.0.1" form.
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // BaseURL is the origin this client calls. Exposed for boot logging: it carries no
@@ -262,8 +297,8 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, aut
 // paymentId is read out of the envelope by NOBODY, here or anywhere else: the in-flight
 // branch may carry null (service.ts:302-306), so the field is not even modelled.
 //
-// A body that does not parse, or parses with no code, yields a PLAIN error rather than an
-// *Error with an empty code. That matters: PreSign treats an unknown code as pre-sign
+// A body that does not parse, parses with no code, or carries INTERNAL, yields a PLAIN
+// error rather than an *Error. That matters: PreSign treats an unknown code as pre-sign
 // (correct for the frozen enum, where only two codes are post-sign), and an
 // unclassifiable response must not inherit that reading. Returning a non-*Error makes
 // the caller's errors.As fail, which keeps the hold.
@@ -279,6 +314,27 @@ func decodeEnvelope(status int, raw []byte, method, path string) error {
 		return fmt.Errorf("H3 %s %s returned HTTP %d with no usable error envelope (body: %s); "+
 			"the outcome is unclassifiable, so this is deliberately not an *h3.Error and must not be read as pre-sign",
 			method, path, status, snippet(raw))
+	}
+	// INTERNAL is the sidecar admitting it does not know what happened, and it is the ONE
+	// code whose position relative to the write-ahead upsert at service.ts:372 is not
+	// provable. mapBuyerError's fallback (service.ts:133) raises it for anything thrown that
+	// is neither a PolicyViolation nor a PaymentFailed, and that fallback is reached from
+	// BOTH call sites: :352, pre-sign with "still no record persisted", and :391, post-sign,
+	// after the record was written SIGNED and then upserted FAILED or RECONCILING. The
+	// top-level handler catch (:482) can emit it too.
+	//
+	// So it is neither pre-sign nor a member of postSign: it is UNCLASSIFIABLE, exactly like
+	// the unparseable body above, and it gets the same PLAIN error. The caller's errors.As
+	// fails, PreSign is never consulted, the hold STANDS, and a status poll on the
+	// precomputed paymentId settles it (PAYMENT_NOT_FOUND for the :352 case, FAILED or
+	// RECONCILING for the :391 case). Review finding: reading INTERNAL as pre-sign would
+	// release a reservation that may already back a signed authorization, which is the
+	// bearer-instrument double-spend H3 §7 step 4 forbids.
+	if env.Error.Code == CodeInternal {
+		return fmt.Errorf("H3 %s %s returned HTTP %d %s: %s; the sidecar could not classify its own failure and it can be "+
+			"raised either side of the durable write, so this is deliberately not an *h3.Error: the hold stands until a "+
+			"status poll on the precomputed paymentId resolves it",
+			method, path, status, env.Error.Code, snippet([]byte(env.Error.Message)))
 	}
 	return &Error{
 		HTTPStatus: status,

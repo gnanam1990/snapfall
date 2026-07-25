@@ -52,13 +52,14 @@
 //
 // THE THREE RECLAIM PATHS, because an unreclaimable hold permanently shrinks the budget:
 //
-//  1. Sweep, for holds that were never attempted. expires_at past AND no
-//     payment.executing claim means Execute can never run it (lifecycle.go:514-519
-//     refuses execution past expiry unconditionally), so the hold is PROVABLY dead and
-//     releasing it needs no external check. This does not depend on approval.expired
-//     ever being appended, which is why it is correct where an event-triggered release
-//     would leak: today a request that expires with nobody waiting on it is never marked
-//     expired at all.
+//  1. Sweep, for holds that were never attempted. expires_at past AND no execution claim
+//     means Execute can never run it (the lifecycle refuses execution past expiry
+//     unconditionally), so the hold is PROVABLY dead and releasing it needs no external
+//     check. "No execution claim" takes BOTH the durable payment.executing event and the
+//     in-process Claimed hook, because the durable one lands only after the expiry check it
+//     follows has already passed; see Claimed. This does not depend on approval.expired ever
+//     being appended, which is why it is correct where an event-triggered release would leak:
+//     today a request that expires with nobody waiting on it is never marked expired at all.
 //  2. The boot status reconciler, for a crash between reserve and pay. Unresolved()
 //     yields exactly the set to poll; the caller commits, releases or leaves held per the
 //     sidecar's durable record.
@@ -208,12 +209,50 @@ type Ledger struct {
 	st    *store.Store
 	clock func() time.Time
 
+	// Claimed, when set, is the IN-PROCESS half of Sweep's proof that a hold is dead, and it
+	// is what closes the execute-versus-sweep TOCTOU that the durable claim alone cannot
+	// (review finding, cmd/snapfall/main.go:578 P0). It answers "has an execution for this
+	// request already passed its expiry gate?" from the executor's own live state rather than
+	// from the log.
+	//
+	// WHY THE DURABLE CLAIM IS NOT ENOUGH. payment.executing becomes durable AFTER the
+	// approval lifecycle's expiry check has already passed, so an execution admitted a
+	// microsecond before ExpiresAt is invisible to refreshClaims until its append lands. A
+	// sweep landing in that window sees an expired, UNCLAIMED hold, releases it, and the
+	// execution then signs against budget the ledger has just given back. That is the one
+	// thing this package must never do.
+	//
+	// WHY THIS CLOSES IT. The lifecycle takes its expiry decision and sets the request's
+	// executed flag inside ONE critical section under its own mutex. Sweep consults this hook
+	// only AFTER establishing now >= ExpiresAt, and outside the ledger mutex, so both
+	// interleavings are safe: if the execution's section ran first the flag is set and the
+	// hold is retained, and if this read ran first the execution reads a clock at or past
+	// ExpiresAt and refuses unconditionally. There is no third interleaving.
+	//
+	// PRECONDITION: the hook must be backed by the SAME clock that Sweep's now comes from
+	// (the daemon passes time.Now to the lifecycle and to Sweep). A now running AHEAD of the
+	// executor's clock would let an execution pass its gate after this read, which is exactly
+	// the window being closed.
+	//
+	// LOCK ORDER, and this is why the call site sits outside l.mu: the ledger mutex is never
+	// held while acquiring the lifecycle's. Intake's order is gates -> ledger mutex, and the
+	// lifecycle's own mutex is never held across a call into this package, so no cycle exists.
+	//
+	// Set once at wiring time, before serving, like the lifecycle's own hooks. nil = the
+	// durable claim alone, the pre-fix behaviour; the ledger's own tests leave it nil because
+	// they hold no lifecycle.
+	Claimed func(requestID string) bool
+
 	mu      sync.Mutex
 	entries map[string]*entry
 	// jobOrg remembers which org a job's holds were reserved under, first writer wins.
 	// A map lookup rather than a scan, so Spend's daily scoping is deterministic and does
 	// not depend on Go's randomized map iteration order.
 	jobOrg map[string]string
+	// stallNoted is the last escalation state recorded per request, so NoteReconcileStalled
+	// records a hold nobody can resolve ONCE per process instead of on every reconcile tick.
+	// Guarded by mu, like the fold it sits beside.
+	stallNoted map[string]string
 
 	gmu   sync.Mutex
 	gates map[string]*jobGate
@@ -227,11 +266,12 @@ func New(st *store.Store, clock func() time.Time) *Ledger {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
 	return &Ledger{
-		st:      st,
-		clock:   clock,
-		entries: make(map[string]*entry),
-		jobOrg:  make(map[string]string),
-		gates:   make(map[string]*jobGate),
+		st:         st,
+		clock:      clock,
+		entries:    make(map[string]*entry),
+		jobOrg:     make(map[string]string),
+		gates:      make(map[string]*jobGate),
+		stallNoted: make(map[string]string),
 	}
 }
 
@@ -561,10 +601,20 @@ func (l *Ledger) Release(ctx context.Context, requestID, reason, code string, pr
 // restarted, or the request was recovered from the log) is never marked expired at all
 // today, so an event-triggered release would leak the hold forever.
 //
-// It re-reads the durable claim set FIRST. The ledger never writes payment.executing, so
-// its in-memory claim view is only as fresh as the last fold, and a stale view would
-// release a hold whose payment may already be signed. That is the one thing this package
-// must never do, so the check is made authoritative rather than cheap.
+// "Provably dead" takes TWO proofs, and the durable one is not sufficient by itself
+// (review finding, cmd/snapfall/main.go:578 P0):
+//
+//  1. the durable claim set, re-read here rather than trusted from the last fold. The ledger
+//     never writes payment.executing, so a stale in-memory view would release a hold whose
+//     payment may already be signed.
+//  2. the IN-PROCESS claim, via the Claimed hook. payment.executing lands AFTER the
+//     lifecycle's expiry check passes, so proof 1 cannot see an execution that was admitted
+//     just before ExpiresAt and has not appended yet. Proof 2 reads the executor's own live
+//     state, which is set in the same critical section as that expiry check. See Claimed for
+//     why the two possible interleavings are both safe.
+//
+// A hold that fails either proof is left alone, not released: the next tick re-reads it, by
+// which point the durable claim has landed and Unresolved() owns it.
 func (l *Ledger) Sweep(ctx context.Context, now time.Time) (int, error) {
 	if err := l.refreshClaims(ctx); err != nil {
 		return 0, err
@@ -590,6 +640,14 @@ func (l *Ledger) Sweep(ctx context.Context, now time.Time) (int, error) {
 
 	released := 0
 	for _, id := range dead {
+		// Proof 2, taken as LATE as possible and outside l.mu: the expiry test above already
+		// established now >= ExpiresAt, so this read happens at a wall time no earlier than the
+		// expiry, which is the whole basis of its soundness. An execution in flight here is one
+		// that passed its own expiry gate microseconds ago and has not appended its claim yet;
+		// releasing behind it would hand its budget back while it goes on to sign.
+		if l.Claimed != nil && l.Claimed(id) {
+			continue
+		}
 		if err := l.Release(ctx, id, sweepReason, CodeExpiredUnattempted, true); err != nil {
 			// Report what did get released before failing: the caller logs the count and
 			// the error, and the next sweep retries the rest.
@@ -753,12 +811,14 @@ func satAdd(a, b int64) int64 {
 // The returned release is idempotent and must be called exactly once (defer it). The
 // per-job gate is dropped when the last waiter leaves, so the map does not grow with the
 // job count.
-func (l *Ledger) JobGate(jobID string) (release func()) {
+// gate serializes on one NAMESPACED key. The per-key gate is dropped when the last waiter
+// leaves, so the map does not grow with the job or org count.
+func (l *Ledger) gate(key string) (release func()) {
 	l.gmu.Lock()
-	g := l.gates[jobID]
+	g := l.gates[key]
 	if g == nil {
 		g = &jobGate{}
-		l.gates[jobID] = g
+		l.gates[key] = g
 	}
 	// Counted BEFORE blocking, under the map lock, so nobody can delete the gate this
 	// caller is about to wait on.
@@ -774,23 +834,56 @@ func (l *Ledger) JobGate(jobID string) (release func()) {
 			l.gmu.Lock()
 			g.waiters--
 			if g.waiters == 0 {
-				delete(l.gates, jobID)
+				delete(l.gates, key)
 			}
 			l.gmu.Unlock()
 		})
 	}
 }
 
+// JobGate serializes intake per job, so the spend read, the policy evaluation and the hold are
+// one critical section for rule 1 (the per-job budget).
+func (l *Ledger) JobGate(jobID string) (release func()) { return l.gate("job:" + jobID) }
+
+// OrgGate serializes intake per ORG, which rule 3 needs: the daily cap sums every job in the org
+// (see DailySpentMicros), so a per-job gate alone lets two jobs each read a stale daily figure and
+// both pass. A 6.00 and a 5.00 intent on two jobs of one org could settle 11.00 against a 10.00
+// cap.
+//
+// Submit takes this BEFORE JobGate. The keyspace is namespaced from JobGate's and that is
+// load-bearing rather than tidy: sync.Mutex is not reentrant, so an orgID whose string equalled a
+// jobID would deadlock against itself here.
+//
+// An empty orgID serializes all org-less intake globally, which is conservative and correct, since
+// those intents also fold into one daily bucket.
+func (l *Ledger) OrgGate(orgID string) (release func()) { return l.gate("org:" + orgID) }
+
 // NoteReconcileStalled records that a post-sign hold has outlived the reconcile deadline
 // and needs an owner. It is a RECORD, not a transition: the hold stays open, because the
 // signed authorization is a bearer instrument that may still settle and nothing in the
 // sidecar ever leaves RECONCILING. Releasing it requires an explicit owner action, which
 // is the pending-chain discipline applied to money of unknown outcome.
+//
+// ONCE per hold per observed state per process, and the dedupe lives here rather than in a
+// caller because there are now two of them: the reconciler escalates a state H3's vocabulary
+// does not contain (cmd/snapfall/main.go:1166 P1) and the deadline scan escalates a hold that
+// has outlived it, and both can reach the same hold in the same tick. A reconcile ticker that
+// re-appended every few minutes would bury the owner in the same money question. A restart
+// re-raises it on purpose: every boot re-asks a question nobody has answered yet.
 func (l *Ledger) NoteReconcileStalled(ctx context.Context, h Hold, state string) error {
 	if h.RequestID == "" {
 		return fmt.Errorf("%w: a stall record needs a request id", ErrInvalidHold)
 	}
-	_, err := l.st.Append(ctx, store.Event{
+
+	// The dedupe check and the append are ONE critical section, the same posture Commit and
+	// Release take: two concurrent escalations of one hold must not both write the record.
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if prev, seen := l.stallNoted[h.RequestID]; seen && prev == state {
+		return nil // already escalated, at this same state: a recorded no-op
+	}
+	if _, err := l.st.Append(ctx, store.Event{
 		TS:       l.clock().UTC(),
 		Kind:     KindReconcileStalled,
 		EntityID: h.JobID,
@@ -803,10 +896,10 @@ func (l *Ledger) NoteReconcileStalled(ctx context.Context, h Hold, state string)
 			"state":       state,
 			"held_since":  h.ReservedAt.Unix(),
 		},
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("recording stalled reconcile for %s: %w", h.RequestID, err)
 	}
+	l.stallNoted[h.RequestID] = state
 	return nil
 }
 
