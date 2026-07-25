@@ -42,7 +42,7 @@ a signal.
 **exactly one caller in the repository**: the manual operator CLI at
 `daemon/cmd/chainops/main.go:153`, reachable only by typing
 
-```
+```sh
 chainops -key-env TREASURY_PRIVATE_KEY record-expense <jobid32> <usdc> <receipt32>
 ```
 
@@ -166,10 +166,13 @@ expenses gap, "purchases approved but not yet settled on chain"
    (`daemon/internal/purchasing/purchasing.go:597-605`). Never derive the amount from the
    intent: the sidecar's `amountPaid` is the authority, which V6 already holds to
    (`daemon/internal/purchasing/purchasing.go:576`).
-3. Respect the state machine. `recordExpense` reverts `InvalidStatus` unless the job is
-   `InProgress` (`contracts/src/JobVault.sol:162`), and only `startWork` sets that state
-   (`contracts/src/JobVault.sol:141-149`), which is itself another operator-only call with no
-   daemon caller (`daemon/cmd/chainops/main.go:138` is the sole one). `submitDelivery` moves
+3. **Wire `startWork` too, or step 2 reverts every time.** This is a prerequisite, not a
+   caveat: `recordExpense` reverts `InvalidStatus` unless the job is `InProgress`
+   (`contracts/src/JobVault.sol:162`), only `startWork` sets that state
+   (`contracts/src/JobVault.sol:141-149`), and `startWork` has no daemon caller either
+   (`daemon/cmd/chainops/main.go:138` is the sole one). So the work is TWO operator-signed
+   calls on the same lane, not one, and whoever implements steps 1 and 2 without this will
+   watch every expense revert. `submitDelivery` moves
    the job to `Delivered` (`contracts/src/JobVault.sol:184`), after which the expense can
    never be recorded. So the write has a window: after the advance and before delivery. A
    revert must land as a pending record, not a silent failure.
@@ -180,7 +183,12 @@ expenses gap, "purchases approved but not yet settled on chain"
 **Manual workaround for 6 Aug, if the full fix is not affordable.** Every input already
 exists, so the expense can be recorded by hand between the spend beat and delivery:
 
-1. Take the vault job id from `.demo/current.json`.
+1. Take the vault job id from `.demo/current.json`, then **verify it on chain before
+   submitting anything**: `chainops job-status <vaultJobId>` must answer `InProgress`. This is
+   not ceremony. As recorded above, milestone-derived `VaultJobID` values can name jobs that do
+   not exist on chain, and `record-expense` against a wrong or absent id either reverts or
+   writes an expense onto somebody else's job. If the status is `Funded` rather than
+   `InProgress`, run `chainops start-work <vaultJobId>` first (same operator key).
 2. Take `receipt_hash` and `amount_micros` from the `purchase.delivered` event in the store.
 3. Convert micros to the human decimal `chainops` expects: `usdcMicros` parses `"0.04"`, not
    `40000` (`daemon/cmd/chainops/main.go:222-241`). This conversion is exactly the kind of
@@ -650,7 +658,7 @@ the cumulative state a per-agent rule would need does not exist.
 **And a shipped manifest asserts the opposite.** `daemon/manifests/research.yaml:8`:
 
 ```yaml
-budget_usdc: "1.00"         # per-job default; policy engine enforces (FR-PAY-003)
+budget_usdc: "1.00"         # declared metadata, NOT enforced by the policy engine; policy engine enforces (FR-PAY-003)
 ```
 
 The requirement it cites does back the reading: FR-PAY-003 is "Policy engine enforces job

@@ -381,6 +381,18 @@ preflight() {
 	need_env TREASURY_PRIVATE_KEY          "operator: signs requestAdvance and createJob"
 	need_env SNAPFALL_CUSTOMER_PRIVATE_KEY "customer: funds its own escrow (SC-JV-001) and signs acceptDelivery"
 	need_env SNAPFALL_LP_PRIVATE_KEY       "pool LP: must NOT be the operator, or the 0.00 start is a lie"
+	# Enforce what that message asserts. seed-demo refuses an LP key equal to the operator
+	# (cmd/seed-demo/main.go), so a copy-paste of one key into both slots used to pass preflight
+	# and fail minutes later, after burning a seed. Compared normalized, since 0x-prefixing and
+	# case are both free choices in an env var.
+	local lp_norm op_norm
+	lp_norm="$(printf %s "${SNAPFALL_LP_PRIVATE_KEY:-}" | tr "[:upper:]" "[:lower:]" | sed "s/^0x//")"
+	op_norm="$(printf %s "${TREASURY_PRIVATE_KEY:-}" | tr "[:upper:]" "[:lower:]" | sed "s/^0x//")"
+	if [[ -n "$lp_norm" && "$lp_norm" == "$op_norm" ]]; then
+		die "SNAPFALL_LP_PRIVATE_KEY is the same key as TREASURY_PRIVATE_KEY: the operator would be
+lending itself money and the treasury would not open at 0.00, so the demo's first claim would be
+false. Use a separate funded wallet for the LP (see docs/V3-CIRCLE-SETUP.md)."
+	fi
 	need_env SNAPFALL_TREASURY_ADDRESS     "deployment fundedWallets.operatorTreasury"
 	need_env SNAPFALL_CUSTOMER_ADDRESS     "deployment fundedWallets.externalCustomer"
 
@@ -778,6 +790,12 @@ fi
 
 # ── the QA gate, then the one-shot's own exit ──────────────────────────────────
 say ""
+# Attribution matters more than it looks: record_bad stamps first_bad from beat_no/beat_name,
+# and this section sits BETWEEN beat 5 and beat 6 without being either. Before this, a
+# terminal-stage timeout here was logged as "5-ALTERNATIVE", pointing whoever reads the log at
+# the wrong beat. It is a gate rather than a numbered demo beat, so it takes a named
+# non-numeric slot instead of pretending to be beat 5 or 6.
+beat_no="5b"; beat_name="QA-GATE"
 say "── check · QA GATE · waiting for the DD task's terminal stage (the QA beat's gate)"
 terminal_line=""
 deadline=$(( $(now) + wait_terminal ))
