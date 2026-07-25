@@ -48,7 +48,6 @@
   --accent-dim: #123c39;
   --accent-bg: #0c1f1d;
   --accent-border: #1c5c50;
-  --accent-glow: rgba(45, 212, 191, 0.5);
   --accent-glow-2: rgba(45, 212, 191, 0.22);
   --accent-glow-3: rgba(45, 212, 191, 0.16);
   --accent-wash: rgba(45, 212, 191, 0.08);
@@ -87,6 +86,9 @@
 
   --violet: #a78bfa;
   --tick: rgba(134, 151, 168, 0.45);
+  /* the activity-feed avatar plate: how much actor hue, mixed into what */
+  --avatar-tint: 16%;
+  --avatar-tint-base: var(--bg-2);
 
   --radius: 12px;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
@@ -151,7 +153,6 @@
   --accent-dim: #d8f1ee;
   --accent-bg: #edfaf8;
   --accent-border: #a7ddd6;
-  --accent-glow: rgba(15, 118, 110, 0.22);
   --accent-glow-2: rgba(15, 118, 110, 0.14);
   --accent-glow-3: rgba(15, 118, 110, 0.1);
   --accent-wash: rgba(15, 118, 110, 0.05);
@@ -193,6 +194,9 @@
 
   --violet: #6d28d9;
   --tick: rgba(92, 107, 122, 0.4);
+  /* less hue, and over --panel not --bg-2: a light plate must stay lighter than its glyph */
+  --avatar-tint: 12%;
+  --avatar-tint-base: var(--panel);
 
   --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 20px rgba(15, 23, 42, 0.06);
   --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.09);
@@ -401,7 +405,12 @@ a { color: inherit; text-decoration: none; }
   display: grid;
   place-items: center;
   clip-path: polygon(25% 5%, 75% 5%, 98% 50%, 75% 95%, 25% 95%, 2% 50%);
-  background: color-mix(in srgb, var(--actor-color) 16%, var(--bg-2));
+  /* Authored per theme rather than derived. Mixing 16% of the actor hue into --bg-2 pulls a
+     light plate TOWARD the glyph, so the 11px/850 initials measured 3.89-4.21:1 for four of the
+     five actor tones in light (only violet passed). Lowering the percentage alone does not fix
+     it; the base has to be the lighter --panel. Dark's rendered output is unchanged, and light's
+     worst tone goes from 3.89:1 to 4.63:1 (audit finding). */
+  background: color-mix(in srgb, var(--actor-color) var(--avatar-tint), var(--avatar-tint-base));
   color: var(--actor-color);
   font-size: 11px;
   font-weight: 850;
@@ -930,7 +939,14 @@ table.t { width: 100%; border-collapse: collapse; }
   background: var(--bg); color: var(--text); border: 1px solid var(--border-2); border-radius: 8px;
   font: inherit; font-size: 13px;
 }
-.approval-reason:focus { outline: none; border-color: var(--accent-dim); }
+/* The only `outline: none` in this file used to substitute a border swap to --accent-dim, which
+   assumes that token is darker than the field. In light it is LIGHTER, so focusing dropped the
+   border from 1.41:1 to 1.10:1 against the field: focus made the indicator worse. It never
+   conformed in dark either (a 1.59:1 isoluminant nudge). A real ring, matching the pattern this
+   file already uses for .theme-toggle, at 5.39:1 light / 8.26:1 dark against the field.
+   --sky rather than --accent because approvals/page.tsx already paints the deep-linked card's
+   border with --accent (audit finding). */
+.approval-reason:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 .approval-result { margin: 12px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .approval-result.approved, .approval-result.alternative_requested { color: var(--pos); }
 .approval-result.rejected { color: var(--neg); }
@@ -1277,7 +1293,18 @@ table.t { width: 100%; border-collapse: collapse; }
   cursor: pointer;
   box-shadow: 0 7px 20px var(--cta-glow);
 }
+/* brightness(1.08) is theme-blind while --on-accent flips polarity (#04120e dark, #ffffff
+   light). Brightening the fill RAISES contrast against a near-black label (dark: 5.61 -> 6.45)
+   and LOWERS it against a white one (light: 4.28 -> 3.73), so the same rule reads as a hover
+   affordance in dark and a contrast regression in light.
+   brightness(0.92) is not the fix: `filter` applies to the element's content too, so it darkens
+   the white label as well and still lands at 4.13:1. The light theme therefore gets a
+   non-filter affordance, scoped so dark cannot regress (audit finding). */
 .watcher-activate:hover:not(:disabled) { filter: brightness(1.08); }
+:root[data-theme='light'] .watcher-activate:hover:not(:disabled) {
+  filter: none;
+  box-shadow: 0 7px 20px var(--cta-glow), 0 0 0 3px var(--cta-glow);
+}
 .watcher-activate:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 .watcher-activate:disabled { cursor: not-allowed; opacity: 0.46; box-shadow: none; }
 .watcher-feedback { min-height: 30px; padding-top: 8px; }
@@ -1446,11 +1473,14 @@ table.t { width: 100%; border-collapse: collapse; }
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--muted);
-  opacity: 0.55;
   min-height: 25px;
-  transition: color 0.3s, opacity 0.3s;
+  /* No idle opacity. Dimming --muted to 0.55 put this 17px/600 caption at 2.50:1 in light and
+     2.69:1 in dark, i.e. failing in BOTH themes, on the resting state of the flagship panel.
+     Tuning the value does not help: --muted needs 0.83 light / 0.84 dark to clear 4.5:1, which
+     is no perceptible dim at all. The idle-to-beat emphasis is carried by the hue rules below
+     instead, so idle now sits at full --muted: 6.96:1 light / 5.95:1 dark (audit finding). */
+  transition: color 0.3s;
 }
-.mg-beat.is-shown { opacity: 1; }
 .mg-beat-fund, .mg-beat-spend { color: var(--sky); }
 .mg-beat-snap, .mg-beat-fall { color: var(--accent); }
 .mg-beat-reject { color: var(--warn); }

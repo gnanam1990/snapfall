@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 
 const KEY = 'snapfall-theme';
-const EVT = 'snapfall-theme-change';
 
 export type Theme = 'light' | 'dark';
 
@@ -50,9 +49,6 @@ function install(): void {
     applyTheme(e.key === null ? 'dark' : e.newValue === 'light' ? 'light' : 'dark');
     notify();
   });
-
-  // Same-tab: whoever dispatched EVT already wrote the document, so subscribers just re-read.
-  window.addEventListener(EVT, notify);
 }
 
 /** Switches the theme, persists it, and tells every mounted toggle to re-read. */
