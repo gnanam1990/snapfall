@@ -132,6 +132,13 @@ function spendSource(kind: string): 'daemon' | 'chain' {
   return kind === 'ExpenseRecorded' ? 'chain' : 'daemon';
 }
 
+/** How many spends of one amount each source has reported this cycle. */
+interface AmountTally {
+  daemon: number;
+  chain: number;
+}
+
+
 
 
 const CAPTION: Record<Beat, string> = {
@@ -169,25 +176,33 @@ export default function MoneyGraph({
   const [escrow, setEscrow] = useState<string | null>(null);
   const [spent, setSpent] = useState<string | null>(null);
   /**
-   * Which source owns spend accounting for the current cycle.
+   * Per-amount reconciliation of the two sources, so one purchase is counted exactly once.
    *
-   * One purchase is reported twice, by the daemon (`payment.executed`) and by the chain
-   * (`ExpenseRecorded`, once the expense is recorded against the vault), and the H2 envelope
-   * carries both vocabularies on one stream. Counting both doubles the API total, which is the
-   * graph asserting money that never moved.
+   * A single x402 purchase is reported twice: by the daemon (`payment.executed`) and by the chain
+   * (`ExpenseRecorded`, once the expense is recorded against the vault). The H2 envelope carries
+   * both vocabularies on one stream, so counting both doubles the API total, which is the graph
+   * asserting money that never moved.
    *
-   * So the first source to report a spend in a cycle owns it, and the other's echo is ignored.
-   * The obvious alternative, keying on job plus amount, silently collapses two legitimate
-   * same-value purchases into one -- an under-count, which is the opposite error and just as
-   * untrue. Correlating on a shared purchase id would be better still, but there is none: H1
-   * ships `receiptHash` on ExpenseRecorded while the daemon's payment.executed carries
-   * `request_id` and `intent_hash`, and nothing maps between them here.
+   * A shared purchase id would make this trivial, and there is none: H1 ships `receiptHash` on
+   * ExpenseRecorded while the daemon's payment.executed carries `request_id` and `intent_hash`,
+   * and nothing here maps between them. So the reconciliation is per amount, and the rule is
+   * simply that the true number of purchases of a given amount is the LARGER of what the two
+   * sources claim. An event counts iff it raises its own source's tally above the other's:
    *
-   * Within one source no dedup is needed: the daemon guarantees exactly one payment.executed per
-   * payment (asserted by its own integration test, "exactly ONE payment.executed per payment,
-   * ever"), and identical re-deliveries are already dropped by the message-id guard above.
+   *   daemon 0.04            d=1 > c=0  count   (a purchase)
+   *   chain  0.04            c=1 > d=1  skip    (the echo of that purchase)
+   *   daemon 0.04 again      d=2 > c=1  count   (a second, genuine, same-value purchase)
+   *   chain  0.04            c=2 > d=2  skip    (its echo)
+   *   chain  0.09 alone      c=1 > d=0  count   (an expense the daemon never reported)
+   *
+   * The comparison is symmetric, so it holds whichever source arrives first: if the chain event
+   * leads, it counts and the daemon's later report is recognised as already-counted.
+   *
+   * Residual imprecision, inherent without a join key: a daemon purchase and an unrelated chain
+   * expense of the exact same amount in one cycle are treated as one. It errs toward not
+   * inventing money, and the only way to remove it is for the two events to share an id.
    */
-  const spendOwner = useRef<'daemon' | 'chain' | null>(null);
+  const spendTally = useRef<Map<string, AmountTally>>(new Map());
   const [operatorNet, setOperatorNet] = useState<string | null>(null);
   const [beat, setBeat] = useState<Beat | null>(null);
   const [drops, setDrops] = useState<Drop[]>([]);
@@ -236,18 +251,24 @@ export default function MoneyGraph({
         setEscrow(amount > 0n ? amount.toString() : null);
         setSpent('0');
         setOperatorNet('0');
-        // A new cycle may legitimately be reported by the other source, so ownership resets.
-        spendOwner.current = null;
+        // A new cycle starts its own reconciliation; the looping demo repeats these amounts.
+        spendTally.current.clear();
         spawn([{ pipe: 'fund', kind: 'fund', dur: 1.1, begin: 0 }]);
         break;
       case 'snap':
         spawn([{ pipe: 'snap', kind: 'snap', dur: 0.75, begin: 0 }]);
         break;
       case 'spend': {
-        // One purchase, one count: the source that opened this cycle's spending owns it.
+        // One purchase, one count: this event only counts if it raises its own source's tally for
+        // this amount above the other source's, i.e. if it represents a purchase the other side
+        // has not already accounted for.
         const src = spendSource(latest.kind);
-        if (spendOwner.current === null) spendOwner.current = src;
-        else if (spendOwner.current !== src) break; // the other side's echo of a counted purchase
+        const key = latest.amountUsdc ?? '-';
+        const tally = spendTally.current.get(key) ?? { daemon: 0, chain: 0 };
+        tally[src] += 1;
+        spendTally.current.set(key, tally);
+        const other = src === 'daemon' ? tally.chain : tally.daemon;
+        if (tally[src] <= other) break; // already counted from the other source
         // Accumulate only from a known base; before any spend event the total is unknown.
         setSpent((s) => (s === null ? amount.toString() : (atomic(s) + amount).toString()));
         spawn([
@@ -294,7 +315,7 @@ export default function MoneyGraph({
         setEscrow('0');
         setSpent('0');
         setOperatorNet('0');
-        spendOwner.current = null;
+        spendTally.current.clear();
         break;
     }
   }, [latest]);
