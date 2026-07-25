@@ -69,6 +69,12 @@ jobs:
       - run: npm run service:test
       - run: npm run store:test
       # Work-split acceptance criterion AT-18.
+      - name: H3 cross-language golden vectors
+        # Pins intentHash/paymentId/authNonce against the identical constants asserted in
+        # daemon/internal/approval/hash_test.go. A canonicalization divergence between the two
+        # languages makes every payment fail INTENT_HASH_MISMATCH, and this is the only thing
+        # that catches it before the daemon is wired to the sidecar.
+        run: npm run test:h3-vectors
       - name: Validate the Circle facilitator fixture contract
         run: npm run test:circle-facilitator-fixture
       - name: Verify the real Circle V1 fixture when supplied
