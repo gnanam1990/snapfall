@@ -33,3 +33,6 @@ daemon/snapfalld
 
 # demo run state (V12 seed_demo)
 .demo/
+
+# local editor/preview tooling; the port and port choice are machine-specific
+.claude/launch.json
