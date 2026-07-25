@@ -44,7 +44,7 @@ const (
 	DecideRequestAlternative DecisionKind = "request_alternative"
 )
 
-// Sentinel errors — the machine-readable refusal vocabulary (FR-PAY-004 spirit).
+// Sentinel errors, the machine-readable refusal vocabulary (FR-PAY-004 spirit).
 var (
 	ErrNonceReplayed      = errors.New("nonce-replayed: this nonce has already been submitted")
 	ErrUnknownRequest     = errors.New("unknown-request: no approval request with that ID")
@@ -80,7 +80,7 @@ type Request struct {
 }
 
 // DecisionSignal returns a channel closed when the request leaves Pending. A blocked
-// Purchase selects on this to wake the instant the owner decides — never a poll. Unknown
+// Purchase selects on this to wake the instant the owner decides, never a poll. Unknown
 // or already-terminal requests return an already-closed channel, so a waiter cannot hang.
 func (l *Lifecycle) DecisionSignal(requestID string) <-chan struct{} {
 	l.mu.Lock()
@@ -94,8 +94,8 @@ func (l *Lifecycle) DecisionSignal(requestID string) <-chan struct{} {
 }
 
 // PendingRequests returns copies of every request awaiting a human decision, oldest
-// first — the H2 approvals inbox (GET /api/v1/approvals) renders exactly this.
-// Requests returns a copy of every request the lifecycle knows, any state — the
+// first, the H2 approvals inbox (GET /api/v1/approvals) renders exactly this.
+// Requests returns a copy of every request the lifecycle knows, any state, the
 // restart-escalation scan reads this after Recover.
 func (l *Lifecycle) Requests() []Request {
 	l.mu.Lock()
@@ -120,7 +120,7 @@ func (l *Lifecycle) PendingRequests() []Request {
 	return out
 }
 
-// Snapshot returns a copy of the request for reading its terminal state and reason — the
+// Snapshot returns a copy of the request for reading its terminal state and reason, the
 // structured decision the Purchaser maps back to the worker. Never the live pointer.
 func (l *Lifecycle) Snapshot(requestID string) (Request, bool) {
 	l.mu.Lock()
@@ -140,11 +140,11 @@ func closeDecided(req *Request) {
 	}
 }
 
-// Grant is the capability Execute mints when — and only when — every gate has passed:
+// Grant is the capability Execute mints when, and only when, every gate has passed:
 // hash bound, state approved, unexpired, policy version current, never executed.
 //
 // Every field is unexported. A Grant forged outside this package (`approval.Grant{}`)
-// is EMPTY: it names no amount, no merchant, no job — there is no money movement it
+// is EMPTY: it names no amount, no merchant, no job, there is no money movement it
 // could describe. The data needed to act can only enter a Grant here, post-gate. Any
 // Funding-side entry point that demands a Grant therefore cannot be reached with a bare
 // policy.Decision, an expired approval, or nothing at all. This is the execution-side
@@ -170,10 +170,10 @@ func (g Grant) Empty() bool { return g.requestID == "" }
 // There is deliberately NO exported constructor for a populated Grant. A Grant with
 // real payment data can be minted ONLY inside Execute, after every gate. Tests that
 // need a legitimate Grant (including tests in other packages) obtain one by driving a
-// real approved lifecycle flow and capturing what the Executor receives — never a
+// real approved lifecycle flow and capturing what the Executor receives, never a
 // production-reachable shortcut, which would be a second door past the gates.
 
-// Executor performs the approved action — for the demo spine, the Funding-agent call.
+// Executor performs the approved action, for the demo spine, the Funding-agent call.
 // It receives an approval-minted Grant, never a bare Intent or policy Decision.
 type Executor func(ctx context.Context, g Grant) error
 
@@ -181,7 +181,7 @@ type Executor func(ctx context.Context, g Grant) error
 type Lifecycle struct {
 	st    *store.Store
 	clock Clock
-	// Policy returns the active config and its version — read at intake AND at
+	// Policy returns the active config and its version, read at intake AND at
 	// execution, so a version bump between the two invalidates (SEC-006).
 	Policy func() (policy.PolicyConfig, string)
 	// Spend returns the current spend state for a job (caller contract: the daily
@@ -192,10 +192,72 @@ type Lifecycle struct {
 	// write-ahead claim and Grant minting.
 	Freeze *freeze.Registry
 	// Pending, when set, is invoked (outside locks, with a COPY) each time Submit opens a
-	// request that needs a human decision — the owner surface's notification seam: a
+	// request that needs a human decision, the owner surface's notification seam: a
 	// dashboard or Telegram wiring renders the approval prompt from exactly this. Tests
 	// drive deterministic owner decisions through it too.
 	Pending func(Request)
+	// JobGate, when set, serializes intake per job: the Spend read, the policy evaluation
+	// and the budget hold become ONE critical section. Without it two concurrent intents
+	// on one job both evaluate against the same unheld state and both pass the job-budget
+	// rule, five 4.00 intents against a 6.00 budget would all be approved. That is the
+	// hazard H3 §7 step 2's pre-sign hold exists to close, and a hold that is taken after
+	// the evaluation it was supposed to constrain does not close it.
+	//
+	// The returned release is called exactly once per acquisition, on EVERY path out of
+	// Submit, and always BEFORE the Pending callback runs: Pending is documented to be
+	// invoked outside locks, and a callback that submits another intent on the same job
+	// would deadlock on a non-reentrant per-job gate.
+	//
+	// nil = today's behaviour, unserialized. Every existing wiring leaves it nil.
+	JobGate func(jobID string) (release func())
+	// OrgGate, when set, serializes intake per ORG, and it is held across the same critical
+	// section as JobGate. JobGate alone is not sufficient: the daily cumulative cap tests
+	// policy.SpendState.DailySpentMicros, which is org-wide by contract (policy.go:119) and
+	// is summed across every job in the org (budget.go's Spend), so two concurrent intents
+	// on DIFFERENT jobs pass the per-job gate in parallel, both read the same stale daily
+	// figure, and both pass rule 3. A 6.00 and a 5.00 intent on two jobs can therefore
+	// settle 11.00 against a 10.00 daily cap (review finding, lifecycle.go:324 P1).
+	//
+	// LOCK ORDER, and it is the only one: OrgGate first, then JobGate. Submit is the sole
+	// acquisition site of either, so this order is total. An implementation that serves both
+	// hooks from one keyed gate map MUST namespace the org keys away from the job keys, or
+	// an orgID that collides with a jobID string self-deadlocks here.
+	//
+	// Released with JobGate, on every path out of Submit and always before Pending runs.
+	//
+	// nil = today's behaviour, unserialized. Every existing wiring leaves it nil.
+	OrgGate func(orgID string) (release func())
+	// Reserve, when set, holds the intent's reserve ceiling against the job budget AFTER a
+	// non-Deny decision and BEFORE the approval.requested event is appended. Returning an
+	// error aborts intake: no hold, no durable request, no visible request. The nonce is
+	// burned, which is the same failure shape an append error already has here, a fresh
+	// intent is the recovery.
+	//
+	// It is called with the exact intent InternalHash was computed over, so a hold records
+	// the figures the owner's decision is bound to and not a later mutation of them.
+	//
+	// Ordering is deliberate and it is the W1 invariant in V6's crash table: the hold is
+	// durable before the request is durable, and therefore before Execute's write-ahead
+	// payment.executing claim can exist. A reservation with no claim is provably
+	// unattempted, which is the only thing that makes the expiry sweeper safe.
+	//
+	// Reserve runs BEFORE the append rather than after it (review finding, lifecycle.go:400
+	// P0) because "hold durable before request VISIBLE" is not fail-closed across a restart:
+	// approval.requested is already durable when Reserve is reached, Recover folds it back
+	// into an executable request (an auto-approved one is Execute-ready immediately), and the
+	// hold that intake refused to open does not exist. That is an unbudgeted payment, the
+	// exact failure W1 forbids. The inverse crash window is safe and reclaimable: a hold
+	// whose approval.requested append then fails has no request, so it can never acquire a
+	// payment.executing claim, and the expiry sweeper releases it in full once ExpiresAt
+	// passes. Fail-closed means the unpaired artifact is the reclaimable one.
+	//
+	// Not called by SubmitAdvance: an advance is money INTO the treasury, and
+	// maxOperatingBudget is the SC-JV-003 spend bound with no bearing on borrowing
+	// capacity (FR-FLT-002, SC-FP-002). Coupling them would let a spend cap block the
+	// funding that repairs it.
+	//
+	// nil = no reservation, the pre-V6 behaviour. Every existing wiring leaves it nil.
+	Reserve func(ctx context.Context, in Intent, requestID string) error
 
 	mu       sync.Mutex
 	requests map[string]*Request
@@ -216,7 +278,7 @@ func (l *Lifecycle) frozenErr(in Intent) error {
 // admitExecution atomically gates AND counts this execution against the freeze registry.
 // The in-flight count now lives in the registry (incremented under the same lock Engage
 // snapshots), so freeze admission and the in-flight transition are one step w.r.t. a
-// concurrent Engage — closing the gap where an admitted payment was reported as
+// concurrent Engage, closing the gap where an admitted payment was reported as
 // zero-in-flight (review fix, Anandan #4.1). With no registry wired, it is a no-op.
 func (l *Lifecycle) admitExecution(in Intent) (func(), error) {
 	if l.Freeze == nil {
@@ -239,7 +301,7 @@ type SubmitResult struct {
 
 // Submit is intake: claim the nonce, evaluate policy, and open the approval record.
 //
-// Nonce replay is closed HERE, before policy ever runs, and the claim is durable —
+// Nonce replay is closed HERE, before policy ever runs, and the claim is durable -
 // the payment_intents.nonce UNIQUE constraint in the store is the authority, so a
 // replay is refused even across a daemon restart.
 func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error) {
@@ -248,7 +310,7 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 	}
 
 	// ── G11: the kill switch gates intake BEFORE the nonce claim, so a frozen-scope
-	//    submission does not burn its nonce — the same intent submits cleanly after
+	//    submission does not burn its nonce, the same intent submits cleanly after
 	//    the freeze lifts (AT-09 "stops new claims"). ──
 	if err := l.frozenErr(in); err != nil {
 		return SubmitResult{}, err
@@ -276,12 +338,54 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 		}
 	}
 
+	// ── V6: one critical section covering the spend read, the evaluation and the hold.
+	//    Acquired HERE, after the nonce claim (which is already serialized by the UNIQUE
+	//    constraint and must not queue behind an unrelated evaluation) and before the first
+	//    read of cumulative spend. Released the moment the request is visible, which is the
+	//    last point the decision can still be influenced.
+	//
+	//    BOTH scopes, because the two rules this section protects have different scopes: the
+	//    job-budget rule sums one job, the daily cap sums the whole ORG (policy.go:119). A
+	//    per-job gate leaves two jobs in one org racing on the daily figure (review finding,
+	//    lifecycle.go:324 P1). Lock order is org-then-job, documented on OrgGate, and Submit
+	//    is the only place either is taken.
+	//
+	//    unlockGates is idempotent on this side rather than trusting the hooks' releases to
+	//    be: the deferred call is the safety net for the four early returns below, the
+	//    explicit call is the real boundary, and whichever runs first wins. It unwinds in
+	//    reverse acquisition order. ──
+	var releaseOrgGate, releaseJobGate func()
+	if l.OrgGate != nil {
+		releaseOrgGate = l.OrgGate(in.OrgID)
+	}
+	if l.JobGate != nil {
+		releaseJobGate = l.JobGate(in.JobID)
+	}
+	unlockGates := func() {
+		if releaseJobGate != nil {
+			releaseJobGate()
+			releaseJobGate = nil
+		}
+		if releaseOrgGate != nil {
+			releaseOrgGate()
+			releaseOrgGate = nil
+		}
+	}
+	defer unlockGates()
+
 	// ── Policy evaluation (G6, pure). ──
 	d := policy.Evaluate(cfg, l.Spend(in.JobID), policy.PaymentIntent{
 		IntentID: in.IntentID, OrgID: in.OrgID, JobID: in.JobID, TaskID: in.TaskID,
 		AgentID: in.AgentID, Merchant: in.Merchant, Resource: in.Resource,
 		AmountMicros: in.AmountMicros, Purpose: in.Purpose, Nonce: in.Nonce,
 		PolicyVersion: version,
+		// Kind MUST be forwarded, or Evaluate's rule 0 can never fire from this door and an
+		// advance-kind intent is evaluated as a payment. Whether it is then refused becomes
+		// incidental to whether its amount happens to trip a budget, which is exactly the
+		// fail-open policy.go:68-73 warns about ("handing an unmodelled kind whatever falls out
+		// of its rules is where a fail-open hides"). Found by the new AT-15 API-half test, which
+		// caught a real refusal arriving from job-budget rather than from the kind.
+		Kind: in.Kind,
 	})
 
 	if err := l.appendEvent(ctx, in.JobID, "policy.evaluated", map[string]any{
@@ -314,6 +418,32 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 		req.decided = make(chan struct{}) // an async Purchase waits on this
 	}
 
+	// ── V6: hold the budget BEFORE the request is DURABLE, not merely before it is
+	//    visible. We hold at INTAKE on any non-Deny outcome, which is EARLIER than H3 §7
+	//    step 2's "on decision AUTO_APPROVE / HUMAN_APPROVED": a pending request blocks a
+	//    waiter for the whole approval window, and nothing would be held during it. Holding
+	//    earlier is monotonically safe, it can only deny more, never less, while holding
+	//    later opens a real double-spend of the budget. The cost is that a pending request
+	//    which expires unanswered pins budget for the window; the expiry sweeper reclaims
+	//    it, and that is the conservative direction.
+	//
+	//    Fails CLOSED, and this is why it precedes the append (review finding,
+	//    lifecycle.go:400 P0): once approval.requested is durable, a reserve failure is no
+	//    longer recoverable-safe. Recover folds that event straight back into a request in
+	//    its recorded state, and an auto-approved one is Execute-ready with no hold behind
+	//    it, so the crash-window table's W1 invariant ("budget.reserved durable before
+	//    payment.executing") would be broken by an ordinary error path, not just a crash.
+	//    Reserving first inverts the unpaired artifact into the reclaimable one: a hold with
+	//    no request can never be claimed, and Sweep releases it at ExpiresAt.
+	//
+	//    An intake that cannot record what it is about to spend has no business opening an
+	//    approval, durably or otherwise. ──
+	if l.Reserve != nil {
+		if err := l.Reserve(ctx, in, req.ID); err != nil {
+			return SubmitResult{}, fmt.Errorf("refusing intake without a durable budget hold for %s: %w", req.ID, err)
+		}
+	}
+
 	// Durable BEFORE visible: the approval.requested event is what recovery rebuilds
 	// from, so it must land before the request enters the map (review-batch fix). The
 	// full intent rides the event so a restart can re-verify the hash.
@@ -327,6 +457,10 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 	l.mu.Lock()
 	l.requests[req.ID] = req
 	l.mu.Unlock()
+
+	// The decision is now final and visible, so the critical section ends here, both scopes,
+	// deliberately before Pending, which runs outside every lock.
+	unlockGates()
 
 	// Notify the owner surface of a request awaiting a human (outside all locks; a copy).
 	if req.State == StatePending && l.Pending != nil {
@@ -342,13 +476,20 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 // ErrWrongKind refuses an intent entering through the wrong door.
 var ErrWrongKind = errors.New("wrong-kind: this submission path does not accept that intent kind")
 
-// SubmitAdvance opens an approval request for a working-capital ADVANCE — money INTO
+// SubmitAdvance opens an approval request for a working-capital ADVANCE, money INTO
 // the treasury, human-authorized ONLY (PRD §6.4). It deliberately SKIPS policy
 // evaluation: Evaluate models outbound agent spend and its rule 0 denies any advance
 // kind by law; this path is the explicit, modelled entrance. The request enters
-// PENDING unconditionally — there is no auto-approve for an advance, ever — and lands
+// PENDING unconditionally, there is no auto-approve for an advance, ever, and lands
 // in the same H2 inbox, decision endpoint, Grant discipline, freeze gates, and
 // exactly-once execution as every payment approval.
+//
+// It also skips BOTH V6 budget hooks, for the same reason it skips evaluation. Reserve is
+// skipped because maxOperatingBudget is the SC-JV-003 spend bound and has no bearing on
+// borrowing capacity (FR-FLT-002, SC-FP-002): an advance must not be blocked by the spend
+// cap it exists to relieve. JobGate and OrgGate are skipped because there is no
+// cumulative-spend read here to serialize, so acquiring either would add deadlock surface
+// and constrain nothing.
 func (l *Lifecycle) SubmitAdvance(ctx context.Context, in Intent) (SubmitResult, error) {
 	if l.Policy == nil {
 		return SubmitResult{}, fmt.Errorf("lifecycle not wired: Policy must be set")
@@ -358,7 +499,7 @@ func (l *Lifecycle) SubmitAdvance(ctx context.Context, in Intent) (SubmitResult,
 	}
 
 	// The kill switch gates intake BEFORE the nonce claim (AT-09: freeze stops new
-	// advances) — a frozen-scope proposal does not burn its nonce.
+	// advances), a frozen-scope proposal does not burn its nonce.
 	if err := l.frozenErr(in); err != nil {
 		return SubmitResult{}, err
 	}
@@ -424,7 +565,7 @@ func (l *Lifecycle) Decide(ctx context.Context, requestID string, kind DecisionK
 		return nil, fmt.Errorf("unknown decision kind %q", kind)
 	}
 
-	// Idempotency first: the same decision landing twice is one effect, not two —
+	// Idempotency first: the same decision landing twice is one effect, not two -
 	// and not an error, so a retried Telegram tap is harmless.
 	if req.State == target && req.DecidedBy == by {
 		cp := *req
@@ -462,7 +603,7 @@ func (l *Lifecycle) Decide(ctx context.Context, requestID string, kind DecisionK
 	return &cp, nil
 }
 
-// Execute runs the approved action — the ONLY path to an Executor.
+// Execute runs the approved action, the ONLY path to an Executor.
 //
 // The binding is re-verified at execution time, in this order:
 //  1. the request exists
@@ -533,7 +674,7 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 	//    l.mu, gate on the kill switch AND count this execution in-flight in one step
 	//    (the count lives in the registry, incremented under the lock Engage snapshots).
 	//    So the freeze admission and the executed/in-flight transition are atomic w.r.t.
-	//    a concurrent Engage: it either refuses this execution or reports it in-flight —
+	//    a concurrent Engage: it either refuses this execution or reports it in-flight -
 	//    never "nothing was in flight" while a payment proceeds. Frozen here -> no claim,
 	//    intent NOT burned. ──
 	release, err := l.admitExecution(req.Intent)
@@ -549,7 +690,7 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 
 	// The claim MUST be durable before the executor runs (review-batch fix): a
 	// memory-only claim disappears in a crash and the payment would repeat. If the
-	// append fails, un-claim, release the in-flight admission, and abort — the executor
+	// append fails, un-claim, release the in-flight admission, and abort, the executor
 	// has not run, so retrying later is safe. No durable claim, no execution.
 	if err := l.appendEvent(ctx, req.JobID, "payment.executing", map[string]any{
 		"request_id": req.ID, "intent_hash": req.IntentHash,
@@ -568,7 +709,7 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 
 	grant := Grant{intent: in, requestID: req.ID, grantedAt: req.ExecutedAt}
 	if err := exec(ctx, grant); err != nil {
-		// The claim stands (no retry without a fresh intent) — mirrors the sidecar's
+		// The claim stands (no retry without a fresh intent), mirrors the sidecar's
 		// conservative posture: never risk a double-spend to save a retry.
 		_ = l.appendEvent(ctx, req.JobID, "payment.failed", map[string]any{
 			"request_id": req.ID, "error": err.Error(),
@@ -589,7 +730,7 @@ func (l *Lifecycle) Execute(ctx context.Context, in Intent, requestID string, ex
 // Recover rebuilds the request map from the event log (G11 / extended AT-10).
 //
 // Before this existed, a restart LOST approved-but-unexecuted requests while their
-// nonces stayed burned — the intent could neither execute nor resubmit. Replay folds
+// nonces stayed burned, the intent could neither execute nor resubmit. Replay folds
 // the approval events in sequence order:
 //
 //	approval.requested        -> request opened (full intent + initial state)
@@ -696,7 +837,7 @@ func (l *Lifecycle) claimNonce(ctx context.Context, in Intent) error {
 
 // appendEvent writes one audit event. NOT best-effort (review-batch fix): Recover()
 // rebuilds all request state from these events, so a silently-lost append is lost
-// recovery state — and for payment.executing, an open double-pay window. Callers on
+// recovery state, and for payment.executing, an open double-pay window. Callers on
 // money-critical paths fail closed on error.
 func (l *Lifecycle) appendEvent(ctx context.Context, jobID, kind string, payload map[string]any) error {
 	_, err := l.st.Append(ctx, store.Event{Kind: kind, EntityID: jobID, Actor: "approval", Payload: payload})
