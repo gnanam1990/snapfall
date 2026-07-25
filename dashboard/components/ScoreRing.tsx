@@ -36,6 +36,7 @@ export default function ScoreRing({
       return;
     }
     const to = rateBps;
+    const cameFromUnknown = prev.current === null;
     prev.current = rateBps;
 
     // Reduced motion: land the value immediately and never enter the bump state, so it
@@ -43,6 +44,14 @@ export default function ScoreRing({
     if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
       setDisplayBps(to);
       setBump(false);
+      return;
+    }
+
+    // Returning from an unknown rate: whatever is on screen is stale chain data from before the
+    // gap, so easing FROM it would animate through numbers that were never true. Snap instead.
+    // This also covers first paint, where prev.current starts null.
+    if (cameFromUnknown) {
+      setDisplayBps(to);
       return;
     }
 

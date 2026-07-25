@@ -76,8 +76,14 @@ type Beat = 'fund' | 'snap' | 'spend' | 'reject' | 'repay' | 'fall' | 'flywheel'
  * allowed to drain the escrow and pay the operator. Conflating them animated a full waterfall
  * twice and let a leg-only event zero the operator's share (review: PR #40).
  */
-function beatFor(kind: string): Beat | null {
-  switch (kind) {
+/**
+ * Maps a stream message to an animation beat.
+ *
+ * Takes the whole message, not just the kind, because the kind is not sufficient: the stream
+ * normalizes a pending approval and an executed purchase to the same `approval.requested`.
+ */
+function beatFor(msg: ActivityMessage): Beat | null {
+  switch (msg.kind) {
     case 'JobFunded':
     case 'job.funded':
       return 'fund';
@@ -89,6 +95,14 @@ function beatFor(kind: string): Beat | null {
     case 'payment.delivered':
     case 'approval.alternative_found':
       return 'spend';
+    // An approval request is only money leaving the treasury once it is APPROVED. The demo's
+    // 0.06 alternative purchase arrives this way (the route rewrites
+    // `approval.alternative_found` to `approval.requested` with state APPROVED), so without this
+    // the graph's API total stopped at 0.04 and the replacement purchase animated nothing. The
+    // pending 4.00 escalation normalizes to the SAME kind and must not be treated as a spend,
+    // which is exactly why the state is the discriminator rather than the kind.
+    case 'approval.requested':
+      return msg.approvalState === 'approved' ? 'spend' : null;
     case 'approval.reject':
     case 'approval.rejected':
     case 'approval.request_alternative':
@@ -107,6 +121,25 @@ function beatFor(kind: string): Beat | null {
       return null;
   }
 }
+
+/**
+ * Which side of the stream reported a spend.
+ *
+ * The spend kinds are disjoint by source, so the kind alone identifies it: `ExpenseRecorded` is
+ * the chain's, everything else routed to a spend beat is the daemon's.
+ */
+function spendSource(kind: string): 'daemon' | 'chain' {
+  return kind === 'ExpenseRecorded' ? 'chain' : 'daemon';
+}
+
+/** How many spends of one amount each source has reported this cycle. */
+interface AmountTally {
+  daemon: number;
+  chain: number;
+}
+
+
+
 
 const CAPTION: Record<Beat, string> = {
   fund: 'The customer funded the JobVault',
@@ -142,6 +175,34 @@ export default function MoneyGraph({
   // discipline the rest of the Overview follows (review: PR #40).
   const [escrow, setEscrow] = useState<string | null>(null);
   const [spent, setSpent] = useState<string | null>(null);
+  /**
+   * Per-amount reconciliation of the two sources, so one purchase is counted exactly once.
+   *
+   * A single x402 purchase is reported twice: by the daemon (`payment.executed`) and by the chain
+   * (`ExpenseRecorded`, once the expense is recorded against the vault). The H2 envelope carries
+   * both vocabularies on one stream, so counting both doubles the API total, which is the graph
+   * asserting money that never moved.
+   *
+   * A shared purchase id would make this trivial, and there is none: H1 ships `receiptHash` on
+   * ExpenseRecorded while the daemon's payment.executed carries `request_id` and `intent_hash`,
+   * and nothing here maps between them. So the reconciliation is per amount, and the rule is
+   * simply that the true number of purchases of a given amount is the LARGER of what the two
+   * sources claim. An event counts iff it raises its own source's tally above the other's:
+   *
+   *   daemon 0.04            d=1 > c=0  count   (a purchase)
+   *   chain  0.04            c=1 > d=1  skip    (the echo of that purchase)
+   *   daemon 0.04 again      d=2 > c=1  count   (a second, genuine, same-value purchase)
+   *   chain  0.04            c=2 > d=2  skip    (its echo)
+   *   chain  0.09 alone      c=1 > d=0  count   (an expense the daemon never reported)
+   *
+   * The comparison is symmetric, so it holds whichever source arrives first: if the chain event
+   * leads, it counts and the daemon's later report is recognised as already-counted.
+   *
+   * Residual imprecision, inherent without a join key: a daemon purchase and an unrelated chain
+   * expense of the exact same amount in one cycle are treated as one. It errs toward not
+   * inventing money, and the only way to remove it is for the two events to share an id.
+   */
+  const spendTally = useRef<Map<string, AmountTally>>(new Map());
   const [operatorNet, setOperatorNet] = useState<string | null>(null);
   const [beat, setBeat] = useState<Beat | null>(null);
   const [drops, setDrops] = useState<Drop[]>([]);
@@ -163,7 +224,7 @@ export default function MoneyGraph({
     if (!latest || latest.id === lastId.current) return;
     lastId.current = latest.id;
 
-    const next = beatFor(latest.kind);
+    const next = beatFor(latest);
     if (!next) return;
 
     const spawn = (specs: Omit<Drop, 'id'>[]) => {
@@ -179,6 +240,15 @@ export default function MoneyGraph({
     };
 
     const amount = atomic(latest.amountUsdc);
+
+    // An amountless spend is not a spend event here AT ALL: it cannot be totalled, cannot be
+    // reconciled against the other source, and must not set the spend caption either. The real
+    // daemon's `payment.executed` carries no amount (approval/lifecycle.go), and the purchase it
+    // confirms was already announced and counted by its amount-bearing policy-cleared
+    // `approval.requested`, so letting it through only re-announced the same purchase.
+    // Deliberately narrow: reject, flywheel and reset beats legitimately carry no amount.
+    if (next === 'spend' && amount <= 0n) return;
+
     setBeat(next);
 
     switch (next) {
@@ -190,12 +260,27 @@ export default function MoneyGraph({
         setEscrow(amount > 0n ? amount.toString() : null);
         setSpent('0');
         setOperatorNet('0');
+        // A new cycle starts its own reconciliation; the looping demo repeats these amounts.
+        spendTally.current.clear();
         spawn([{ pipe: 'fund', kind: 'fund', dur: 1.1, begin: 0 }]);
         break;
       case 'snap':
         spawn([{ pipe: 'snap', kind: 'snap', dur: 0.75, begin: 0 }]);
         break;
-      case 'spend':
+      case 'spend': {
+        // Amountless events never reach here (guarded above), so every spend in the tally has a
+        // real amount to reconcile on.
+        //
+        // One purchase, one count: this event only counts if it raises its own source's tally for
+        // this amount above the other source's, i.e. if it represents a purchase the other side
+        // has not already accounted for.
+        const src = spendSource(latest.kind);
+        const key = latest.amountUsdc ?? '-';
+        const tally = spendTally.current.get(key) ?? { daemon: 0, chain: 0 };
+        tally[src] += 1;
+        spendTally.current.set(key, tally);
+        const other = src === 'daemon' ? tally.chain : tally.daemon;
+        if (tally[src] <= other) break; // already counted from the other source
         // Accumulate only from a known base; before any spend event the total is unknown.
         setSpent((s) => (s === null ? amount.toString() : (atomic(s) + amount).toString()));
         spawn([
@@ -203,6 +288,7 @@ export default function MoneyGraph({
           { pipe: 'spend', kind: 'spend', dur: 1.0, begin: 0.18 },
         ]);
         break;
+      }
       case 'reject':
         // A refusal moves no money: caption only, deliberately no droplet.
         break;
@@ -241,6 +327,7 @@ export default function MoneyGraph({
         setEscrow('0');
         setSpent('0');
         setOperatorNet('0');
+        spendTally.current.clear();
         break;
     }
   }, [latest]);

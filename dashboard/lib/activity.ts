@@ -31,6 +31,16 @@ export interface ActivityMessage {
   explorerUrl?: string;
   filter: Exclude<ActivityFilter, 'all'>;
   approval?: ApprovalMoment;
+  /**
+   * Lowercased state of an `approval.requested` event, e.g. 'pending' or 'approved'.
+   *
+   * The stream normalizes BOTH a pending escalation and an already-approved purchase to the same
+   * `approval.requested` kind, so the kind alone cannot tell "someone is being asked" from
+   * "money left the treasury". Consumers that care about the difference need this. The `approval`
+   * field above is not a substitute: it is absent for every non-pending state AND for every
+   * non-approval event, so its absence does not mean "approved".
+   */
+  approvalState?: string;
   /** Stable request id joining rejection/request-alternative to its replacement. */
   threadKey?: string;
   /** Present on settlement events that report both waterfall legs. */
@@ -204,6 +214,7 @@ function humanText(event: StreamEvent): {
   filter: Exclude<ActivityFilter, 'all'>;
   amount?: string;
   approval?: ApprovalMoment;
+  approvalState?: string;
   threadKey?: string;
 } {
   const payload = record(event.payload);
@@ -222,6 +233,7 @@ function humanText(event: StreamEvent): {
         filter: 'approvals',
         amount: req.amount,
         approval: req.state.toLowerCase() === 'pending' ? { requestId: req.requestId, intentHash: req.intentHash } : undefined,
+        approvalState: req.state.toLowerCase(),
         threadKey: req.alternativeTo,
       };
     }
@@ -233,6 +245,7 @@ function humanText(event: StreamEvent): {
       filter: 'approvals',
       amount: req.amount,
       approval: pending ? { requestId: req.requestId, intentHash: req.intentHash } : undefined,
+      approvalState: req.state.toLowerCase(),
       threadKey: req.requestId,
     };
   }

@@ -197,3 +197,50 @@ test('AdvanceRepaid stays a repayment-leg event, distinct from a full settlement
   assert.equal(repaid.settlement, undefined);
   assert.match(repaid.text, /repaid first/i);
 });
+
+test('approval.requested carries its state, because the kind alone cannot classify it', () => {
+  // The stream normalizes BOTH a pending escalation and an executed purchase to this one kind.
+  const pending = humanizeStreamEvent({
+    kind: 'event',
+    source: 'daemon',
+    seq: 60,
+    event: {
+      kind: 'approval.requested',
+      jobId: 'job_demo_1',
+      at: '2026-07-24T10:00:00Z',
+      payload: {
+        request_id: 'apr_1',
+        state: 'PENDING',
+        intent: { Merchant: 'api.example', Resource: 'GET /v1/premium', AmountMicros: 4_000_000, Purpose: 'premium dataset' },
+      },
+    },
+  });
+  const approved = humanizeStreamEvent({
+    kind: 'event',
+    source: 'daemon',
+    seq: 61,
+    event: {
+      kind: 'approval.requested',
+      jobId: 'job_demo_1',
+      at: '2026-07-24T10:00:05Z',
+      payload: {
+        request_id: 'apr_2',
+        state: 'APPROVED',
+        intent: { Merchant: 'api.example', Resource: 'GET /v1/benchmark', AmountMicros: 60_000, Purpose: 'benchmark', AlternativeTo: 'apr_1' },
+      },
+    },
+  });
+
+  assert.equal(pending.kind, approved.kind, 'both really do share one kind, which is the problem');
+  assert.equal(pending.approvalState, 'pending');
+  assert.equal(approved.approvalState, 'approved');
+
+  // The `approval` field is NOT a usable substitute: it is absent for approved AND for every
+  // non-approval event, so its absence cannot mean "approved".
+  assert.ok(pending.approval, 'a pending request is actionable');
+  assert.equal(approved.approval, undefined);
+
+  // The amount must survive, since the graph totals it as a spend.
+  assert.equal(approved.amountUsdc, '60000');
+  assert.equal(pending.amountUsdc, '4000000');
+});
