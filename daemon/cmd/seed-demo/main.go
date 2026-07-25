@@ -1,17 +1,28 @@
 // Command seed-demo prepares one clean demo run (V12).
 //
 // It exists because the demo's most important beat is also its most fragile: at 0:30 the
-// treasury draws a Float advance, and FloatPool refuses that advance if the pool is not deep
-// enough for the org's exposure cap. Getting that wrong means CapExceeded on camera. So this
-// command computes the requirement from the LIVE advance rate rather than assuming 50%, tops
-// the pool up only by the deficit, mints a fresh job id, funds the escrow, and then verifies
-// the chain agrees before printing "ready".
+// treasury draws a Float advance, and FloatPool refuses that advance unless the pool is deep
+// enough for BOTH of its caps. Getting that wrong means CapExceeded on camera. So this command
+// derives the requirement from the live chain position rather than from assumptions, tops the
+// pool up only by the deficit, mints a fresh job id, funds the escrow, and then re-reads the
+// chain before printing "ready".
+//
+// Three things are read, never assumed: the org's advance rate (the flywheel raises it, which
+// raises the advance and the depth it needs), and the two outstanding balances. The caps are
+// evaluated on the position AFTER issuance, so a pool that already carries exposure needs more
+// depth than the new principal alone implies.
+//
+// Three keys, because the contracts treat three distinct parties: the operator draws the
+// advance, only the designated customer may fund its own escrow (SC-JV-001), and the LP
+// supplies pool liquidity. The LP must not be the operator, or the demo's opening claim of a
+// treasury at 0.00 receiving outside capital is not true.
 //
 // It composes the primitives chainops already exposes rather than reimplementing them, and it
 // is idempotent: re-running against an already-seeded pool submits no deposit.
 //
 //	seed-demo --dry-run                 plan only, no keys and no transactions
-//	seed-demo                           seed for real (needs operator + customer keys)
+//	seed-demo --dry-run --org 0xABC...  plan for an org without holding any key at all
+//	seed-demo                           seed for real (operator + customer + LP keys)
 //	seed-demo --price 25 --pool-seed 150
 package main
 
@@ -56,6 +67,7 @@ func main() {
 	deployment := flag.String("deployment", "deployments/arc-testnet.json", "chain deployment config")
 	operatorKeyEnv := flag.String("operator-key-env", "TREASURY_PRIVATE_KEY", "env var holding the operator/treasury key")
 	customerKeyEnv := flag.String("customer-key-env", "SNAPFALL_CUSTOMER_PRIVATE_KEY", "env var holding the external customer key")
+	lpKeyEnv := flag.String("lp-key-env", "SNAPFALL_LP_PRIVATE_KEY", "env var holding the pool LP/funder key; MUST NOT be the operator treasury")
 	price := flag.String("price", "25", "customer payment in USDC (PRD §15.2 demo job)")
 	budget := flag.String("budget", "6", "max operating budget in USDC")
 	poolSeed := flag.String("pool-seed", "150", "desired pool TVL in USDC; the exposure-cap floor wins if higher")
@@ -65,13 +77,13 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "print the plan; submit nothing (keyless when --org is given)")
 	flag.Parse()
 
-	if err := run(*deployment, *operatorKeyEnv, *customerKeyEnv, *price, *budget, *poolSeed, *statePath, *runID, *org, *dryRun); err != nil {
+	if err := run(*deployment, *operatorKeyEnv, *customerKeyEnv, *lpKeyEnv, *price, *budget, *poolSeed, *statePath, *runID, *org, *dryRun); err != nil {
 		fmt.Fprintln(os.Stderr, "seed-demo:", err)
 		os.Exit(1)
 	}
 }
 
-func run(deploymentPath, operatorKeyEnv, customerKeyEnv, priceStr, budgetStr, poolSeedStr, statePath, runID, orgFlag string, dryRun bool) error {
+func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, budgetStr, poolSeedStr, statePath, runID, orgFlag string, dryRun bool) error {
 	priceMicros, err := demoseed.ParseUSDC(priceStr)
 	if err != nil {
 		return fmt.Errorf("price: %w", err)
@@ -111,6 +123,11 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, priceStr, budgetStr, po
 		operator *chain.Client
 		orgAddr  common.Address
 	)
+	// HexToAddress silently zero-pads anything it cannot parse, so a typo would plan for
+	// 0x000...0 and report a floor for the wrong org. Reject it up front instead.
+	if orgFlag != "" && !common.IsHexAddress(orgFlag) {
+		return fmt.Errorf("--org %q is not a 20-byte hex address", orgFlag)
+	}
 	if dryRun && orgFlag != "" {
 		orgAddr = common.HexToAddress(orgFlag)
 		operator, err = chain.NewReadOnly(dep.Network.RPCURL, dep.Network.ChainID)
@@ -128,7 +145,10 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, priceStr, budgetStr, po
 		}
 	}
 
-	// ── read the live position: the rate is chain-authoritative, never assumed ──
+	// ── read the live position: nothing here is assumed ──
+	// The rate is chain-authoritative, and so is the exposure the pool already carries. Both
+	// FloatPool caps are checked against the position AFTER issuance, so planning from the new
+	// principal alone can print "ready" and still revert CapExceeded (review finding, PR #41).
 	rateBps, err := readRate(ctx, operator, fp, orgAddr)
 	if err != nil {
 		return fmt.Errorf("read advanceRate: %w", err)
@@ -137,8 +157,17 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, priceStr, budgetStr, po
 	if err != nil {
 		return fmt.Errorf("read totalAssets: %w", err)
 	}
+	orgOutstanding, err := readUint(ctx, operator, fp, chain.CalldataOrgOutstanding(orgAddr))
+	if err != nil {
+		return fmt.Errorf("read orgOutstanding: %w", err)
+	}
+	totalOutstanding, err := readUint(ctx, operator, fp, chain.CalldataTotalOutstanding())
+	if err != nil {
+		return fmt.Errorf("read totalOutstanding: %w", err)
+	}
+	exposure := demoseed.Exposure{OrgOutstandingMicros: orgOutstanding, TotalOutstandingMicros: totalOutstanding}
 
-	plan, err := demoseed.BuildPlan(priceMicros, rateBps, currentTVL, desiredTVL)
+	plan, err := demoseed.BuildPlan(priceMicros, rateBps, currentTVL, desiredTVL, exposure)
 	if err != nil {
 		return err
 	}
@@ -157,8 +186,10 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, priceStr, budgetStr, po
 	fmt.Printf("  job price         %s USDC   (budget %s)\n", demoseed.FormatUSDC(plan.PriceMicros), demoseed.FormatUSDC(budgetMicros))
 	fmt.Printf("  live rate         %d bps -> advance %s USDC\n", plan.RateBps, demoseed.FormatUSDC(plan.AdvanceMicros))
 	fmt.Printf("  pool TVL          %s USDC now\n", demoseed.FormatUSDC(plan.CurrentTVLMicros))
-	fmt.Printf("  exposure floor    %s USDC   (advance x 10_000 / %d bps cap)\n",
-		demoseed.FormatUSDC(plan.RequiredTVLMicros), demoseed.OrgExposureCapBps)
+	fmt.Printf("  already lent      %s USDC this org, %s USDC pool-wide\n",
+		demoseed.FormatUSDC(plan.Exposure.OrgOutstandingMicros), demoseed.FormatUSDC(plan.Exposure.TotalOutstandingMicros))
+	fmt.Printf("  cap floor         %s USDC   (%s cap binds, on existing + new exposure)\n",
+		demoseed.FormatUSDC(plan.RequiredTVLMicros), plan.BindingCap)
 	fmt.Printf("  seed target       %s USDC\n", demoseed.FormatUSDC(plan.TargetTVLMicros))
 	if plan.SeedAlreadySufficient() {
 		fmt.Printf("  deposit           none — the pool is already deep enough\n")
@@ -193,12 +224,27 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, priceStr, budgetStr, po
 	}
 
 	// ── 1. top the pool up by the deficit only (idempotent) ──
+	//
+	// The LP is a THIRD party, not the operator. The demo's opening claim is a treasury at
+	// exactly 0.00 that gets its first working capital from someone else's pool; if the operator
+	// key funded the pool it would be lending itself money, and the dashboard would open on
+	// whatever that key had left over instead of zero. So the deposit uses its own key and the
+	// shares it mints belong to that LP.
 	if !plan.SeedAlreadySufficient() {
-		r, err := operator.Submit(ctx, usdc, chain.CalldataApprove(fp, plan.DepositMicros))
+		lp, err := chain.NewFromEnv(lpKeyEnv, dep.Network.RPCURL, dep.Network.ChainID)
+		if err != nil {
+			return fmt.Errorf("LP key: %w (the pool's liquidity must come from an LP, not the operator treasury; set %s)", err, lpKeyEnv)
+		}
+		if strings.EqualFold(lp.Address().Hex(), orgAddr.Hex()) {
+			return fmt.Errorf("%s holds the operator address %s; the LP must be a separate wallet or the demo opens on a treasury that funded its own pool",
+				lpKeyEnv, orgAddr.Hex())
+		}
+		fmt.Printf("  %-16s %s\n", "LP (funder)", lp.Address().Hex())
+		r, err := lp.Submit(ctx, usdc, chain.CalldataApprove(fp, plan.DepositMicros))
 		if err := show("pool approve", r, err); err != nil {
 			return err
 		}
-		r, err = operator.Submit(ctx, fp, chain.CalldataDeposit(plan.DepositMicros, operator.Address()))
+		r, err = lp.Submit(ctx, fp, chain.CalldataDeposit(plan.DepositMicros, lp.Address()))
 		if err := show("pool deposit", r, err); err != nil {
 			return err
 		}
@@ -225,7 +271,7 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, priceStr, budgetStr, po
 
 	// ── 4. verify the chain agrees before claiming the demo is ready ──
 	fmt.Println()
-	if err := verify(ctx, operator, jv, fp, jobID, plan); err != nil {
+	if err := verify(ctx, operator, jv, fp, orgAddr, jobID, plan); err != nil {
 		return err
 	}
 
@@ -254,7 +300,7 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, priceStr, budgetStr, po
 }
 
 // verify re-reads the chain so a green "ready" cannot be a hopeful assumption.
-func verify(ctx context.Context, c *chain.Client, jv, fp common.Address, jobID [32]byte, plan demoseed.Plan) error {
+func verify(ctx context.Context, c *chain.Client, jv, fp, org common.Address, jobID [32]byte, plan demoseed.Plan) error {
 	ret, err := c.CallView(ctx, jv, chain.CalldataJobStatus(jobID))
 	if err != nil {
 		return fmt.Errorf("verify jobStatus: %w", err)
@@ -282,16 +328,33 @@ func verify(ctx context.Context, c *chain.Client, jv, fp common.Address, jobID [
 	}
 	fmt.Printf("  %-16s ok    no advance drawn yet\n", "verify advance")
 
+	// Re-read the whole position, not just TVL. The floor depends on exposure, and between the
+	// plan and now another org could have drawn against the same pool, so recomputing from fresh
+	// reads is what makes "ready" a claim about the chain rather than about the plan.
 	tvl, err := readUint(ctx, c, fp, chain.CalldataTotalAssets())
 	if err != nil {
 		return fmt.Errorf("verify totalAssets: %w", err)
 	}
-	if tvl.Cmp(plan.RequiredTVLMicros) < 0 {
-		return fmt.Errorf("verify: pool holds %s USDC but the advance needs at least %s — the snap would revert CapExceeded",
-			demoseed.FormatUSDC(tvl), demoseed.FormatUSDC(plan.RequiredTVLMicros))
+	orgOut, err := readUint(ctx, c, fp, chain.CalldataOrgOutstanding(org))
+	if err != nil {
+		return fmt.Errorf("verify orgOutstanding: %w", err)
 	}
-	fmt.Printf("  %-16s ok    TVL %s >= floor %s\n", "verify pool",
-		demoseed.FormatUSDC(tvl), demoseed.FormatUSDC(plan.RequiredTVLMicros))
+	totalOut, err := readUint(ctx, c, fp, chain.CalldataTotalOutstanding())
+	if err != nil {
+		return fmt.Errorf("verify totalOutstanding: %w", err)
+	}
+	floor := demoseed.RequiredPoolTVL(plan.AdvanceMicros, demoseed.Exposure{
+		OrgOutstandingMicros:   orgOut,
+		TotalOutstandingMicros: totalOut,
+	})
+	if tvl.Cmp(floor) < 0 {
+		return fmt.Errorf("verify: pool holds %s USDC but an advance of %s on top of %s org / %s pool-wide outstanding needs at least %s, so the snap would revert CapExceeded",
+			demoseed.FormatUSDC(tvl), demoseed.FormatUSDC(plan.AdvanceMicros),
+			demoseed.FormatUSDC(orgOut), demoseed.FormatUSDC(totalOut), demoseed.FormatUSDC(floor))
+	}
+	fmt.Printf("  %-16s ok    TVL %s >= floor %s (org %s / pool %s already lent)\n", "verify pool",
+		demoseed.FormatUSDC(tvl), demoseed.FormatUSDC(floor),
+		demoseed.FormatUSDC(orgOut), demoseed.FormatUSDC(totalOut))
 	return nil
 }
 

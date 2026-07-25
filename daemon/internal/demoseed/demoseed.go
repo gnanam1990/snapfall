@@ -37,24 +37,62 @@ func AdvanceFor(priceMicros *big.Int, rateBps uint64) *big.Int {
 	return out.Div(out, big.NewInt(BpsDenominator))
 }
 
-// RequiredPoolTVL is the minimum pool TVL that lets a single advance of principalMicros pass
-// the per-org exposure cap.
+// capFloor is the minimum totalAssets that keeps a post-issuance outstanding figure inside a
+// basis-point cap.
 //
-// The contract checks the position AFTER issuance:
-//
-//	orgOutstanding * 10_000 > ORG_EXPOSURE_CAP_BPS * totalAssets  ->  revert CapExceeded
-//
-// so the advance survives only while principal*10_000 <= capBps*TVL, i.e.
-// TVL >= ceil(principal * 10_000 / capBps). The ceiling matters: integer division that
+// The contract compares outstanding*10_000 against capBps*totalAssets and reverts when the
+// former is strictly greater, so the position survives while
+// TVL >= ceil(outstanding * 10_000 / capBps). The ceiling matters: integer division that
 // rounded down would return a TVL one micro too small and still revert.
-func RequiredPoolTVL(principalMicros *big.Int) *big.Int {
-	num := new(big.Int).Mul(principalMicros, big.NewInt(BpsDenominator))
-	den := big.NewInt(OrgExposureCapBps)
-	quo, rem := new(big.Int).QuoRem(num, den, new(big.Int))
+func capFloor(afterMicros *big.Int, capBps int64) *big.Int {
+	num := new(big.Int).Mul(afterMicros, big.NewInt(BpsDenominator))
+	quo, rem := new(big.Int).QuoRem(num, big.NewInt(capBps), new(big.Int))
 	if rem.Sign() != 0 {
 		quo.Add(quo, big.NewInt(1))
 	}
 	return quo
+}
+
+// Exposure is the pool's live lending position, read from the chain: what this org already owes
+// and what every org together already owes.
+type Exposure struct {
+	OrgOutstandingMicros   *big.Int
+	TotalOutstandingMicros *big.Int
+}
+
+// RequiredPoolTVL is the minimum pool TVL that lets an advance of principalMicros land on top
+// of the exposure the pool ALREADY carries.
+//
+// FloatPool.requestAdvance adds the principal to both counters and then checks both caps
+// against the post-issuance position:
+//
+//	orgOutstanding[org] * 10_000 > ORG_EXPOSURE_CAP_BPS * totalAssets  ->  CapExceeded
+//	totalOutstanding     * 10_000 > UTILIZATION_CAP_BPS  * totalAssets  ->  CapExceeded
+//
+// Sizing from the new principal alone therefore under-seeds any pool with an open advance
+// still on the books: the plan prints "ready" and the snap reverts anyway. The binding floor is
+// whichever of the two caps demands more capital.
+//
+// The third constraint, `principal > totalAssets - totalOutstanding -> InsufficientLiquidity`,
+// needs no term of its own: it asks for TVL >= totalOutstanding_after, and the utilization
+// floor already asks for 1.25x that. TestUtilizationFloorCoversLiquidity pins that.
+func RequiredPoolTVL(principalMicros *big.Int, exposure Exposure) *big.Int {
+	orgAfter := new(big.Int).Add(orZero(exposure.OrgOutstandingMicros), principalMicros)
+	totalAfter := new(big.Int).Add(orZero(exposure.TotalOutstandingMicros), principalMicros)
+
+	orgFloor := capFloor(orgAfter, OrgExposureCapBps)
+	utilFloor := capFloor(totalAfter, UtilizationCapBps)
+	if utilFloor.Cmp(orgFloor) > 0 {
+		return utilFloor
+	}
+	return orgFloor
+}
+
+func orZero(v *big.Int) *big.Int {
+	if v == nil {
+		return new(big.Int)
+	}
+	return v
 }
 
 // Plan is the seeding work a run needs, derived from live chain reads plus the desired target.
@@ -67,8 +105,14 @@ type Plan struct {
 	RateBps uint64
 	// AdvanceMicros is the principal the snap will draw at RateBps.
 	AdvanceMicros *big.Int
-	// RequiredTVLMicros is the exposure-cap floor for that advance.
+	// RequiredTVLMicros is the cap floor for that advance ON TOP OF existing exposure.
 	RequiredTVLMicros *big.Int
+	// Exposure is what the pool already owes, read live. Sizing without it under-seeds a pool
+	// that still carries an open advance.
+	Exposure Exposure
+	// BindingCap names the constraint that set RequiredTVLMicros ("org exposure" or
+	// "utilization"), so the printed plan explains itself instead of asserting a number.
+	BindingCap string
 	// TargetTVLMicros is what the pool will hold after seeding.
 	TargetTVLMicros *big.Int
 	// CurrentTVLMicros is what the pool holds now.
@@ -81,9 +125,9 @@ type Plan struct {
 func (p Plan) SeedAlreadySufficient() bool { return p.DepositMicros.Sign() == 0 }
 
 // BuildPlan derives the seeding plan. desiredTVLMicros is the operator's preferred cushion
-// (the demo default is 150 USDC); when the exposure-cap floor is higher, the floor wins, so a
-// raised flywheel rate can never silently under-seed the next run.
-func BuildPlan(priceMicros *big.Int, rateBps uint64, currentTVLMicros, desiredTVLMicros *big.Int) (Plan, error) {
+// (the demo default is 150 USDC); when the cap floor is higher, the floor wins, so neither a
+// raised flywheel rate nor exposure left over from a previous run can silently under-seed.
+func BuildPlan(priceMicros *big.Int, rateBps uint64, currentTVLMicros, desiredTVLMicros *big.Int, exposure Exposure) (Plan, error) {
 	if priceMicros == nil || priceMicros.Sign() <= 0 {
 		return Plan{}, errors.New("job price must be positive")
 	}
@@ -93,12 +137,30 @@ func BuildPlan(priceMicros *big.Int, rateBps uint64, currentTVLMicros, desiredTV
 	if currentTVLMicros == nil || currentTVLMicros.Sign() < 0 {
 		return Plan{}, errors.New("current pool TVL must be zero or positive")
 	}
+	if exposure.OrgOutstandingMicros != nil && exposure.OrgOutstandingMicros.Sign() < 0 {
+		return Plan{}, errors.New("org outstanding must be zero or positive")
+	}
+	if exposure.TotalOutstandingMicros != nil && exposure.TotalOutstandingMicros.Sign() < 0 {
+		return Plan{}, errors.New("total outstanding must be zero or positive")
+	}
+	// An org cannot owe more than everyone owes together. If the two reads disagree they did not
+	// come from the same block, and planning on a torn read is how you get a confident "ready"
+	// followed by a revert.
+	if orZero(exposure.OrgOutstandingMicros).Cmp(orZero(exposure.TotalOutstandingMicros)) > 0 {
+		return Plan{}, fmt.Errorf("inconsistent exposure: org owes %s but the whole pool owes %s",
+			exposure.OrgOutstandingMicros, exposure.TotalOutstandingMicros)
+	}
 
 	advance := AdvanceFor(priceMicros, rateBps)
 	if advance.Sign() == 0 {
 		return Plan{}, fmt.Errorf("advance rounds to zero at %d bps on %s micros", rateBps, priceMicros)
 	}
-	required := RequiredPoolTVL(advance)
+	required := RequiredPoolTVL(advance, exposure)
+	binding := "org exposure"
+	if capFloor(new(big.Int).Add(orZero(exposure.TotalOutstandingMicros), advance), UtilizationCapBps).Cmp(
+		capFloor(new(big.Int).Add(orZero(exposure.OrgOutstandingMicros), advance), OrgExposureCapBps)) > 0 {
+		binding = "utilization"
+	}
 
 	target := new(big.Int).Set(required)
 	if desiredTVLMicros != nil && desiredTVLMicros.Cmp(target) > 0 {
@@ -118,6 +180,11 @@ func BuildPlan(priceMicros *big.Int, rateBps uint64, currentTVLMicros, desiredTV
 		TargetTVLMicros:   target,
 		CurrentTVLMicros:  new(big.Int).Set(currentTVLMicros),
 		DepositMicros:     deposit,
+		Exposure: Exposure{
+			OrgOutstandingMicros:   new(big.Int).Set(orZero(exposure.OrgOutstandingMicros)),
+			TotalOutstandingMicros: new(big.Int).Set(orZero(exposure.TotalOutstandingMicros)),
+		},
+		BindingCap: binding,
 	}, nil
 }
 

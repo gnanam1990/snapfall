@@ -84,6 +84,13 @@ func CalldataTotalAssets() []byte { return pack("totalAssets()") }
 // CalldataTotalOutstanding reads principal currently lent out.
 func CalldataTotalOutstanding() []byte { return pack("totalOutstanding()") }
 
+// CalldataOrgOutstanding reads one org's drawn principal. The exposure cap is checked against
+// this value PLUS the new principal, so a seed that ignores it can under-seed a pool that
+// already carries an open advance for the same org.
+func CalldataOrgOutstanding(org common.Address) []byte {
+	return pack("orgOutstanding(address)", addrWord(org))
+}
+
 // ── JobVault ──
 func CalldataCreateJob(jobID [32]byte, customer, operator common.Address, payment, budget *big.Int, termsHash [32]byte, deadline uint64) []byte {
 	return pack("createJob(bytes32,address,address,uint256,uint256,bytes32,uint64)",
