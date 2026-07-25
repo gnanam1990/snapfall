@@ -337,6 +337,13 @@ func (l *Lifecycle) Submit(ctx context.Context, in Intent) (SubmitResult, error)
 		AgentID: in.AgentID, Merchant: in.Merchant, Resource: in.Resource,
 		AmountMicros: in.AmountMicros, Purpose: in.Purpose, Nonce: in.Nonce,
 		PolicyVersion: version,
+		// Kind MUST be forwarded, or Evaluate's rule 0 can never fire from this door and an
+		// advance-kind intent is evaluated as a payment. Whether it is then refused becomes
+		// incidental to whether its amount happens to trip a budget, which is exactly the
+		// fail-open policy.go:68-73 warns about ("handing an unmodelled kind whatever falls out
+		// of its rules is where a fail-open hides"). Found by the new AT-15 API-half test, which
+		// caught a real refusal arriving from job-budget rather than from the kind.
+		Kind: in.Kind,
 	})
 
 	if err := l.appendEvent(ctx, in.JobID, "policy.evaluated", map[string]any{
