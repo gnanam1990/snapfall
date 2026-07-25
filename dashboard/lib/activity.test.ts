@@ -102,3 +102,48 @@ test('keeps unknown event kinds readable instead of exposing raw payloads', () =
   assert.equal(message.text, 'Recorded future event kind.');
   assert.doesNotMatch(message.text, /script/i);
 });
+
+test('carries both waterfall legs from a chain settlement so the money graph need not infer them', () => {
+  const message = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 42,
+    event: {
+      kind: 'JobSettled',
+      jobId: 'job_demo_1',
+      actor: 'funding',
+      at: '2026-07-24T10:00:00Z',
+      payload: { advanceRepaidAtomic: '12750000', operatorNetAtomic: '12250000' },
+    },
+  });
+
+  assert.deepEqual(message.settlement, {
+    advanceRepaidUsdc: '12750000',
+    operatorNetUsdc: '12250000',
+  });
+  // The repaid leg doubles as the event's headline amount.
+  assert.equal(message.amountUsdc, '12750000');
+});
+
+test('accepts the snake_case settlement spelling and omits the split when neither leg is present', () => {
+  const snake = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 43,
+    event: {
+      kind: 'JobSettled',
+      jobId: 'job_demo_1',
+      at: '2026-07-24T10:00:00Z',
+      payload: { advance_repaid_atomic: '900', operator_net_atomic: '100' },
+    },
+  });
+  assert.deepEqual(snake.settlement, { advanceRepaidUsdc: '900', operatorNetUsdc: '100' });
+
+  const bare = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 44,
+    event: { kind: 'RateChanged', at: '2026-07-24T10:00:00Z', payload: { rateBps: 5500 } },
+  });
+  assert.equal(bare.settlement, undefined);
+});

@@ -1161,3 +1161,107 @@ table.t { width: 100%; border-collapse: collapse; }
   .watcher-config label,
   .watcher-readonly { grid-template-columns: 1fr; gap: 4px; padding: 8px 0; }
 }
+
+/* ── F1 Live Money Graph + F2 Score Ring (V10/V11, PRD §8) ── */
+.mg {
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.mg-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px 6px;
+}
+.mg-heading { min-width: 0; }
+.mg-heading h2 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
+.mg-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border: 1px solid #1b4d3b;
+  border-radius: 999px;
+  background: #0d2119;
+  color: var(--pos);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.mg-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
+.mg-live.is-waiting { color: var(--warn); border-color: #574314; background: #201806; }
+.mg-beat {
+  margin: 8px 0 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--muted);
+  opacity: 0.55;
+  min-height: 25px;
+  transition: color 0.3s, opacity 0.3s;
+}
+.mg-beat.is-shown { opacity: 1; }
+.mg-beat-fund, .mg-beat-spend { color: var(--sky); }
+.mg-beat-snap, .mg-beat-fall { color: var(--accent); }
+.mg-beat-reject { color: var(--warn); }
+.mg-beat-flywheel { color: var(--violet); }
+
+.mg-stage { padding: 0 10px 8px; }
+.mg-svg { width: 100%; height: auto; display: block; }
+
+.mg-pipe {
+  stroke: var(--border-2);
+  stroke-width: 2;
+  stroke-dasharray: 2 8;
+  stroke-linecap: round;
+  opacity: 0.75;
+  animation: mg-pipeflow 1.4s linear infinite;
+}
+.mg-pipe-snap, .mg-pipe-repay { stroke: #1f4a45; opacity: 0.95; }
+@keyframes mg-pipeflow { to { stroke-dashoffset: -10; } }
+
+.mg-drop-fund, .mg-drop-spend { fill: var(--sky); }
+.mg-drop-snap, .mg-drop-fall-pool { fill: var(--accent); }
+.mg-drop-fall-op { fill: var(--pos); }
+
+.mg-box { fill: var(--panel-2); stroke: var(--border-2); stroke-width: 1.5; }
+.mg-node .mg-box[style] { stroke: var(--n); filter: drop-shadow(0 0 8px color-mix(in srgb, var(--n) 32%, transparent)); }
+.mg-name { fill: var(--muted); font-size: 13px; font-weight: 600; text-anchor: middle; }
+.mg-bal { fill: var(--text); font-size: 14px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
+
+/* F2 Score Ring: only the percentage sits inside the circle; captions flow beneath it. */
+.ring { width: 128px; flex: none; text-align: center; }
+.ring-figure { position: relative; width: 104px; height: 104px; margin: 0 auto; }
+.ring-figure.is-bumping { animation: ring-bump 0.5s ease; }
+@keyframes ring-bump { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.06); } }
+.ring-svg { width: 100%; height: 100%; display: block; }
+.ring-track { fill: none; stroke: var(--border-2); stroke-width: 8; }
+.ring-arc {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.1s linear;
+}
+.ring-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.ring-pct { font-size: 23px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ring-cap { margin-top: 8px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.ring-hint { margin-top: 1px; font-size: 11.5px; color: var(--muted-2); }
+.ring-hint b { color: var(--pos); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) {
+  .mg-head { flex-direction: column; align-items: flex-start; }
+  .ring { margin: 0 auto; }
+}
+/* WCAG 2.3.3: the ambient pipe shimmer and the ring bump are decorative. */
+@media (prefers-reduced-motion: reduce) {
+  .mg-pipe { animation: none; }
+  .ring-figure.is-bumping { animation: none; }
+  .mg-beat { transition: none; }
+}

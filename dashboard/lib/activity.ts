@@ -9,6 +9,14 @@ export interface ApprovalMoment {
   intentHash: string;
 }
 
+/** Settlement split as the chain reports it, when the event carries both legs.
+ *  JobSettled is the only event that moves money two ways at once, so the waterfall
+ *  visual (F1) reads the exact figures instead of inferring them. */
+export interface SettlementSplit {
+  advanceRepaidUsdc: string;
+  operatorNetUsdc: string;
+}
+
 export interface ActivityMessage {
   id: string;
   actor: string;
@@ -25,6 +33,8 @@ export interface ActivityMessage {
   approval?: ApprovalMoment;
   /** Stable request id joining rejection/request-alternative to its replacement. */
   threadKey?: string;
+  /** Present on settlement events that report both waterfall legs. */
+  settlement?: SettlementSplit;
 }
 
 type Dict = Record<string, unknown>;
@@ -94,11 +104,21 @@ function actorFor(event: StreamEvent): Pick<ActivityMessage, 'actor' | 'role' | 
   return { actor: 'Brain', role: 'Orchestrator', initials: 'BR', tone: 'brain' };
 }
 
+/** Both waterfall legs, when the settlement event reports them. */
+function settlementSplit(payload: unknown): SettlementSplit | undefined {
+  const outer = record(payload);
+  const repaid = pickString(outer, 'advanceRepaidAtomic', 'advance_repaid_atomic', 'advanceRepaidUsdc');
+  const net = pickString(outer, 'operatorNetAtomic', 'operator_net_atomic', 'operatorNetUsdc');
+  if (!repaid && !net) return undefined;
+  return { advanceRepaidUsdc: repaid, operatorNetUsdc: net };
+}
+
 function eventAmount(payload: unknown): string {
   const outer = record(payload);
   const intent = record(outer.intent ?? outer.Intent);
   return (
     pickString(outer, 'amountUsdc', 'amountAtomic', 'amount_atomic', 'amount') ||
+    pickString(outer, 'advanceRepaidAtomic', 'advance_repaid_atomic') ||
     pickString(intent, 'AmountMicros', 'amountMicros', 'amount_usdc', 'amountUsdc')
   );
 }
@@ -283,6 +303,7 @@ export function humanizeStreamEvent(message: Extract<StreamMessage, { kind: 'eve
     kind: event.kind,
     jobId: event.jobId || (event.kind === 'RateChanged' ? undefined : event.entityId),
     explorerUrl: pickString(event.payload, 'explorerUrl', 'explorer_url'),
+    settlement: settlementSplit(event.payload),
   };
 }
 
