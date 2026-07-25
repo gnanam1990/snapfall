@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import ThemeToggle from '@/components/ThemeToggle';
+import Logo from '@/components/Logo';
 
 const NAV: { href: string; label: string; pill?: string }[] = [
   { href: '/', label: 'Overview' },
@@ -22,7 +23,7 @@ export default function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="brand-mark" />
+        <Logo size={24} />
         <div className="brand-name">Snapfall</div>
       </div>
       <nav>
