@@ -81,7 +81,15 @@ export interface FloatSnapshot {
 }
 
 export interface JobSummary {
+  /** The daemon's business job id (e.g. job_demo_1) — NOT the chain entity. */
   jobId: string;
+  /**
+   * The bytes32 JobVault entity, when the job has an on-chain identity. The daemon models
+   * these separately (jobs.vault_job_id), and a job has no vault id until it is created on
+   * chain, so this is optional and its absence is a real state, not missing data. V7's
+   * detail page can only read the chain when this is present.
+   */
+  vaultJobId?: string | null;
   customer: string;
   title: string;
   state: JobState;
