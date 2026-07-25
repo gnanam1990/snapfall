@@ -12,6 +12,13 @@ export function readTheme(): Theme {
   return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
 }
 
+/** Writes a theme to the document. Dark removes the attribute rather than setting it, so the
+ *  default lives in exactly one place (the :root block) instead of two. */
+function applyTheme(t: Theme): void {
+  if (t === 'light') document.documentElement.dataset.theme = 'light';
+  else delete document.documentElement.dataset.theme;
+}
+
 /**
  * Sun/moon theme switch.
  *
@@ -29,20 +36,34 @@ export default function ThemeToggle() {
   const [theme, setTheme] = useState<Theme | null>(null);
 
   useEffect(() => {
-    const read = () => setTheme(readTheme());
-    read();
-    window.addEventListener(EVT, read);
-    window.addEventListener('storage', read);
+    // Same-tab: the document is authoritative, because whoever dispatched EVT already set it.
+    const readLocal = () => setTheme(readTheme());
+    readLocal();
+
+    // Cross-tab: the document is NOT authoritative, because the other tab changed ITS document,
+    // not ours. Re-reading our own data-theme here just reports the value we already had, which
+    // is why the previous version advertised cross-tab sync without doing it (review: cubic on
+    // #43). The StorageEvent's newValue is the only thing that carries the other tab's choice.
+    const onStorage = (e: StorageEvent) => {
+      if (e.storageArea && e.storageArea !== localStorage) return;
+      // key === null means the other tab called clear(), which removes the preference entirely.
+      if (e.key !== null && e.key !== KEY) return;
+      const next: Theme = e.key === null ? 'dark' : e.newValue === 'light' ? 'light' : 'dark';
+      applyTheme(next);
+      setTheme(next);
+    };
+
+    window.addEventListener(EVT, readLocal);
+    window.addEventListener('storage', onStorage);
     return () => {
-      window.removeEventListener(EVT, read);
-      window.removeEventListener('storage', read);
+      window.removeEventListener(EVT, readLocal);
+      window.removeEventListener('storage', onStorage);
     };
   }, []);
 
   const toggle = () => {
     const next: Theme = readTheme() === 'dark' ? 'light' : 'dark';
-    if (next === 'light') document.documentElement.dataset.theme = 'light';
-    else delete document.documentElement.dataset.theme;
+    applyTheme(next);
     try {
       localStorage.setItem(KEY, next);
     } catch {
@@ -61,7 +82,12 @@ export default function ThemeToggle() {
       // The label names the ACTION, so there is deliberately no aria-pressed: pairing the two
       // makes a screen reader announce "switch to dark mode, pressed", which contradicts itself.
       // A state-style label ("Dark mode") would be the alternative that wants aria-pressed.
-      aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      //
+      // Before mount the theme is genuinely unknown, and naming an action then is a coin flip:
+      // `isDark` is false pre-mount, so this used to announce "switch to dark mode" on a page
+      // whose default IS dark, describing the opposite of what activation does (review: cubic on
+      // #43). A neutral label is correct until the effect resolves the real theme.
+      aria-label={theme === null ? 'Toggle colour theme' : isDark ? 'Switch to light mode' : 'Switch to dark mode'}
     >
       {theme === null ? (
         <span className="theme-toggle-icon" aria-hidden="true" />
