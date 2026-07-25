@@ -30,3 +30,6 @@ daemon/snapfall.db-shm
 daemon/snapfalld
 *.redeploy-guard.json
 *.redeploy-guard.json.pending
+
+# demo run state (V12 seed_demo)
+.demo/

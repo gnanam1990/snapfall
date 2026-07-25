@@ -65,6 +65,19 @@ type Client struct {
 	mu sync.Mutex // the single-signer serialization (see package doc)
 }
 
+// NewReadOnly builds a client that can only read. It holds no key, so Submit fails
+// closed on it; use it for view calls (balances, rates, job status) where constructing a
+// signer would demand a secret the caller has no reason to hold.
+func NewReadOnly(rpcURL string, chainID uint64) (*Client, error) {
+	if strings.TrimSpace(rpcURL) == "" {
+		return nil, fmt.Errorf("chain reader: rpc url is empty")
+	}
+	return &Client{
+		rpcURL: rpcURL, http: &http.Client{Timeout: 30 * time.Second},
+		chainID: new(big.Int).SetUint64(chainID),
+	}, nil
+}
+
 // NewFromEnv builds a client from a private-key environment variable. Fail-closed:
 // missing or malformed key is a refusal at construction, never a stub at use. The key
 // value never reaches a return, an error message, or a log.
@@ -116,6 +129,11 @@ func (c *Client) SubmitWithGas(ctx context.Context, to common.Address, calldata 
 func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte, fixedGas uint64) (Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// A read-only client holds no key: refuse here rather than panicking in the signer.
+	if c.key == nil {
+		return Receipt{}, fmt.Errorf("refusing to submit: this client is read-only (no signing key)")
+	}
 
 	// Verify the endpoint is the chain we signed up for — refuse to sign for a
 	// different chain id than configured (same posture as the indexer).
