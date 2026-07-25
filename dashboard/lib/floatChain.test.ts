@@ -142,3 +142,116 @@ test('retries a transient public-RPC rate limit without changing the request ID'
     globalThis.fetch = originalFetch;
   }
 });
+
+// ── RateChanged → rateHistory (change 1) ──────────────────────────────────────
+
+const POOL_RATE = '0xde9f58a997cf7a3258d09a797eb5546877dc0001';
+const POOL_INC = '0xde9f58a997cf7a3258d09a797eb5546877dc0002';
+const POOL_FULL = '0xde9f58a997cf7a3258d09a797eb5546877dc0003';
+const TX_R1 = `0x${'c1'.repeat(32)}`;
+const TX_R2 = `0x${'c2'.repeat(32)}`;
+const TX_R3 = `0x${'c3'.repeat(32)}`;
+
+const issuedLog = (pool: string, job: string, org: string, tx: string, block: number) => ({
+  address: pool, blockNumber: hex(block), logIndex: hex(0), transactionHash: tx,
+  topics: [floatChainInternals.TOPIC.issued, job, addressTopic(org)],
+  data: data(12_500_000n, 250_000n, 5_000n),
+});
+const rateLog = (pool: string, org: string, tx: string, block: number, newBps: bigint) => ({
+  address: pool, blockNumber: hex(block), logIndex: hex(1), transactionHash: tx,
+  topics: [floatChainInternals.TOPIC.rateChanged, addressTopic(org)],
+  data: data(newBps),
+});
+const repaidLog = (pool: string, job: string, tx: string, block: number) => ({
+  address: pool, blockNumber: hex(block), logIndex: hex(2), transactionHash: tx,
+  topics: [floatChainInternals.TOPIC.repaid, job],
+  data: data(12_500_000n, 250_000n, 50_000n),
+});
+
+function rangeRPC(allLogs: Array<Record<string, unknown>>, headRef: { head: number }, chainId = 5042002): RPCTransport {
+  return async <T>(method: string, params: unknown[]): Promise<T> => {
+    if (method === 'eth_chainId') return hex(chainId) as T;
+    if (method === 'eth_blockNumber') return hex(headRef.head) as T;
+    if (method === 'eth_call') {
+      const selector = (params[0] as { data: string }).data.slice(0, 10);
+      const values: Record<string, bigint> = {
+        [floatChainInternals.SELECTOR.totalAssets]: 150_200_000n,
+        [floatChainInternals.SELECTOR.totalOutstanding]: 12_500_000n,
+        [floatChainInternals.SELECTOR.reserve]: 50_000n,
+        [floatChainInternals.SELECTOR.advanceRate]: 6_000n,
+        [floatChainInternals.SELECTOR.acceptedJobs]: 2n,
+        [floatChainInternals.SELECTOR.writtenOffJobs]: 0n,
+      };
+      return data(values[selector] ?? 0n) as T;
+    }
+    if (method === 'eth_getLogs') {
+      const filter = params[0] as { fromBlock: string; toBlock: string };
+      const from = BigInt(filter.fromBlock);
+      const to = BigInt(filter.toBlock);
+      return allLogs.filter((l) => {
+        const b = BigInt(l.blockNumber as string);
+        return b >= from && b <= to;
+      }) as T;
+    }
+    if (method === 'eth_getBlockByNumber') return { timestamp: hex(1_753_350_000) } as T;
+    throw new Error(`unexpected RPC method ${method}`);
+  };
+}
+
+const cfg = (pool: string) => ({
+  chainId: 5042002,
+  rpcUrl: 'https://rpc.invalid',
+  poolAddress: pool,
+  explorerUrl: 'https://testnet.arcscan.app',
+  startBlock: 90,
+  orgAddress: ORG,
+});
+
+test('scans RateChanged into a block-ordered rateHistory with the base origin, non-monotonic', async () => {
+  // Two climbs then a write-off tick that LOWERS the rate at a later block — the series
+  // must order by block, so 4500 lands AFTER 6000 despite being the smaller value.
+  const logs = [
+    issuedLog(POOL_RATE, JOB_OPEN, ORG, TX_OPEN, 95),
+    rateLog(POOL_RATE, ORG, TX_R1, 100, 5_500n),
+    rateLog(POOL_RATE, ORG, TX_R2, 105, 6_000n),
+    rateLog(POOL_RATE, ORG, TX_R3, 108, 4_500n),
+  ];
+  const snapshot = await loadFloatSnapshot(cfg(POOL_RATE), rangeRPC(logs, { head: 110 }));
+
+  assert.deepEqual(snapshot.rateHistoryBps, [
+    { rateBps: 5000, blockNumber: 90, txHash: null },
+    { rateBps: 5500, blockNumber: 100, txHash: TX_R1 },
+    { rateBps: 6000, blockNumber: 105, txHash: TX_R2 },
+    { rateBps: 4500, blockNumber: 108, txHash: TX_R3 },
+  ]);
+});
+
+test('incremental re-scan from the last cached block equals a single full scan', async () => {
+  const logs = (pool: string) => [
+    issuedLog(pool, JOB_OPEN, ORG, TX_OPEN, 95),
+    rateLog(pool, ORG, TX_R1, 100, 5_500n),
+    issuedLog(pool, JOB_REPAID, ORG, TX_R2, 103),
+    rateLog(pool, ORG, TX_R2, 108, 6_000n),
+    repaidLog(pool, JOB_OPEN, TX_REPAID, 109),
+  ];
+
+  // Full: one scan to head 110.
+  const full = await loadFloatSnapshot(cfg(POOL_FULL), rangeRPC(logs(POOL_FULL), { head: 110 }));
+
+  // Incremental: scan to 100, then again to 110 (only 101..110 is re-fetched).
+  const headRef = { head: 100 };
+  const incRPC = rangeRPC(logs(POOL_INC), headRef);
+  await loadFloatSnapshot(cfg(POOL_INC), incRPC);
+  headRef.head = 110;
+  const inc = await loadFloatSnapshot(cfg(POOL_INC), incRPC);
+
+  assert.equal(inc.feesAccruedUsdc, full.feesAccruedUsdc);
+  assert.deepEqual(inc.rateHistoryBps, full.rateHistoryBps);
+  assert.deepEqual(
+    inc.openAdvances?.map((a) => a.jobId).sort(),
+    full.openAdvances?.map((a) => a.jobId).sort(),
+  );
+  // The repaid advance dropped out of both; the still-open one remains.
+  assert.equal(inc.openAdvances?.length, 1);
+  assert.equal(inc.openAdvances?.[0]?.jobId, JOB_REPAID);
+});

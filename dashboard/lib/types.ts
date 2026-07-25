@@ -58,6 +58,15 @@ export interface FloatLossTotals {
   socializedUsdc: string;
 }
 
+/** One point on the org's advance-rate curve. Ordered strictly by block (a write-off
+ *  lowers the rate, so the series is not monotonic). The origin point (rate 5000, the
+ *  base) has no tx — it is the pre-tick value, never emitted on chain. */
+export interface RateHistoryPoint {
+  rateBps: number;
+  blockNumber: number;
+  txHash: string | null;
+}
+
 /** Authoritative read-only FloatPool snapshot returned by /api/float. */
 export interface FloatSnapshot {
   chainId: number;
@@ -76,7 +85,12 @@ export interface FloatSnapshot {
   writtenOffJobs: number | null;
   openAdvances: FloatOpenAdvance[] | null;
   losses: FloatLossTotals | null;
-  historyStatus: 'complete' | 'unavailable';
+  /** The org's rate progression from chain (RateChanged ticks + the base origin).
+   *  null while the history scan is pending or unavailable. */
+  rateHistoryBps: RateHistoryPoint[] | null;
+  // 'pending' = immediate views returned; the historical log scan is still running and
+  // history fields are null for now (a later poll returns them 'complete').
+  historyStatus: 'complete' | 'unavailable' | 'pending';
   observedAt: string;
 }
 
