@@ -259,6 +259,20 @@ export default function MoneyGraph({
         spawn([{ pipe: 'snap', kind: 'snap', dur: 0.75, begin: 0 }]);
         break;
       case 'spend': {
+        // An amountless spend cannot be accounted or reconciled, so it is not a spend event here.
+        //
+        // The real daemon's `payment.executed` carries only `request_id` and `intent_hash`
+        // (approval/lifecycle.go), no amount. Letting it through gave it the key '-' while its
+        // ExpenseRecorded echo keyed on the atomic amount, so the pair never matched: both passed
+        // reconciliation and both spawned a droplet, and the total came out right only because
+        // the daemon event happened to add zero. The purchase is already accounted by the
+        // amount-bearing event for the same purchase (the policy-cleared `approval.requested`,
+        // which carries `intent.AmountMicros`), so dropping this one loses nothing.
+        //
+        // The durable fix is for `payment.executed` to carry the amount, which is an H2/H3
+        // contract change across two owners rather than a dashboard change.
+        if (amount <= 0n) break;
+
         // One purchase, one count: this event only counts if it raises its own source's tally for
         // this amount above the other source's, i.e. if it represents a purchase the other side
         // has not already accounted for.
