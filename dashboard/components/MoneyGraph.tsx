@@ -64,12 +64,17 @@ interface Drop {
   begin: number;
 }
 
-type Beat = 'fund' | 'snap' | 'spend' | 'reject' | 'fall' | 'flywheel' | 'reset';
+type Beat = 'fund' | 'snap' | 'spend' | 'reject' | 'repay' | 'fall' | 'flywheel' | 'reset';
 
 /**
  * Beat classification across all three vocabularies: the frozen chain ABI names, the daemon's
  * internal event kinds, and the local demo fixture. Anything unrecognized leaves the graph as
  * it is rather than guessing.
+ *
+ * `AdvanceRepaid` is deliberately its OWN beat, not part of the waterfall. The pool emits it
+ * for the repayment leg alone; only `JobSettled` reports both legs, so only `JobSettled` is
+ * allowed to drain the escrow and pay the operator. Conflating them animated a full waterfall
+ * twice and let a leg-only event zero the operator's share (review: PR #40).
  */
 function beatFor(kind: string): Beat | null {
   switch (kind) {
@@ -88,8 +93,9 @@ function beatFor(kind: string): Beat | null {
     case 'approval.rejected':
     case 'approval.request_alternative':
       return 'reject';
-    case 'JobSettled':
     case 'AdvanceRepaid':
+      return 'repay';
+    case 'JobSettled':
     case 'job.accepted':
       return 'fall';
     case 'RateChanged':
@@ -107,6 +113,7 @@ const CAPTION: Record<Beat, string> = {
   snap: 'The snap · capital in a snap',
   spend: 'Safe spend · policy authorized the purchase',
   reject: 'The owner said no · the workforce cannot embezzle itself',
+  repay: 'The pool is repaid first',
   fall: 'Watch the Snapfall · the pool is repaid first',
   flywheel: 'The flywheel · cheaper capital, earned by delivering',
   reset: 'Waiting for the next job',
@@ -114,6 +121,7 @@ const CAPTION: Record<Beat, string> = {
 
 /** Atomic USDC parse that cannot throw on the render path: a bad frame counts as zero. */
 const atomic = (s: string | null | undefined): bigint => (s && /^\d+$/.test(s) ? BigInt(s) : 0n);
+const isAtomic = (s: string | null | undefined): s is string => !!s && /^\d+$/.test(s);
 
 export default function MoneyGraph({
   latest,
@@ -129,9 +137,12 @@ export default function MoneyGraph({
   jobPriceUsdc?: string | null;
   live?: boolean;
 }) {
-  const [escrow, setEscrow] = useState('0');
-  const [spent, setSpent] = useState('0');
-  const [operatorNet, setOperatorNet] = useState('0');
+  // null means NOT YET KNOWN, not zero. The graph does not replay history, so on a mid-cycle
+  // page load these amounts are genuinely unknown and must not be asserted as 0.00 — the same
+  // discipline the rest of the Overview follows (review: PR #40).
+  const [escrow, setEscrow] = useState<string | null>(null);
+  const [spent, setSpent] = useState<string | null>(null);
+  const [operatorNet, setOperatorNet] = useState<string | null>(null);
   const [beat, setBeat] = useState<Beat | null>(null);
   const [drops, setDrops] = useState<Drop[]>([]);
 
@@ -174,8 +185,9 @@ export default function MoneyGraph({
       case 'fund':
         // A funding event starts a cycle: the funded amount IS the escrow, and the previous
         // job's spend/payout must not bleed into it. This also makes the looping demo replay
-        // reset correctly without depending on a fixture-specific reset event.
-        if (amount > 0n) setEscrow(amount.toString());
+        // reset correctly without depending on a fixture-specific reset event. Zero spend and
+        // payout here are established facts (a new cycle), not assumptions.
+        setEscrow(amount > 0n ? amount.toString() : null);
         setSpent('0');
         setOperatorNet('0');
         spawn([{ pipe: 'fund', kind: 'fund', dur: 1.1, begin: 0 }]);
@@ -184,7 +196,8 @@ export default function MoneyGraph({
         spawn([{ pipe: 'snap', kind: 'snap', dur: 0.75, begin: 0 }]);
         break;
       case 'spend':
-        setSpent((s) => (atomic(s) + amount).toString());
+        // Accumulate only from a known base; before any spend event the total is unknown.
+        setSpent((s) => (s === null ? amount.toString() : (atomic(s) + amount).toString()));
         spawn([
           { pipe: 'spend', kind: 'spend', dur: 1.0, begin: 0 },
           { pipe: 'spend', kind: 'spend', dur: 1.0, begin: 0.18 },
@@ -193,19 +206,25 @@ export default function MoneyGraph({
       case 'reject':
         // A refusal moves no money: caption only, deliberately no droplet.
         break;
+      case 'repay':
+        // The repayment leg on its own: the pool is paid, but this event says nothing about
+        // the operator's share or the escrow's final state, so neither is touched here.
+        spawn([{ pipe: 'repay', kind: 'fall-pool', dur: 0.9, begin: 0 }]);
+        break;
       case 'fall': {
-        // The chain reports both legs of the waterfall on JobSettled; use them when present.
-        // Otherwise fall back to deriving the operator's share from the escrow it drains,
-        // so any job size still renders correctly (never a hardcoded demo figure).
+        // JobSettled is the only event that reports BOTH legs, so it is the only one allowed
+        // to drain the escrow and pay the operator. Prefer the chain's own figures; otherwise
+        // derive the operator's share from the escrow it drains — but only when the escrow is
+        // actually known, since deriving from an unknown base would invent a number.
         const reported = latest.settlement?.operatorNetUsdc;
-        if (reported && /^\d+$/.test(reported)) {
+        if (isAtomic(reported)) {
           setOperatorNet(reported);
           setEscrow('0');
         } else {
           setEscrow((esc) => {
+            if (esc === null) return null; // unknown escrow: leave both unknown
             const held = atomic(esc);
-            const net = held > amount ? held - amount : 0n;
-            setOperatorNet(net.toString());
+            setOperatorNet((held > amount ? held - amount : 0n).toString());
             return '0';
           });
         }
@@ -218,6 +237,7 @@ export default function MoneyGraph({
       case 'flywheel':
         break;
       case 'reset':
+        // An explicit reset DOES establish zero: the cycle is over by declaration.
         setEscrow('0');
         setSpent('0');
         setOperatorNet('0');
@@ -291,11 +311,12 @@ export default function MoneyGraph({
                 {n.name}
               </text>
               <text x={n.cx} y={n.cy + 15} className="mg-bal">
+                {/* An em dash means not yet known from the stream — never a stand-in for 0.00. */}
                 {n.id === 'customer'
                   ? 'external'
-                  : balances[n.id] === null
-                    ? '—'
-                    : `${formatUsdc(balances[n.id] as string)} USDC`}
+                  : isAtomic(balances[n.id])
+                    ? `${formatUsdc(balances[n.id] as string)} USDC`
+                    : '—'}
               </text>
             </g>
           ))}

@@ -104,12 +104,18 @@ function actorFor(event: StreamEvent): Pick<ActivityMessage, 'actor' | 'role' | 
   return { actor: 'Brain', role: 'Orchestrator', initials: 'BR', tone: 'brain' };
 }
 
-/** Both waterfall legs, when the settlement event reports them. */
+/**
+ * Both waterfall legs, when the settlement event reports them.
+ *
+ * BOTH are required: a split with one leg missing would satisfy the type while handing the
+ * consumer an empty string where an amount belongs, and the money graph would then treat a
+ * partial report as authoritative. A single leg is not a split (review: PR #40).
+ */
 function settlementSplit(payload: unknown): SettlementSplit | undefined {
   const outer = record(payload);
   const repaid = pickString(outer, 'advanceRepaidAtomic', 'advance_repaid_atomic', 'advanceRepaidUsdc');
   const net = pickString(outer, 'operatorNetAtomic', 'operator_net_atomic', 'operatorNetUsdc');
-  if (!repaid && !net) return undefined;
+  if (!repaid || !net) return undefined;
   return { advanceRepaidUsdc: repaid, operatorNetUsdc: net };
 }
 

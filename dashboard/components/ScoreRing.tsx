@@ -23,6 +23,11 @@ export default function ScoreRing({
   const [displayBps, setDisplayBps] = useState(rateBps ?? 0);
   const [bump, setBump] = useState(false);
   const prev = useRef(rateBps);
+  // The animation must ease from what is CURRENTLY on screen, not from the previous target.
+  // Reading state inside the effect would stale-close over it, so mirror it in a ref
+  // (review: PR #40 — rapid updates used to jump).
+  const shown = useRef(rateBps ?? 0);
+  shown.current = displayBps;
 
   useEffect(() => {
     if (rateBps === null || prev.current === rateBps) {
@@ -30,9 +35,18 @@ export default function ScoreRing({
       if (rateBps !== null) setDisplayBps(rateBps);
       return;
     }
-    const from = prev.current ?? rateBps;
     const to = rateBps;
     prev.current = rateBps;
+
+    // Reduced motion: land the value immediately and never enter the bump state, so it
+    // cannot be left stuck by a cancelled animation.
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setDisplayBps(to);
+      setBump(false);
+      return;
+    }
+
+    const from = shown.current;
     setBump(true);
 
     const start = performance.now();
@@ -60,6 +74,9 @@ export default function ScoreRing({
       cancelAnimationFrame(raf);
       clearTimeout(settle);
       if (bumpTimer) clearTimeout(bumpTimer);
+      // An interrupted cycle must not leave the bump class applied forever; the next cycle
+      // sets it again on its own.
+      setBump(false);
     };
   }, [rateBps]);
 
