@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+// vectorIntent is GV-1, the cross-language golden vector. The wire values live in the
+// fields the wire actually reads (V6 §1.G): PayTo carries the x402 payee ADDRESS and
+// ResourceURL the absolute probe URL, which is where the H3 `merchant` and `resource`
+// keys come from. Merchant and Resource hold PRODUCTION-shaped values, the merchant HOST
+// the policy allowlist matches (discovery.go:75, demo.go:31) and the "GET /v1/x" display
+// string, so the vector exercises the real split rather than the old convention where
+// the two meanings were conflated. The canonical wire string and both golden hashes are
+// unchanged by the move, because the same bytes still reach the same wire keys.
 func vectorIntent() Intent {
 	return Intent{
 		IntentID:        "pi_9f3c1a2b",
@@ -14,8 +22,8 @@ func vectorIntent() Intent {
 		JobID:           "job_104",
 		TaskID:          "task_research_01",
 		AgentID:         "market-researcher",
-		Merchant:        "0x1111111111111111111111111111111111111111",
-		Resource:        "http://127.0.0.1:4021/v1/company-profile",
+		Merchant:        "api.research-data.example",
+		Resource:        "GET /v1/company-profile",
 		AmountMicros:    40_000,
 		Purpose:         "Competitor profile for job_104",
 		Nonce:           "0x" + strings.Repeat("ab", 32),
@@ -25,6 +33,8 @@ func vectorIntent() Intent {
 		Asset:           "0x2222222222222222222222222222222222222222",
 		Network:         "eip155:5042002",
 		MaxAmountMicros: 40_000,
+		PayTo:           "0x1111111111111111111111111111111111111111",
+		ResourceURL:     "http://127.0.0.1:4021/v1/company-profile",
 	}
 }
 
@@ -50,11 +60,11 @@ func mutateField(in Intent, name string) Intent {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// The completeness pin (Step-3 pin 1) — structural, like AT-16
+// The completeness pin (Step-3 pin 1), structural, like AT-16
 // ─────────────────────────────────────────────────────────────────────────
 
 // EVERY field of Intent is bound by InternalHash: mutate each field one at a time and
-// assert the hash changes. A future field added to Intent is covered automatically —
+// assert the hash changes. A future field added to Intent is covered automatically -
 // an unhashed field cannot slip in silently.
 func TestAT05_EveryFieldIsBound(t *testing.T) {
 	base := vectorIntent()
@@ -62,14 +72,14 @@ func TestAT05_EveryFieldIsBound(t *testing.T) {
 
 	typ := reflect.TypeOf(base)
 	if typ.NumField() == 0 {
-		t.Fatal("empty Intent — the test proves nothing")
+		t.Fatal("empty Intent, the test proves nothing")
 	}
 	for i := 0; i < typ.NumField(); i++ {
 		name := typ.Field(i).Name
 		t.Run(name, func(t *testing.T) {
 			mutated := mutateField(base, name)
 			if InternalHash(mutated) == baseHash {
-				t.Fatalf("field %s is NOT bound by the internal hash — it can change post-approval without invalidating (the AT-05 hole)", name)
+				t.Fatalf("field %s is NOT bound by the internal hash, it can change post-approval without invalidating (the AT-05 hole)", name)
 			}
 		})
 	}
@@ -90,14 +100,31 @@ func TestInternalHash_Deterministic(t *testing.T) {
 // wireCoveredFields maps Intent fields to whether H3 §3.3's 14-field set covers them.
 var wireCoveredFields = map[string]bool{
 	"IntentID": true, "JobID": true, "TaskID": true, "AgentID": true,
-	"Merchant": true, "Resource": true, "AmountMicros": true, "Purpose": true,
+	"AmountMicros": true, "Purpose": true,
 	"Nonce": true, "PolicyVersion": true, "ExpiresAt": true,
 	"Asset": true, "Network": true, "MaxAmountMicros": true,
+	// PayTo feeds the wire's `merchant` key and ResourceURL feeds its `resource` key
+	// (wireFields in hash.go). They are the two values the sidecar actually checks:
+	// PayTo against the live accept.payTo (buyer.ts:199) and ResourceURL by HTTP-probing
+	// it. Both are inside the 14, so mutating either MUST move the wire hash.
+	"PayTo":       true,
+	"ResourceURL": true,
 	// NOT on the wire:
 	"OrgID":         false,
 	"AlternativeTo": false,
+	// Merchant and Resource are off the WIRE hash because the wire carries PayTo and
+	// ResourceURL under those key names instead (V6 §1.G). The daemon-side meanings are
+	// still bound INTERNALLY (CanonicalInternal reflects every field), which is what
+	// matters: the owner's decision binds to the allowlisted HOST that was evaluated and
+	// to the display string they were shown, so neither can be swapped after approval.
+	// The structural consequence, stated rather than discovered later: two intents that
+	// differ only in Merchant (same payee address) or only in Resource (same probe URL)
+	// share a wire hash. That is correct, the sidecar has no notion of a host allowlist
+	// or a display string, so a hash it computes cannot depend on them.
+	"Merchant": false,
+	"Resource": false,
 	// Kind is DELIBERATELY off the wire hash: H3 §3.3's 14-field set is the frozen
-	// sidecar payment contract, and advances never cross that wire — an advance-kind
+	// sidecar payment contract, and advances never cross that wire, an advance-kind
 	// intent's Grant drives FloatPool.requestAdvance, not a sidecar /v1/pay. The
 	// INTERNAL hash covers Kind (CanonicalInternal reflects every field), so a decision
 	// binds to the kind (AT-05); two intents differing only in Kind share a wire hash,
@@ -110,7 +137,7 @@ var wireCoveredFields = map[string]bool{
 }
 
 // The adversarial matrix: for EVERY Intent field, pin whether mutating it changes the
-// wire hash. Fields inside the 14 must diverge it; fields outside MUST collide — and
+// wire hash. Fields inside the 14 must diverge it; fields outside MUST collide, and
 // each collision is a documented finding for the H3 review, not an accident.
 func TestWireHash_AdversarialFieldMatrix(t *testing.T) {
 	base := vectorIntent()
@@ -121,7 +148,7 @@ func TestWireHash_AdversarialFieldMatrix(t *testing.T) {
 		name := typ.Field(i).Name
 		covered, known := wireCoveredFields[name]
 		if !known {
-			t.Fatalf("field %s is not classified in wireCoveredFields — classify it deliberately before merging", name)
+			t.Fatalf("field %s is not classified in wireCoveredFields, classify it deliberately before merging", name)
 		}
 		t.Run(name, func(t *testing.T) {
 			mutated := mutateField(base, name)
@@ -130,13 +157,13 @@ func TestWireHash_AdversarialFieldMatrix(t *testing.T) {
 				t.Fatalf("field %s should be inside H3's 14-field hash but mutating it did NOT change the wire hash", name)
 			}
 			if !covered && changed {
-				t.Fatalf("field %s is outside H3's 14 fields yet changed the wire hash — the wire canonicalization is wrong", name)
+				t.Fatalf("field %s is outside H3's 14 fields yet changed the wire hash, the wire canonicalization is wrong", name)
 			}
 		})
 	}
 }
 
-// The two named collisions, stated as explicit adversarial pairs — two DIFFERENT
+// The two named collisions, stated as explicit adversarial pairs, two DIFFERENT
 // intents, identical wire hash. These are the H3-review findings:
 //
 //  1. OrgID: two orgs' otherwise-identical intents are indistinguishable to any
@@ -144,7 +171,7 @@ func TestWireHash_AdversarialFieldMatrix(t *testing.T) {
 //     exposure today; multi-org: the wire contract must add it or scope hashes per org.
 //  2. AlternativeTo: the AT-04 provenance link is invisible on the wire, so the wire
 //     hash cannot distinguish an original from its replacement if nonce/terms matched.
-//     (In practice a fresh nonce always separates them — the finding is structural.)
+//     (In practice a fresh nonce always separates them, the finding is structural.)
 func TestWireHash_KnownCollisions(t *testing.T) {
 	base := vectorIntent()
 
@@ -171,15 +198,17 @@ func TestWireHash_KnownCollisions(t *testing.T) {
 // Canonicalization byte-compat with JS (the SetEscapeHTML hazard)
 // ─────────────────────────────────────────────────────────────────────────
 
-// A resource URL with a query string must canonicalize with a literal '&' — Go's
+// A resource URL with a query string must canonicalize with a literal '&', Go's
 // default JSON encoding would emit & and silently diverge from JS JSON.stringify.
 func TestCanonicalWire_DoesNotHTMLEscape(t *testing.T) {
 	in := vectorIntent()
-	in.Resource = "http://127.0.0.1:4021/v1/data?a=1&b=<2>"
+	// ResourceURL, not Resource: the wire's `resource` key reads the absolute URL
+	// (wireFields in hash.go). Setting Resource here would assert nothing about the wire.
+	in.ResourceURL = "http://127.0.0.1:4021/v1/data?a=1&b=<2>"
 
 	c := CanonicalWire(in)
 	if !strings.Contains(c, `"http://127.0.0.1:4021/v1/data?a=1&b=<2>"`) {
-		t.Fatalf("canonical JSON HTML-escaped the URL — diverges from JS JSON.stringify:\n%s", c)
+		t.Fatalf("canonical JSON HTML-escaped the URL, diverges from JS JSON.stringify:\n%s", c)
 	}
 	// The ESCAPED forms must be absent (Go's default encoder would emit \u0026 etc.).
 	for _, esc := range []string{`\u0026`, `\u003c`, `\u003e`} {
@@ -201,14 +230,14 @@ func TestCanonicalWire_LineSeparatorsMatchJS(t *testing.T) {
 
 	c := CanonicalWire(in)
 	if !strings.Contains(c, "line one"+sep+"end") {
-		t.Fatalf("U+2028/U+2029 not emitted literally — diverges from JS JSON.stringify:\n%q", c)
+		t.Fatalf("U+2028/U+2029 not emitted literally, diverges from JS JSON.stringify:\n%q", c)
 	}
 	for _, esc := range []string{`\u2028`, `\u2029`} {
 		if strings.Contains(c, esc) {
 			t.Fatalf("found %s escape in canonical JSON:\n%q", esc, c)
 		}
 	}
-	// The internal canonicalization uses the same encoder — same property.
+	// The internal canonicalization uses the same encoder, same property.
 	ci := CanonicalInternal(in)
 	if strings.Contains(ci, `\u2028`) || strings.Contains(ci, `\u2029`) {
 		t.Fatalf("internal canonical form still escapes line separators:\n%q", ci)
@@ -221,7 +250,7 @@ func TestCanonicalWire_LineSeparatorsMatchJS(t *testing.T) {
 // ReplaceAll rewrote the trailing escape into a raw separator, diverging from JS
 // JSON.stringify("...\\u2028..."). Written with Go escapes so the vector is unambiguous.
 func TestCanonicalWire_LiteralBackslashUEscapePreserved(t *testing.T) {
-	const literalSeq = "\\u2028" // six chars: backslash, u, 2, 0, 2, 8 — verified below
+	const literalSeq = "\\u2028" // six chars: backslash, u, 2, 0, 2, 8, verified below
 	if len(literalSeq) != 6 || literalSeq[0] != '\\' || literalSeq[1] != 'u' {
 		t.Fatalf("vector is not the six literal chars: %q (len %d)", literalSeq, len(literalSeq))
 	}
@@ -235,14 +264,14 @@ func TestCanonicalWire_LiteralBackslashUEscapePreserved(t *testing.T) {
 		t.Fatalf("literal backslash-u2028 not preserved as \\\\u2028 (JS-incompatible):\n%q", c)
 	}
 	if strings.ContainsRune(c, '\u2028') {
-		t.Fatalf("a raw U+2028 rune leaked from a literal-escape input — corruption:\n%q", c)
+		t.Fatalf("a raw U+2028 rune leaked from a literal-escape input, corruption:\n%q", c)
 	}
 
 	// The literal escape and the real rune are distinct inputs and MUST hash differently.
 	rune2028 := vectorIntent()
 	rune2028.Purpose = "before\u2028after"
 	if WireHash(in) == WireHash(rune2028) {
-		t.Fatal("literal backslash-u2028 and the real U+2028 rune hash identically — lossy")
+		t.Fatal("literal backslash-u2028 and the real U+2028 rune hash identically, lossy")
 	}
 }
 
@@ -252,6 +281,11 @@ func TestCanonicalWire_ShapeAndGoldenVector(t *testing.T) {
 	in := vectorIntent()
 	c := CanonicalWire(in)
 
+	// Byte-identical to the string sidecar/src/h3-golden-vector-test.ts asserts as
+	// GV1_CANONICAL. Note `merchant` is the PayTo address and `resource` the ResourceURL:
+	// the wire keys keep the sidecar's meanings while Intent.Merchant/Intent.Resource keep
+	// the daemon's (V6 §1.G). Moving those two values into the new fields left these bytes
+	// untouched, which is why both golden hashes below survived the change.
 	want := `{"agentId":"market-researcher","amount":"40000","asset":"0x2222222222222222222222222222222222222222",` +
 		`"expiresAt":"2026-07-22T10:05:00Z","intentId":"pi_9f3c1a2b","jobId":"job_104","maxAmount":"40000",` +
 		`"merchant":"0x1111111111111111111111111111111111111111","network":"eip155:5042002",` +
@@ -297,7 +331,9 @@ func TestCanonicalWire_GoldenVectorEscaping(t *testing.T) {
 	in := vectorIntent()
 	in.IntentID = "pi_esc_01"
 	in.Purpose = `Benchmark A&B <compare> "quoted" / 50% off`
-	in.Resource = "http://127.0.0.1:4021/v1/benchmark?a=1&b=2"
+	// ResourceURL, not Resource: the wire's `resource` key reads the absolute URL, so the
+	// query string this vector exists to pin has to go there or GV-2's hash changes.
+	in.ResourceURL = "http://127.0.0.1:4021/v1/benchmark?a=1&b=2"
 
 	c := CanonicalWire(in)
 	// Literal, not \u0026 / \u003c / \u003e: SetEscapeHTML(false) doing its job.

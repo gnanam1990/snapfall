@@ -77,7 +77,7 @@ func adaptiveRig(t *testing.T, cat discovery.Catalog, needs []string, decide fun
 	if decide != nil {
 		life.Pending = func(r approval.Request) { decide(life, r) }
 	}
-	b.SetPurchaser(purchasing.New(life, st, purchasing.RealClock{}, "org_demo", 5*time.Minute))
+	b.SetPurchaser(purchasing.New(life, st, nil, nil, purchasing.RealClock{}, "org_demo", 5*time.Minute))
 	return b, st
 }
 
