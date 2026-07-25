@@ -56,6 +56,12 @@ func TestReport_NonAuthorWorkerRefused(t *testing.T) {
 	if err := b.Confirm(ctx, "job_y", "gnanam"); err != nil { // assigns due-diligence, runs to delivery_ready
 		t.Fatalf("confirm: %v", err)
 	}
+	// Join the dispatched DD task before the test returns — like every other Confirm()-ing
+	// test. Without this the task goroutine keeps writing job memory into t.TempDir() while
+	// its RemoveAll cleanup runs, racing to "directory not empty" under CI load.
+	if err := b.AwaitTask("job_y"); err != nil {
+		t.Fatalf("await task: %v", err)
+	}
 	draft := envelope.Deliverable{Title: "t", Summary: "s",
 		Claims: []envelope.Claim{{Text: "c", Sources: []string{"s"}}}, Sources: []string{"s"}}
 	e, _ := envelope.New("job_y", envelope.RoleWorker, envelope.TypeWorkerReport, draft)
