@@ -391,6 +391,21 @@ test('history that lags the view head is reported pending, not complete', async 
     'pending',
     'a complete request must be downgraded when the history does not reach the view head',
   );
+
+  // The other direction, because the invariant is EQUALITY and not merely "not behind".
+  // Concurrent requests can leave the cache scanned PAST this response's head, and history from a
+  // later block mixes observations exactly as much as history from an earlier one. Without this,
+  // a refactor from !== to < would silently restore that hole and every test would stay green.
+  const ahead = { ...stale, scannedThroughBlock: views.blockNumber + 5 };
+  assert.equal(
+    assembleSnapshot(views, ahead, 'complete').historyStatus,
+    'pending',
+    'history scanned AHEAD of the view head is also a mixed observation and must not read complete',
+  );
+
+  // And the only case that may claim complete: exact agreement.
+  const exact = { ...stale, scannedThroughBlock: views.blockNumber };
+  assert.equal(assembleSnapshot(views, exact, 'complete').historyStatus, 'complete');
 });
 
 const POOL_PIN = '0xde9f58a997cf7a3258d09a797eb5546877dc0009';
