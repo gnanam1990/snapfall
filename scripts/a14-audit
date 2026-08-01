@@ -160,7 +160,15 @@ strip_unquoted_comment() {
     if [[ -z "$quote" ]]; then
       case "$char" in
         "'"|'"') quote="$char"; output+="$char" ;;
-        '#') break ;;
+        '#')
+          # In an assignment RHS, # begins a comment only as a whitespace-delimited
+          # token. At position zero (KEY=#value) or inside data (KEY=a#b), it is value
+          # material and must keep the assignment nonempty.
+          if ((i > 0)) && [[ "${input:i-1:1}" =~ [[:space:]] ]]; then
+            break
+          fi
+          output+="$char"
+          ;;
         *) output+="$char" ;;
       esac
       continue

@@ -86,6 +86,14 @@ git -C "$env_repo" add -f .
 commit_fixture "$env_repo" "Populate unsafe env example"
 expect_failure "populated env example" "$env_repo" "populated secret value in sidecar/.env.example"
 
+hash_repo="$fixture_root/unquoted-hash-env"
+init_fixture "$hash_repo"
+mkdir -p "$hash_repo/sidecar"
+printf 'BOT_TOKEN=%s%s\n' '#' 'nonempty-bot-token-value-that-must-not-be-a-comment' >"$hash_repo/sidecar/.env.example"
+git -C "$hash_repo" add -f .
+commit_fixture "$hash_repo" "Add unquoted hash-prefixed secret fixture"
+expect_failure "unquoted hash-prefixed env value" "$hash_repo" "variable BOT_TOKEN"
+
 allowlist_repo="$fixture_root/malformed-allowlist"
 init_fixture "$allowlist_repo"
 mkdir -p "$allowlist_repo/sidecar"
