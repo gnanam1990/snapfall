@@ -2,7 +2,9 @@
 
 Audit refreshed: 2026-08-01
 
-Audited integration baseline: `main` at `e562c4aed36f8b626d9d30cafee2faa6103fecab`
+Audited integration baseline: `main` at `e562c4aed36f8b626d9d30cafee2faa6103fecab`.
+The same scan runs against every PR head in the required A14 CI job, so the recorded baseline
+and every subsequent A14 change are covered without pretending a commit can embed its own hash.
 
 ## Result
 

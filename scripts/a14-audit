@@ -133,7 +133,7 @@ validate_env_example() {
       name="${name//[[:space:]]/}"
       [[ "$name" =~ $secret_env_name_pattern ]] || continue
       rhs="${line#*=}"
-      rhs="${rhs%%#*}"
+      rhs="$(strip_unquoted_comment "$rhs")"
       rhs="${rhs//[[:space:]]/}"
       rhs="${rhs%\"}"; rhs="${rhs#\"}"
       rhs="${rhs%\'}"; rhs="${rhs#\'}"
@@ -145,14 +145,45 @@ validate_env_example() {
   done <"$revisions_file"
 }
 
+# Shell-style comments begin only outside quotes. Treating the first # as a comment
+# unconditionally would turn a valid quoted bearer such as "#..." into an empty value.
+strip_unquoted_comment() {
+  local input="$1" output="" quote="" char next i
+  for ((i = 0; i < ${#input}; i++)); do
+    char="${input:i:1}"
+    if [[ -z "$quote" ]]; then
+      case "$char" in
+        "'"|'"') quote="$char"; output+="$char" ;;
+        '#') break ;;
+        *) output+="$char" ;;
+      esac
+      continue
+    fi
+    output+="$char"
+    if [[ "$char" == '\\' && "$quote" == '"' && $((i + 1)) -lt ${#input} ]]; then
+      i=$((i + 1))
+      next="${input:i:1}"
+      output+="$next"
+    elif [[ "$char" == "$quote" ]]; then
+      quote=""
+    fi
+  done
+  printf '%s' "$output"
+}
+
 sensitive_file="$work_dir/sensitive-paths"
 : >"$sensitive_file"
 while IFS= read -r path; do
   [[ "$path" =~ $sensitive_path_pattern ]] || continue
-  if is_allowlisted "$path"; then
+  # A reviewed path exception must never override the value check for env examples.
+  if [[ "$path" == *.env.example ]]; then
+    if validate_env_example "$path"; then
+      continue
+    fi
+    printf '%s\n' "$path" >>"$sensitive_file"
     continue
   fi
-  if [[ "$path" == *.env.example ]] && validate_env_example "$path"; then
+  if is_allowlisted "$path"; then
     continue
   fi
   printf '%s\n' "$path" >>"$sensitive_file"

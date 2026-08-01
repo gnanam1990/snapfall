@@ -78,7 +78,10 @@ expect_failure "quoted and project-specific credentials" "$shapes_repo" "config/
 env_repo="$fixture_root/env-example"
 init_fixture "$env_repo"
 mkdir -p "$env_repo/sidecar"
-printf 'SIDECAR_AUTH_TOKEN=%s%s\n' 'not-a-' 'placeholder-value' >"$env_repo/sidecar/.env.example"
+# Even an explicit allowlist entry cannot bypass the env-value validation, and a # inside
+# quotes is data rather than a comment.
+printf '%s\n' 'sidecar/.env.example | Test that env examples remain value-validated.' >>"$env_repo/scripts/a14-audit.allow"
+printf 'SIDECAR_AUTH_TOKEN="%s%s"\n' '#' 'not-a-placeholder-value-that-is-long-enough' >"$env_repo/sidecar/.env.example"
 git -C "$env_repo" add -f .
 commit_fixture "$env_repo" "Populate unsafe env example"
 expect_failure "populated env example" "$env_repo" "populated secret value in sidecar/.env.example"
@@ -87,11 +90,12 @@ merge_repo="$fixture_root/merge-path"
 init_fixture "$merge_repo"
 git -C "$merge_repo" add .
 commit_fixture "$merge_repo" "Base"
+initial_branch="$(git -C "$merge_repo" symbolic-ref --short HEAD)"
 git -C "$merge_repo" switch -q -c topic
 printf 'topic\n' >"$merge_repo/topic.txt"
 git -C "$merge_repo" add topic.txt
 commit_fixture "$merge_repo" "Topic"
-git -C "$merge_repo" switch -q master
+git -C "$merge_repo" switch -q "$initial_branch"
 printf 'main\n' >"$merge_repo/main.txt"
 git -C "$merge_repo" add main.txt
 commit_fixture "$merge_repo" "Main"
