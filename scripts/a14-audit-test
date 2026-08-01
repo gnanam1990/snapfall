@@ -86,6 +86,15 @@ git -C "$env_repo" add -f .
 commit_fixture "$env_repo" "Populate unsafe env example"
 expect_failure "populated env example" "$env_repo" "populated secret value in sidecar/.env.example"
 
+allowlist_repo="$fixture_root/malformed-allowlist"
+init_fixture "$allowlist_repo"
+mkdir -p "$allowlist_repo/sidecar"
+printf '%s\n' 'malformed entry without a justification separator' >>"$allowlist_repo/scripts/a14-audit.allow"
+printf 'SIDECAR_AUTH_TOKEN=\n' >"$allowlist_repo/sidecar/.env.example"
+git -C "$allowlist_repo" add -f .
+commit_fixture "$allowlist_repo" "Add malformed allowlist fixture"
+expect_failure "malformed allowlist with only an env example" "$allowlist_repo" "malformed allowlist entry"
+
 merge_repo="$fixture_root/merge-path"
 init_fixture "$merge_repo"
 git -C "$merge_repo" add .

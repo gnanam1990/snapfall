@@ -100,8 +100,10 @@ while IFS= read -r revision; do
 done <"$revisions_file"
 sort -u -o "$paths_file" "$paths_file"
 
-is_allowlisted() {
-  local candidate="$1" entry path reason
+allowlist_paths="$work_dir/allowlist-paths"
+: >"$allowlist_paths"
+validate_allowlist() {
+  local entry path reason
   while IFS= read -r entry || [[ -n "$entry" ]]; do
     [[ "$entry" =~ ^[[:space:]]*(#|$) ]] && continue
     path="${entry%%|*}"
@@ -112,9 +114,13 @@ is_allowlisted() {
     if [[ "$entry" != *"|"* || -z "$path" || -z "$reason" ]]; then
       die_scan "malformed allowlist entry; expected exact/path | justification"
     fi
-    [[ "$candidate" == "$path" ]] && return 0
+    printf '%s\n' "$path" >>"$allowlist_paths"
   done <"$allowlist"
-  return 1
+}
+validate_allowlist
+
+is_allowlisted() {
+  grep -Fqx -- "$1" "$allowlist_paths"
 }
 
 # .env.example is accepted only after every reachable version proves that its secret-named
