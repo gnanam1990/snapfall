@@ -405,9 +405,11 @@ AT-01..15 remain in force from the v4 SRS annex, with AT-10 extended (restart re
 | AT-18 | The x402 flow verifiably uses Circle's own facilitator (not generic x402.org, not another vendor). |
 | AT-19 | A QA rejection bounces the deliverable and blocks `DeliveryReady` until revised. |
 
+**AT-06 (egress protection) is not covered in v1.** The criterion — "confidential content to an unapproved domain is blocked; a redacted denial is recorded" — describes *runtime* content-egress enforcement: an outbound guard that inspects payload destinations at send time, blocks the ones outside the approved set, and writes a redacted denial record. No such guard exists in the codebase, and therefore no test exercises this scenario. What does exist is a static manifest allowlist lint (`agents/manifest.go`, SEC-007) that rejects an agent manifest declaring wildcard egress hosts. That is configuration validation performed once, off the runtime path — it never sees a live payload or a send attempt — so it cannot stand in for the criterion. Treating the lint as coverage for AT-06 would misreport the gate. v1 ships without runtime egress enforcement; AT-06 is deferred, not met.
+
 ### 11.3 Release gate (hardening week, Thu 6 – Fri 7 Aug)
 
-- AT-01..19 green; 111 contract tests green.
+- AT-01..05, AT-07..19 green (AT-06 deferred — no v1 coverage, see §11.2); 119 contract tests green.
 - Restart recovery demonstrated, including Brain.
 - Secret audit clean.
 - Full reset rehearsed twice (reset ×2).
@@ -430,7 +432,9 @@ Canonical IDs only; the invented AT-20/AT-21 from the source material are delibe
 | FR-FLT-002 (amended) — advance formula, 10%/80% caps, 200 bps fee, reserve cut | Frozen contract suite (rate, caps, fee, reserve tests) |
 | Settlement waterfall ordering — pool principal + fee before operator | Frozen contract suite (ordering asserted; reordering fails red) |
 | FR-APR-004 / AT-05 — substitution defence (hash + live merchant/price/asset equality) | Sidecar service tests on `main` (hash mismatch, merchant swap, price-exceeds-reserved) |
-| SEC-009 — kill switch stops payments and advances ≤1 s | AT-09 |
+| SEC-009 — kill switch stops payments and advances ≤1 s | AT-09 (tests assert the halt; the ≤1 s bound is by construction — a synchronous in-memory flag — and is not measured) |
+| SC-AA-001..004 / AT-08 — audit anchor: operator-only, immutable once finalized, root matches recomputed | `contracts/test/AuditAnchor.t.sol` (round trip, tamper-detection, access control, re-anchor rejected, versioned correction) + billing invoice-completeness |
+| AT-06 — egress protection | **Not covered in v1.** No runtime content-egress enforcement exists; the SEC-007 manifest allowlist lint is config validation, not the criterion (see §11.2). |
 
 ---
 
