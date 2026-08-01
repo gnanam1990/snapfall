@@ -46,6 +46,9 @@ export interface FloatChainConfig {
   explorerUrl: string;
   startBlock: number;
   orgAddress?: string;
+  /** Max blocks per eth_getLogs request — the provider's range cap. Defaults to
+   *  DEFAULT_SCAN_CHUNK_BLOCKS (10000, Alchemy PAYG). Set from SNAPFALL_FLOAT_SCAN_CHUNK. */
+  scanChunkBlocks?: number;
 }
 
 export type RPCTransport = <T>(method: string, params: unknown[]) => Promise<T>;
@@ -63,7 +66,39 @@ function delay(ms: number): Promise<void> {
 }
 
 function isTransientRPCError(status: number, message = ''): boolean {
-  return status === 429 || status === 502 || status === 503 || /rate.?limit|temporar|try again/i.test(message);
+  // Rate / request-count limits: back off and retry. -32011 is the JSON-RPC request-limit
+  // code some providers use. DISTINCT from a block-range cap (which is handled by shrinking
+  // the scan window, not retrying) — see RPCError / isRangeError.
+  return (
+    status === 429 ||
+    status === 502 ||
+    status === 503 ||
+    /rate.?limit|temporar|try again|request limit|-32011/i.test(message)
+  );
+}
+
+/** Carries the RPC's own code/message so callers can classify the failure (a block-range
+ *  cap vs a rate limit) instead of seeing an opaque "HTTP 400". */
+export class RPCError extends Error {
+  constructor(
+    message: string,
+    readonly httpStatus: number,
+    readonly rpcCode?: number,
+    readonly rpcMessage: string = '',
+  ) {
+    super(message);
+    this.name = 'RPCError';
+  }
+}
+
+// A block-range cap, not a rate limit: Alchemy returns HTTP 400 + code -32600 ("up to a
+// 10000 block range"), the public Arc node returns HTTP 200 + code -32012 ("requested
+// range too large"). The response body is what names it; the message match is a generic
+// backstop, deliberately NOT a parse of any provider's suggested-range string.
+export function isRangeError(error: unknown): boolean {
+  if (!(error instanceof RPCError)) return false;
+  if (error.rpcCode === -32600 || error.rpcCode === -32012) return true;
+  return /range too large|block range|exceeds|too many blocks|range is too/i.test(error.rpcMessage);
 }
 
 export function createRPCTransport(url: string, options: RPCTransportOptions = {}): RPCTransport {
@@ -79,24 +114,38 @@ export function createRPCTransport(url: string, options: RPCTransportOptions = {
         cache: 'no-store',
       });
       if (!response.ok) {
-        lastError = `Arc RPC ${method} returned HTTP ${response.status}`;
-        if (attempt < 3 && isTransientRPCError(response.status)) {
+        // READ the body — providers name the problem there (a range cap even suggests a
+        // working range). Throwing on status alone discarded that and left callers with an
+        // opaque "HTTP 400". The parsed code/message rides on RPCError for classification.
+        const raw = await response.text().catch(() => ''); // read the body ONCE
+        let rpcCode: number | undefined;
+        let rpcMessage = '';
+        try {
+          const errBody = JSON.parse(raw) as { error?: { code?: number; message?: string } };
+          rpcCode = errBody.error?.code;
+          rpcMessage = errBody.error?.message ?? '';
+        } catch {
+          rpcMessage = raw.slice(0, 300);
+        }
+        lastError = `Arc RPC ${method} HTTP ${response.status}${rpcMessage ? `: ${rpcMessage}` : ''}`;
+        if (attempt < 3 && isTransientRPCError(response.status, rpcMessage)) {
           await delay((options.retryDelayMs ?? 350) * 2 ** attempt);
           continue;
         }
-        throw new Error(lastError);
+        throw new RPCError(lastError, response.status, rpcCode, rpcMessage);
       }
       const body = (await response.json()) as {
         result?: T;
         error?: { code?: number; message?: string };
       };
       if (body.error) {
-        lastError = `Arc RPC ${method} failed: ${body.error.message ?? body.error.code ?? 'unknown error'}`;
-        if (attempt < 3 && isTransientRPCError(200, body.error.message)) {
+        const rpcMessage = body.error.message ?? String(body.error.code ?? 'unknown error');
+        lastError = `Arc RPC ${method} failed: ${rpcMessage}`;
+        if (attempt < 3 && isTransientRPCError(200, rpcMessage)) {
           await delay((options.retryDelayMs ?? 350) * 2 ** attempt);
           continue;
         }
-        throw new Error(lastError);
+        throw new RPCError(lastError, 200, body.error.code, rpcMessage);
       }
       if (body.result === undefined) {
         throw new Error(`Arc RPC ${method} returned no result`);
@@ -151,32 +200,58 @@ async function ethCall(rpc: RPCTransport, poolAddress: string, data: string, lab
   return parseHex(result, label);
 }
 
-async function getLogsAdaptive(
+// The default scan window. This is a per-request BLOCK-RANGE cap — the max span a single
+// eth_getLogs may cover — NOT a rate limit. It is provider-dependent: Alchemy PAYG caps at
+// 10000 blocks (HTTP 400 / -32600 above that), Alchemy's free tier at 10, and the public
+// Arc node accepts any span but limits request COUNT. 10000 is the PAYG cap (the intended
+// production RPC); override with SNAPFALL_FLOAT_SCAN_CHUNK. Do NOT shrink this back to a
+// tiny value to appease rate limits — that is a different constraint (see isTransientRPCError,
+// which backs off) and a small chunk turns the ~1.45M-block scan into tens of thousands of
+// requests.
+export const DEFAULT_SCAN_CHUNK_BLOCKS = 10_000;
+
+function getLogsRange(rpc: RPCTransport, poolAddress: string, fromBlock: bigint, toBlock: bigint): Promise<RPCLog[]> {
+  return rpc<RPCLog[]>('eth_getLogs', [
+    {
+      address: poolAddress,
+      fromBlock: `0x${fromBlock.toString(16)}`,
+      toBlock: `0x${toBlock.toString(16)}`,
+      topics: [[TOPIC.issued, TOPIC.repaid, TOPIC.writtenOff, TOPIC.rateChanged]],
+    },
+  ]);
+}
+
+// Scan [fromBlock, toBlock] forward in fixed windows — deterministic and ~totalRange/chunk
+// requests, versus the old halve-from-the-top approach that burned a large-range rejection
+// before every success. If a window still trips a range cap (a stricter provider than the
+// configured chunk assumes), the window is halved and the smaller size STICKS for the rest
+// of the scan — so we discover the provider's real cap once, not on every chunk. Rate
+// limits are handled inside the transport (back-off retry); only range errors shrink here.
+async function scanLogs(
   rpc: RPCTransport,
   poolAddress: string,
   fromBlock: bigint,
   toBlock: bigint,
-  depth = 0,
+  chunkBlocks: number,
 ): Promise<RPCLog[]> {
   if (toBlock < fromBlock) return [];
-  try {
-    return await rpc<RPCLog[]>('eth_getLogs', [
-      {
-        address: poolAddress,
-        fromBlock: `0x${fromBlock.toString(16)}`,
-        toBlock: `0x${toBlock.toString(16)}`,
-        topics: [[TOPIC.issued, TOPIC.repaid, TOPIC.writtenOff, TOPIC.rateChanged]],
-      },
-    ]);
-  } catch (error) {
-    if (fromBlock === toBlock || depth >= 16) throw error;
-    const midpoint = (fromBlock + toBlock) / 2n;
-    // Keep split queries sequential: a constrained RPC has already rejected the
-    // larger range, and parallel recursion would amplify its rate-limit pressure.
-    const left = await getLogsAdaptive(rpc, poolAddress, fromBlock, midpoint, depth + 1);
-    const right = await getLogsAdaptive(rpc, poolAddress, midpoint + 1n, toBlock, depth + 1);
-    return [...left, ...right];
+  const out: RPCLog[] = [];
+  let cursor = fromBlock;
+  let window = BigInt(Math.max(1, Math.floor(chunkBlocks)));
+  while (cursor <= toBlock) {
+    const end = cursor + window - 1n < toBlock ? cursor + window - 1n : toBlock;
+    try {
+      out.push(...(await getLogsRange(rpc, poolAddress, cursor, end)));
+      cursor = end + 1n;
+    } catch (error) {
+      if (isRangeError(error) && window > 1n) {
+        window = window / 2n > 0n ? window / 2n : 1n; // sticky shrink to the provider's real cap
+        continue;
+      }
+      throw error; // rate limits (already retried in transport) and everything else propagate
+    }
   }
+  return out;
 }
 
 function compareLogs(a: RPCLog, b: RPCLog): number {
@@ -395,7 +470,9 @@ export async function scanFloatHistory(config: FloatChainConfig, rpc: RPCTranspo
     };
     const fromBlock = state.scannedThroughBlock + 1n;
     if (head >= fromBlock) {
-      const logs = (await getLogsAdaptive(rpc, poolAddress, fromBlock, head)).sort(compareLogs);
+      const logs = (
+        await scanLogs(rpc, poolAddress, fromBlock, head, config.scanChunkBlocks ?? DEFAULT_SCAN_CHUNK_BLOCKS)
+      ).sort(compareLogs);
       const newOpenBlocks = new Map<string, string>();
       mergeLogs(state, logs, config, newOpenBlocks);
       await enrichOpenedAt(rpc, state, newOpenBlocks);

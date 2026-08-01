@@ -22,6 +22,12 @@ function floatConfig(): { config: FloatChainConfig; includeHistory: boolean } {
       explorerUrl: deployment.network.explorerUrl,
       startBlock: Number(process.env.SNAPFALL_DEPLOYMENT_BLOCK ?? deployment.network.startBlock),
       orgAddress: process.env.SNAPFALL_TREASURY_ADDRESS,
+      // Per-request eth_getLogs range cap — provider-dependent (Alchemy PAYG 10000, free 10,
+      // public node unlimited-but-rate-limited). Defaults to 10000; the scan shrinks further
+      // on a range error if the provider is stricter.
+      scanChunkBlocks: process.env.SNAPFALL_FLOAT_SCAN_CHUNK
+        ? Number(process.env.SNAPFALL_FLOAT_SCAN_CHUNK)
+        : undefined,
     },
     // The public endpoint's historical eth_getLogs path is heavily rate-limited. A private
     // override enables the (now incremental, cached) scan; otherwise H2 supplies aggregates.

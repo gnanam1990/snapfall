@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createRPCTransport, floatChainInternals, loadFloatSnapshot, type RPCTransport } from './floatChain';
+import { createRPCTransport, floatChainInternals, loadFloatSnapshot, RPCError, type RPCTransport } from './floatChain';
 
 const ORG = '0x7a9c0000000000000000000000000000000041d2';
 const POOL = '0xde9f58a997cf7a3258d09a797eb5546877dc86e5';
@@ -254,4 +254,92 @@ test('incremental re-scan from the last cached block equals a single full scan',
   // The repaid advance dropped out of both; the still-open one remains.
   assert.equal(inc.openAdvances?.length, 1);
   assert.equal(inc.openAdvances?.[0]?.jobId, JOB_REPAID);
+});
+
+// ── Forward-chunking + sticky shrink (Alchemy range-cap fix) ──────────────────
+
+const POOL_CHUNK = '0xde9f58a997cf7a3258d09a797eb5546877dc0004';
+const POOL_SHRINK = '0xde9f58a997cf7a3258d09a797eb5546877dc0005';
+
+// A fake transport that enforces a per-request block-range CAP (like Alchemy) and counts
+// eth_getLogs calls. Throws RPCError(-32600) when the requested window exceeds `cap`.
+function cappedRPC(
+  allLogs: Array<Record<string, unknown>>,
+  headRef: { head: number },
+  cap: number,
+  counter: { getLogs: number },
+): RPCTransport {
+  return async <T>(method: string, params: unknown[]): Promise<T> => {
+    if (method === 'eth_chainId') return hex(5042002) as T;
+    if (method === 'eth_blockNumber') return hex(headRef.head) as T;
+    if (method === 'eth_call') {
+      const selector = (params[0] as { data: string }).data.slice(0, 10);
+      const v: Record<string, bigint> = {
+        [floatChainInternals.SELECTOR.totalAssets]: 150_200_000n,
+        [floatChainInternals.SELECTOR.totalOutstanding]: 0n,
+        [floatChainInternals.SELECTOR.reserve]: 50_000n,
+        [floatChainInternals.SELECTOR.advanceRate]: 6_000n,
+        [floatChainInternals.SELECTOR.acceptedJobs]: 2n,
+        [floatChainInternals.SELECTOR.writtenOffJobs]: 0n,
+      };
+      return data(v[selector] ?? 0n) as T;
+    }
+    if (method === 'eth_getLogs') {
+      counter.getLogs += 1;
+      const f = params[0] as { fromBlock: string; toBlock: string };
+      const from = BigInt(f.fromBlock);
+      const to = BigInt(f.toBlock);
+      if (Number(to - from) + 1 > cap) {
+        throw new RPCError(`range too large`, 400, -32600, `up to a ${cap} block range`);
+      }
+      return allLogs.filter((l) => {
+        const b = BigInt(l.blockNumber as string);
+        return b >= from && b <= to;
+      }) as T;
+    }
+    if (method === 'eth_getBlockByNumber') return { timestamp: hex(1_753_350_000) } as T;
+    throw new Error(`unexpected RPC method ${method}`);
+  };
+}
+
+test('forward-chunks the scan and stitches windows in order (request count = ceil(range/chunk))', async () => {
+  const logs = [
+    rateLog(POOL_CHUNK, ORG, TX_R1, 103, 5_500n),
+    rateLog(POOL_CHUNK, ORG, TX_R2, 127, 6_000n),
+  ];
+  const counter = { getLogs: 0 };
+  // range 100..130 = 31 blocks, chunk 5 -> ceil(31/5) = 7 windows.
+  const snap = await loadFloatSnapshot(
+    { ...cfg(POOL_CHUNK), startBlock: 100, scanChunkBlocks: 5 },
+    cappedRPC(logs, { head: 130 }, 1_000_000, counter),
+  );
+  assert.equal(counter.getLogs, 7);
+  assert.deepEqual(snap.rateHistoryBps, [
+    { rateBps: 5000, blockNumber: 100, txHash: null },
+    { rateBps: 5500, blockNumber: 103, txHash: TX_R1 },
+    { rateBps: 6000, blockNumber: 127, txHash: TX_R2 },
+  ]);
+});
+
+test('shrinks the window on a range cap and the smaller size STICKS (no re-try-large per chunk)', async () => {
+  const logs = [
+    rateLog(POOL_SHRINK, ORG, TX_R1, 103, 5_500n),
+    rateLog(POOL_SHRINK, ORG, TX_R2, 127, 6_000n),
+  ];
+  const counter = { getLogs: 0 };
+  // Configured chunk 10000, but the provider caps at 8 blocks. The scan must shrink to <=8
+  // and complete. Sticky: after discovering the cap once, the rest scans at the small size
+  // — so the count stays far below the non-sticky worst case (re-trying 10000 every chunk).
+  const snap = await loadFloatSnapshot(
+    { ...cfg(POOL_SHRINK), startBlock: 100, scanChunkBlocks: 10_000 },
+    cappedRPC(logs, { head: 130 }, 8, counter),
+  );
+  assert.deepEqual(snap.rateHistoryBps, [
+    { rateBps: 5000, blockNumber: 100, txHash: null },
+    { rateBps: 5500, blockNumber: 103, txHash: TX_R1 },
+    { rateBps: 6000, blockNumber: 127, txHash: TX_R2 },
+  ]);
+  // ~11 shrink attempts (10000->..-><=8) + ~8 windows of 4 across 31 blocks. Far below the
+  // non-sticky worst case (~11 * 8 = 88).
+  assert.ok(counter.getLogs < 30, `sticky shrink kept requests low, got ${counter.getLogs}`);
 });
