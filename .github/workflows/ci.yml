@@ -28,6 +28,19 @@ jobs:
       # Work-split acceptance criterion AT-17.
       - name: Second advance on the same job reverts
         run: forge test --root contracts --match-test secondAdvanceOnPriorJobReverts -vvv
+      # Named contract-side acceptance gates. These already run inside the full suite above;
+      # this step names them so a green check reports each AT by ID, matching AT-16/17/18.
+      #   AT-01 create/fund escrows full payment  -> test_fund_escrowsFullPaymentAndEmits
+      #   AT-07 delivery + settlement             -> test_acceptDelivery_poolIsPaidBeforeOperator
+      #   AT-08 audit anchor (root matches)       -> test_anchorJob_* (round trip, tamper, access, immutability)
+      #   AT-11 advance issuance 12.50            -> test_requestAdvance_demoNumbers
+      #   AT-12 settlement waterfall / escrow     -> test_acceptDelivery_poolIsPaidBeforeOperator, testFuzz_settlement_escrowAlwaysCoversPool
+      #   AT-13 rate flywheel up + down           -> test_demoSpine_rateRisesAfterAcceptance, test_advanceRate_risesFivePointsPerAcceptedJob, test_advanceRate_fallsFifteenPointsPerWriteOff
+      #   AT-14 write-off loss waterfall order    -> test_writeOff_lossWaterfallStageOrder
+      #   AT-15 unauthorized advance (contract)   -> test_requestAdvance_revertsForAnyNonTreasury, test_requestAdvance_paysOnlyTheRegisteredTreasury
+      - name: Contract acceptance gates (AT-01/07/08/11/12/13/14/15)
+        run: |
+          forge test --root contracts --match-test 'test_fund_escrowsFullPaymentAndEmits|test_acceptDelivery_poolIsPaidBeforeOperator|testFuzz_settlement_escrowAlwaysCoversPool|test_requestAdvance_demoNumbers|test_requestAdvance_revertsForAnyNonTreasury|test_requestAdvance_paysOnlyTheRegisteredTreasury|test_demoSpine_rateRisesAfterAcceptance|test_advanceRate_risesFivePointsPerAcceptedJob|test_advanceRate_fallsFifteenPointsPerWriteOff|test_writeOff_lossWaterfallStageOrder|test_anchorJob_' -vvv
 
   daemon:
     name: Daemon integration and worker isolation
@@ -48,6 +61,24 @@ jobs:
       # Work-split acceptance criterion AT-16.
       - name: Worker has no path to funding
         run: go test ./internal/brain -run '^TestAT16_' -count=1
+      # Named daemon-side acceptance gates. These already run inside the full suite above;
+      # this step names them so a green check reports each AT by ID, matching AT-16/17/18.
+      #   AT-02 auto-approve $0.04, no human      -> TestDemoPolicy_ProducesTheScriptedBeats (beat 1)
+      #   AT-03 escalate $4.00, no pre-sig        -> TestDemoPolicy_ProducesTheScriptedBeats (beat 2), TestAT03_*
+      #   AT-04 rejected alt / adapt cheaper      -> TestAT04_*, TestG8_RejectWithCostReasonAdaptsAndLinks
+      #   AT-05 post-approval substitution denied -> TestAT05_*
+      #   AT-09 kill switch halts claims/pays     -> TestAT09_*
+      #     NOTE: these assert the freeze HALTS payments, advances and settlement. They do NOT
+      #     assert the SEC-009 "<=1 s" bound. That bound holds by construction — freeze is a
+      #     synchronous in-memory flag check — but it is not measured here. A green AT-09 gate
+      #     means "stops", not "stops within a timed budget".
+      #   AT-10 restart recovery + Brain rebuild  -> TestRecover_BrainRehydratesJobStages, TestRecover_LifecycleReplaysFromEvents, TestG4_MemoryFilesSurviveRestart, TestAT10Extended_* (executed payment never repeats)
+      #   AT-15 unauthorized advance (API/intake) -> TestAT15_*
+      #   AT-19 QA rejection blocks DeliveryReady -> TestAT19_PlantedClaimBlocksDeliveryReadyUntilRevised
+      # (AT-06 egress protection is intentionally absent: no runtime enforcement exists in v1 — see PRD §11.2.)
+      - name: Daemon acceptance gates (AT-02/03/04/05/09/10/15/19)
+        run: |
+          go test ./... -count=1 -run 'TestAT0[3459]_|TestAT15_|TestAT19_|TestAT10Extended_|TestDemoPolicy_ProducesTheScriptedBeats|TestG8_RejectWithCostReasonAdaptsAndLinks|TestG4_MemoryFilesSurviveRestart|TestRecover_BrainRehydratesJobStages|TestRecover_LifecycleReplaysFromEvents'
 
   sidecar:
     name: Sidecar integration and Circle facilitator
