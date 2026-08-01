@@ -452,6 +452,28 @@ async function enrichOpenedAt(
 
 /** Incrementally scan FloatPool lifecycle + RateChanged logs up to `head`, caching the
  *  accumulator so subsequent calls only extend from the last scanned block. */
+/**
+ * Deep-enough copy of a cached scan for failure-atomic extension.
+ *
+ * The advance objects are copied too, not just the Map: enrichOpenedAt assigns openedAt on each
+ * entry, so a shallow Map copy would still write through to the cached advances. rateTicks is
+ * copied because mergeLogs pushes onto it.
+ */
+function cloneScanState(s: ScanState): ScanState {
+  const open = new Map<string, FloatOpenAdvance>();
+  for (const [k, v] of s.open) open.set(k, { ...v });
+  return {
+    scannedThroughBlock: s.scannedThroughBlock,
+    feesAccrued: s.feesAccrued,
+    bondSlashed: s.bondSlashed,
+    reserveUsed: s.reserveUsed,
+    socialized: s.socialized,
+    open,
+    rateTicks: [...s.rateTicks],
+    latestObservedOrg: s.latestObservedOrg,
+  };
+}
+
 export async function scanFloatHistory(config: FloatChainConfig, rpc: RPCTransport, head: bigint): Promise<ScanState> {
   const poolAddress = normalizedAddress(config.poolAddress, 'FloatPool address');
   const key = scanKey(poolAddress, config.startBlock);
@@ -459,15 +481,30 @@ export async function scanFloatHistory(config: FloatChainConfig, rpc: RPCTranspo
   if (inflight) return inflight;
 
   const run = (async (): Promise<ScanState> => {
-    const state: ScanState = SCAN_CACHE.get(key) ?? {
-      scannedThroughBlock: BigInt(config.startBlock) - 1n,
-      feesAccrued: 0n,
-      bondSlashed: 0n,
-      reserveUsed: 0n,
-      socialized: 0n,
-      open: new Map(),
-      rateTicks: [],
-    };
+    // Extend a COPY, never the cached object.
+    //
+    // The accumulators are advanced by mergeLogs before the cursor is advanced, and there is an
+    // await between the two. Mutating the cached state in place therefore banks the additions
+    // while leaving scannedThroughBlock stale whenever anything in that window throws, so the
+    // next scan refetches the identical range and adds every fee, loss and rate tick a second
+    // time. It is silent (both call sites in route.ts swallow the error), it never self-heals
+    // (SCAN_CACHE has no eviction), and the payload still claims historyStatus 'complete'.
+    //
+    // Cloning makes the extension atomic: a throw leaves the cache exactly as it was, so the
+    // range is simply rescanned. Cold scans were already safe, since their fresh object never
+    // reached the cache.
+    const cached = SCAN_CACHE.get(key);
+    const state: ScanState = cached
+      ? cloneScanState(cached)
+      : {
+          scannedThroughBlock: BigInt(config.startBlock) - 1n,
+          feesAccrued: 0n,
+          bondSlashed: 0n,
+          reserveUsed: 0n,
+          socialized: 0n,
+          open: new Map(),
+          rateTicks: [],
+        };
     const fromBlock = state.scannedThroughBlock + 1n;
     if (head >= fromBlock) {
       const logs = (
