@@ -218,7 +218,7 @@ The property that makes the ordering safe — `operatorNet = payment − (princi
 underflow, because an advance is at most `CAP_BPS × 1.02 = 86.7%` of the immutable escrowed
 `customerPayment` — is asserted over the full rate range and random org histories by two
 256-run fuzz tests: **`testFuzz_settlement_escrowAlwaysCoversPool`** and
-**`testFuzz_advance_neverExceedsEscrow`**. Both pass, alongside the full 111-test contract suite.
+**`testFuzz_advance_neverExceedsEscrow`**. Both pass, alongside the full contract suite.
 
 **What this review is not.** It was one pass by the author of the code — unaudited, and
 reviewed by no one else. Knowing what the code was *meant* to do is precisely the wrong prior

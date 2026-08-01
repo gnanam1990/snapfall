@@ -16,7 +16,7 @@
 | Superseded documents | All prior drafts. v4 remains the SRS annex for detailed requirement IDs (FR/SC/SEC/NFR/AT) except where amended herein. |
 | Source of truth | The ratified v7-line Constitution remains canonical. This PRD reorganizes the same locked content into standard PRD form; **in any conflict, the Constitution wins.** |
 | Change control | **Rule #9 (binding):** no new PRDs. Any change is a small PR against the canonical file, reviewed at standup. **Rule #8:** disagree and commit — vote once, then all three row the same direction. |
-| Contracts status | **DONE.** JobVault, FloatPool, AuditAnchor — **111 tests green. FROZEN** (ADR-014). |
+| Contracts status | **DONE.** JobVault, FloatPool, AuditAnchor — **full suite green. FROZEN** (ADR-014). |
 | Submission | Saturday 8 August 2026 (buffer Sunday 9 August, AoE — contingency only) · Demo Day Thursday 20 August 2026 |
 | Tracks | Agentic Economy (primary) **+ DeFi (primary — ADR-015)** |
 | Team | A: Contracts & Chain → indexer + integration · B: Runtime & Brain · C: Payments, Frontend & Story |
@@ -56,7 +56,7 @@ Underneath sits one financial engine: **JobVault** escrows the customer's paymen
 
 **Demo thesis:** *"We gave our AI business zero dollars and one customer. Watch it finance itself."* The treasury genuinely starts at 0.00; by the end of the demo it has settled a real job using money borrowed against its own escrowed receivable — verifiable on the explorer, impossible to fake invisibly.
 
-The smart-contract layer is complete and frozen: JobVault, FloatPool, and AuditAnchor are deployed with **111 tests green**. Remaining work is the runtime (Brain, Workers, Funding, Billing), the demo spine, and the presentation layer, against a submission date of **Saturday 8 August 2026**.
+The smart-contract layer is complete and frozen: JobVault, FloatPool, and AuditAnchor are deployed with **the full contract suite green**. Remaining work is the runtime (Brain, Workers, Funding, Billing), the demo spine, and the presentation layer, against a submission date of **Saturday 8 August 2026**.
 
 ---
 
@@ -103,7 +103,7 @@ Consequence: owner-personal pipelines (ETH Accumulation Watcher, Portfolio Signa
 | Category | Self-financing AI workforce (agentic economy + DeFi primitive) |
 | Chain | Arc (sub-second finality, USDC-native gas) |
 | Deployment posture | Local-first, one owner, pluggable Worker slots |
-| Financial engine | JobVault (escrow) + FloatPool (ERC-4626-style advance vault) + atomic settlement waterfall + AuditAnchor — **built, tested (111 green), frozen** |
+| Financial engine | JobVault (escrow) + FloatPool (ERC-4626-style advance vault) + atomic settlement waterfall + AuditAnchor — **built, tested (full suite green), frozen** |
 
 The product packs three claims into one thesis, each mapping to a different part of the architecture:
 
@@ -139,7 +139,7 @@ The product packs three claims into one thesis, each mapping to a different part
 | G3 | Make the mechanism *visible* | Fabulous Layer F1–F4 + F7 (§8) over events already emitted; zero contract changes |
 | G4 | Demonstrate judge-facing Circle/Arc adoption | Every layer of the adoption map (§6.6) demonstrably used — including Circle's own Gateway x402 facilitator (AT-18) |
 | G5 | Submit on time, verified | Sat 8 Aug 2026, evening IST; links verified incognito; Sun 9 Aug held as AoE contingency only |
-| G6 | Keep the safety story mechanically true | AT-01..19 green; 111 contract tests stay green; the freeze (ADR-014) holds |
+| G6 | Keep the safety story mechanically true | AT-01..19 green; the full contract suite stays green; the freeze (ADR-014) holds |
 
 ### 4.2 Success criteria
 
@@ -228,7 +228,7 @@ Owner ⇄ Brain ⇄ Worker (pipeline-specific, pluggable slot; incl. QA-worker)
 
 **Mapping from v4 (renames, nothing orphaned):** Manager → Brain. Research / Delivery / Quality → Worker slots (QA the newest). Finance-Controller → Funding agent (execution half) + policy engine (authorization half, functionally unchanged). All v4 FR-ACT / FR-PAY / FR-APR / SEC requirements remain in force under the new role names.
 
-### 6.3 The financial backbone — contracts as built, FROZEN (111 tests green)
+### 6.3 The financial backbone — contracts as built, FROZEN (full suite green)
 
 **JobVault** — escrow and lifecycle engine: `Created → Funded → InProgress → Delivered → Accepted`. Operating expenses bounded against a budget; **content-hashed delivery required before acceptance**; refund/cancel paths notify FloatPool so a written-off job's economics hit the pool's accounting. Revision/expired/disputed handling per v4 annex P1s (confirmed by Teammate 2's spec).
 
@@ -320,7 +320,7 @@ The v4 SRS annex remains fully in force — families **FR-ORG, FR-EVT, FR-JOB, F
 
 | ID | Requirement | Source |
 |---|---|---|
-| FR-FLT-002 (**amended**) | Advance formula → the as-built simplified formula: `advance = advanceRate(org) × customerPayment`, with `rate(org) = clamp(50% + 5%·acceptedJobs − 15%·writeOffs, 30%, 85%)`; pool caps ≤10% TVL per org, ≤80% utilization; one advance per job (SC-FP-003); fee 200 bps; 20% of fees to first-loss reserve; write-off waterfall bond → reserve → LP shares. | ADR-014 — as-built, frozen; 111 green tests outrank any spec |
+| FR-FLT-002 (**amended**) | Advance formula → the as-built simplified formula: `advance = advanceRate(org) × customerPayment`, with `rate(org) = clamp(50% + 5%·acceptedJobs − 15%·writeOffs, 30%, 85%)`; pool caps ≤10% TVL per org, ≤80% utilization; one advance per job (SC-FP-003); fee 200 bps; 20% of fees to first-loss reserve; write-off waterfall bond → reserve → LP shares. | ADR-014 — as-built, frozen; the green contract suite outranks any spec |
 | FR-DEL-003 (carried) | The customer receives a magic-link portal with status + Accept + receipt; Accept fires the settlement waterfall. Satisfied by F7 (§8). Portal privacy: never exposes internal memory, prompts, policies, or other customers' jobs (Teammate 2's spec). | v4 annex + Teammate 2 |
 
 ### 7.8 Roadmap requirements (not this release — ADR-019)
@@ -391,7 +391,7 @@ See §14 for the full register: approval fatigue, compliance-read-as-guarantee, 
 
 ### 11.1 Contract suite (baseline — green, frozen)
 
-- **111 tests green** across JobVault, FloatPool, AuditAnchor. The waterfall ordering (pool principal + fee before operator) is asserted in tests — a reordering fails red.
+- **The full contract suite is green** across JobVault, FloatPool, AuditAnchor. The waterfall ordering (pool principal + fee before operator) is asserted in tests — a reordering fails red.
 - Per ADR-014, no contract reopens before submission short of a fund-loss bug.
 
 ### 11.2 System acceptance tests
@@ -409,7 +409,7 @@ AT-01..15 remain in force from the v4 SRS annex, with AT-10 extended (restart re
 
 ### 11.3 Release gate (hardening week, Thu 6 – Fri 7 Aug)
 
-- AT-01..05, AT-07..19 green (AT-06 deferred — no v1 coverage, see §11.2); 119 contract tests green.
+- AT-01..05, AT-07..19 green (AT-06 deferred — no v1 coverage, see §11.2); the full contract suite green.
 - Restart recovery demonstrated, including Brain.
 - Secret audit clean.
 - Full reset rehearsed twice (reset ×2).
@@ -511,7 +511,7 @@ Canonical IDs only; the invented AT-20/AT-21 from the source material are delibe
 | ADR-011 | Brain hub-and-spoke adopted; four-agent mesh retired | Stronger isolation, simpler routing, better pitch. |
 | ADR-012 | Demo = 1 spine + 1 generalization beat | One unforgettable loop beats six shallow ones. |
 | ADR-013 | External-customer rule wherever Float is involved | Customer ≠ operator makes the flywheel financing, not theater. |
-| ADR-014 | Contracts frozen as built | 111 green tests outrank spec nostalgia; only a fund-loss bug reopens a contract file. |
+| ADR-014 | Contracts frozen as built | The green contract suite outranks spec nostalgia; only a fund-loss bug reopens a contract file. |
 | ADR-015 | DeFi restored to primary track | FloatPool is a genuine financial mechanism; demoting discards judging surface. |
 | ADR-016 | Fresh job per milestone | Forced by SC-FP-003; makes standing pipelines flywheel accelerators. |
 | ADR-017 | Absorb Teammate 2's QA-worker, blocked categories, portal privacy spec, revision paths — decline the Float cut and mesh revert from the same source | The former sharpens the product; the latter un-builds shipped work and deletes the differentiator. |
@@ -554,7 +554,7 @@ Open *(added by the Kimi-formalization mining pass — each needs a standup ruli
 | # | Open question |
 |---|---|
 | OQ-A | **WorkforceRegistry / ADR-019 provenance.** v7.1 lists exactly eight ADRs and claims "zero new decisions"; ADR-019 and FR-WFR-001/002 exist only in the v7.2 line. Ratify ADR-019 explicitly (one standup nod) or mark it pending. Roadmap placement is unaffected either way. |
-| OQ-B | **Resolved.** The contract suite is **111** `function test` declarations, not the long-cited 84. The PRD's own ~102 estimate was right for the five original files (Advance 18, FloatPool 19, JobVault 30, Waterfall 24, Wiring 11 = 102); `USYCSweep.t.sol` (9 tests, added in #28 for the disclosed USYC mock) accounts for the rest → **111**. Both numbers were correct at different times: 102 named the frozen-contract suite, 111 the full suite once the mock's tests landed. The ten PRD citations and `WORK-SPLIT.md:83` are corrected to 111 in this PR. |
+| OQ-B | **Resolved — and this row is now the one canonical place the count lives.** The contract suite is **119** `function test` declarations as of this PR. Its history: **84** (long-cited, never verified) → **111** → **119**. The 84 was folklore; the real count was ~102 for the five original files (Advance 18, FloatPool 19, JobVault 30, Waterfall 24, Wiring 11 = 102), plus `USYCSweep.t.sol` (9 tests, #28, for the disclosed USYC mock) = **111**, plus `AuditAnchor.t.sol` (8 tests, #54, AT-08 audit-spine coverage) = **119**. The figure moved twice in two days, which is exactly why no other prose carries it: every other mention across the PRD, `WORK-SPLIT.md` and `addresses.md` is now number-free ("the full contract suite", green/frozen) — true at any count and immune to this drift. If you need the live number, read it here or run `forge test`; do not reintroduce it into prose. |
 | OQ-C | **Resolved.** The H1 handshake doc was corrected on 22 July to the frozen names — it now uses `DeliverySubmitted` and `RateChanged` and lists `AdvanceRepaid`; `DeliverySet`/`RateUpdated` appear nowhere. Consumers were verified by **topic0 hash, not event name** — this is the method note that matters: a consumer with a hardcoded *wrong* hash never mentions the event name, so grepping for names cannot prove the absence of drift; only comparing the hash can. The indexer (`daemon/internal/indexer/decode.go`) matches by topic0 and carries the correct values — `DeliverySubmitted` = `0xad8578136a5b42ae9e2a5cbc2743365e76b284462cd7273c9b8afa548b62a68a`, `RateChanged` = `0xec739c9af710a6df2b3e3656f38b5d59af57d3022cd5a88ca4516db96a4ca5c7`, `AdvanceRepaid` = `0xb1a154c78bda0dfbf33f2c572b5d8ce519a400aa92b38315e90daa26e44f1b4c`. The wrong-signature hashes (`0xd947…` DeliverySet, `0xfb19…` RateUpdated) appear in no consumer — indexer, dashboard, floatChain, daemon, or sidecar. No silent-miss risk. |
 
 ---
@@ -599,7 +599,7 @@ Every component's origin, credited — nothing in this PRD is uncredited or sile
 |---|---|---|
 | Self-financing economics (escrow → advance → waterfall → flywheel) | v4 lineage (Gnanasekaran + research) | The crown jewel; the demo spine |
 | Brain hub-and-spoke, Funding/Billing isolation, per-project memory | v6 (Teammate 1's architecture) | The skeleton of everything |
-| Contracts as-built (simplified formula, caps-based), 111 tests | Teammate 1's build | Accepted and frozen (ADR-014) |
+| Contracts as-built (simplified formula, caps-based), full test suite | Teammate 1's build | Accepted and frozen (ADR-014) |
 | Circle-facilitator-only x402 rule, adoption map, Session Keys deferral | v6 | Adopted verbatim |
 | Discovery-by-embedding + "suggest, never authorize" | v6 | Adopted |
 | Approval-fatigue digest | v6 | Adopted (P1) |
