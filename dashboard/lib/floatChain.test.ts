@@ -393,6 +393,44 @@ test('history that lags the view head is reported pending, not complete', async 
   );
 });
 
+const POOL_PIN = '0xde9f58a997cf7a3258d09a797eb5546877dc0009';
+
+// Both reviewers landed on this independently: the equality invariant above is only worth
+// anything if blockNumber actually pins the view reads. loadFloatViews captures a head and then
+// makes six eth_call requests; while those resolved 'latest' on their own, a block arriving
+// mid-sequence mixed observations and the payload still named the captured head.
+test('every view read is pinned to the captured head, not latest', async () => {
+  const tags: string[] = [];
+  let head = 100;
+  const rpc: RPCTransport = async <T,>(method: string, params: unknown[]): Promise<T> => {
+    if (method === 'eth_chainId') return hex(5042002) as T;
+    if (method === 'eth_blockNumber') return hex(head) as T;
+    if (method === 'eth_call') {
+      tags.push(String(params[1]));
+      // The chain moves the instant the head is captured. A call resolving 'latest' would read
+      // this new block; a pinned call must not.
+      head += 1;
+      return data(0n) as T;
+    }
+    if (method === 'eth_getLogs') return [] as T;
+    if (method === 'eth_getBlockByNumber') return { timestamp: hex(1_753_350_000) } as T;
+    throw new Error(`unexpected RPC method ${method}`);
+  };
+
+  const views = await loadFloatViews({ ...cfg(POOL_PIN), orgAddress: ORG }, rpc);
+
+  assert.ok(tags.length >= 6, `expected the six view reads, saw ${tags.length}`);
+  assert.equal(
+    tags.filter((t) => t === 'latest').length,
+    0,
+    `view reads still resolve 'latest' independently, so blockNumber does not pin them: ${tags.join(', ')}`,
+  );
+  const pinned = new Set(tags);
+  assert.equal(pinned.size, 1, `view reads used more than one block tag: ${[...pinned].join(', ')}`);
+  assert.equal(BigInt([...pinned][0]!), BigInt(views.blockNumber),
+    'the reads were pinned to a block other than the one the payload reports');
+});
+
 // ── Forward-chunking + sticky shrink (Alchemy range-cap fix) ──────────────────
 
 const POOL_CHUNK = '0xde9f58a997cf7a3258d09a797eb5546877dc0004';
