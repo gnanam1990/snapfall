@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage } from '@/lib/types';
 import type { ActivityMessage } from '@/lib/activity';
@@ -28,7 +29,7 @@ export default function OverviewPage() {
       setTreasury(msg.snapshot.treasuryUsdc);
       setPool(msg.snapshot.pool);
       setAdvances(msg.snapshot.openAdvances);
-      const recent = (msg.snapshot.recentEvents ?? []).map(humanizeLegacyEvent);
+      const recent = (msg.snapshot.recentEvents ?? []).map((e) => humanizeLegacyEvent(e, msg.demo === true));
       setActivity((previous) => {
         const ids = new Set(recent.map((item) => item.id));
         return [...recent, ...previous.filter((item) => !ids.has(item.id))].slice(0, 30);
@@ -63,6 +64,52 @@ export default function OverviewPage() {
           <h1 className="page-title">Overview</h1>
         </div>
         <div className="loading">Connecting to the daemon event stream…</div>
+      </>
+    );
+  }
+
+  // No daemon is wired to this deployment (SNAPFALL_OWNER_API_URL unset, demo replay off).
+  // Rather than fabricate a feed, say so plainly and send the visitor to the real evidence:
+  // the live on-chain Float page, and the chain-verified settlement proof in docs/addresses.md.
+  if (snap.daemonConnected === false) {
+    return (
+      <>
+        <div className="topbar">
+          <div>
+            <h1 className="page-title">Overview</h1>
+            <p className="page-sub">One founder, a workforce that finances itself.</p>
+          </div>
+        </div>
+        <Card>
+          <CardHeader title="No daemon connected to this deployment" />
+          <CardBody>
+            <p>
+              The live agent feed, treasury and workforce come from the owner’s daemon, which does
+              not run on this public site. Rather than show fabricated activity, this page shows
+              nothing here — everything Snapfall displays is meant to be verifiable.
+            </p>
+            <p className="mt">
+              The real, on-chain evidence is still one click away:
+            </p>
+            <ul className="disconnected-links mt">
+              <li>
+                <Link href="/float">Float</Link> — live pool, advance rate and history, read
+                directly from Arc testnet.
+              </li>
+              <li>
+                <a
+                  href="https://github.com/gnanam1990/snapfall/blob/main/docs/addresses.md"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  docs/addresses.md
+                </a>{' '}
+                — the deployed contract addresses and the actual settlement transactions, each
+                verifiable on the explorer.
+              </li>
+            </ul>
+          </CardBody>
+        </Card>
       </>
     );
   }

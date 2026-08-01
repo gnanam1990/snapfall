@@ -127,6 +127,13 @@ export interface OverviewSnapshot {
   openAdvances: OpenAdvance[] | null;
   /** Present in the local demo fixture; the real H2 snapshot may omit history. */
   recentEvents?: FinancialEvent[] | null;
+  /**
+   * False when this deployment has no daemon wired (SNAPFALL_OWNER_API_URL unset) and the
+   * demo replay is off. The Overview renders an honest "no daemon connected" banner instead
+   * of a hero + activity feed, so a public visitor never sees fabricated agent activity.
+   * Absent/true on a real daemon snapshot and on the local demo replay.
+   */
+  daemonConnected?: boolean;
 }
 
 export interface StreamEvent {
@@ -146,13 +153,16 @@ export interface OverviewAggregates {
   pendingApprovals?: number;
 }
 
-/** Ratified H2 envelope: one stream, daemon and chain source vocabularies unchanged. */
+/** Ratified H2 envelope: one stream, daemon and chain source vocabularies unchanged.
+ *  `demo: true` marks a message from the local scripted replay so consumers can flag its
+ *  contents — above all its explorer links — as placeholders, never as real chain proof. */
 export type StreamMessage =
-  | { kind: 'snapshot'; snapshot: OverviewSnapshot }
+  | { kind: 'snapshot'; snapshot: OverviewSnapshot; demo?: boolean }
   | {
       kind: 'event';
       source: 'daemon' | 'chain';
       seq: number | string;
       event: StreamEvent;
       aggregates?: OverviewAggregates;
+      demo?: boolean;
     };
