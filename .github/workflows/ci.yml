@@ -99,6 +99,15 @@ jobs:
       - run: npm run typecheck
       - run: npm run service:test
       - run: npm run store:test
+      - name: Post-sign taxonomy (a released reservation behind a signed authorization)
+        # buyer.ts documents which failures leave a signed bearer authorization in the seller's
+        # hands. service.ts implemented half of it, so PAYMENT_REJECTED became FAILED and the
+        # daemon read that as "nothing settled, release". Inert only while nothing broadcasts.
+        run: npm run test:post-sign
+      - name: Seller survives malformed payments
+        # Twelve bodies that each used to exit the process, including a well-formed payment whose
+        # signature does not recover. A dead seller mid-demo is unrecoverable on stage.
+        run: npm run test:seller-hostile
       # Work-split acceptance criterion AT-18.
       - name: H3 cross-language golden vectors
         # Pins intentHash/paymentId/authNonce against the identical constants asserted in
