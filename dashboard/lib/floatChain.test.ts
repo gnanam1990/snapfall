@@ -162,6 +162,12 @@ const rateLog = (pool: string, org: string, tx: string, block: number, newBps: b
   topics: [floatChainInternals.TOPIC.rateChanged, addressTopic(org)],
   data: data(newBps),
 });
+const writtenOffLog = (pool: string, job: string, tx: string, block: number) => ({
+  address: pool, blockNumber: hex(block), logIndex: hex(3), transactionHash: tx,
+  topics: [floatChainInternals.TOPIC.writtenOff, job],
+  data: data(50_000n, 30_000n, 20_000n), // bondSlashed, reserveUsed, socialized
+});
+
 const repaidLog = (pool: string, job: string, tx: string, block: number) => ({
   address: pool, blockNumber: hex(block), logIndex: hex(2), transactionHash: tx,
   topics: [floatChainInternals.TOPIC.repaid, job],
@@ -266,6 +272,8 @@ test('incremental re-scan from the last cached block equals a single full scan',
 //
 // Fixture note that matters: a job Issued AND Repaid inside the same batch is deleted from `open`,
 // so enrichOpenedAt makes no call and nothing throws. The window needs a STILL-OPEN advance.
+const JOB_LOST = `0x${'33'.repeat(32)}`;
+const TX_LOST = `0x${'dd'.repeat(32)}`;
 const POOL_ATOMIC = '0xde9f58a997cf7a3258d09a797eb5546877dc0006';
 // A separate address for the baseline: SCAN_CACHE is process-global and keyed by pool, so
 // reusing another test's pool would fold that test's logs into this one's expectation.
@@ -279,8 +287,12 @@ test('a scan that throws after merging does not double-count on the next scan', 
   const logs = [
     issuedLog(POOL_ATOMIC, JOB_REPAID, ORG, TX_R2, 95),
     repaidLog(POOL_ATOMIC, JOB_REPAID, TX_REPAID, 105),
-    issuedLog(POOL_ATOMIC, JOB_OPEN, ORG, TX_OPEN, 106),
-    rateLog(POOL_ATOMIC, ORG, TX_R1, 107, 5_500n),
+    // written off in the extension window too, so bondSlashed/reserveUsed/socialized are
+    // non-zero and the losses assertion below can actually discriminate a double count
+    issuedLog(POOL_ATOMIC, JOB_LOST, ORG, TX_LOST, 96),
+    writtenOffLog(POOL_ATOMIC, JOB_LOST, TX_LOST, 106),
+    issuedLog(POOL_ATOMIC, JOB_OPEN, ORG, TX_OPEN, 107),
+    rateLog(POOL_ATOMIC, ORG, TX_R1, 108, 5_500n),
   ];
 
   const headRef = { head: 100 };
@@ -301,7 +313,14 @@ test('a scan that throws after merging does not double-count on the next scan', 
   //    whatever the snapshot says; what matters is what the CACHE now holds.
   headRef.head = 110;
   fail.blocks = true;
-  await loadFloatSnapshot(cfg(POOL_ATOMIC), rpc).catch(() => {});
+  let threw = false;
+  await loadFloatSnapshot(cfg(POOL_ATOMIC), rpc).catch(() => {
+    threw = true;
+  });
+  // Without this the test passes vacuously the moment the injection stops firing, for instance if
+  // enrichOpenedAt stops making an eth_getBlockByNumber call or scanFloatHistory starts swallowing
+  // the error itself. The whole point is that a throw lands between the merge and the cursor.
+  assert.ok(threw, 'step 2 did not throw, so the merge-then-cursor window was never exercised');
 
   // 3. retry with the RPC healthy. This must equal a single clean scan over 0..110, not double.
   fail.blocks = false;
@@ -314,6 +333,8 @@ test('a scan that throws after merging does not double-count on the next scan', 
   assert.equal(after.feesAccruedUsdc, clean.feesAccruedUsdc,
     'fees double-counted: the failed extension banked its merge with a stale cursor');
   assert.deepEqual(after.losses, clean.losses, 'loss totals double-counted');
+  assert.notEqual(clean.losses?.bondSlashedUsdc, '0',
+    'losses are all zero, so the parity check above cannot discriminate a double count');
   assert.deepEqual(after.rateHistoryBps, clean.rateHistoryBps,
     'rate history duplicated: same tick at the same block and txHash twice');
   assert.notEqual(after.feesAccruedUsdc, feesAt100,
