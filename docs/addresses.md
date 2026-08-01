@@ -198,6 +198,33 @@ cast call $FLOATPOOL "reserve()(uint256)"        --rpc-url $ARC   # 4200  (0.004
 The on-chain `reserve` is cumulative across both settled jobs (0.0042); job-004's own
 contribution is the 0.0022 above.
 
+## Security review
+
+The settlement waterfall (§4) was reviewed against **every reachable path** through
+`JobVault.acceptDelivery`, not only the path job-004 happened to take:
+
+- **No advance drawn** — `open == false`; the operator receives the full escrow, the pool is
+  owed nothing.
+- **Advance open** — `repayAdvance(principal + fee)` executes before `safeTransfer(operator)`;
+  pool first, by control flow.
+- **Advance already repaid / written off** — unreachable: those states put the job at
+  `Accepted` / `Refunded`, and `acceptDelivery` accepts only `Delivered`.
+- **Partial repayment** — rejected: `repayAdvance` requires `amount == principal + fee`.
+- **Write-off interleaved with settlement** — impossible: `acceptDelivery` flips the job to
+  `Accepted` before any external call and is `nonReentrant`; `writeOff` requires an `Issued`
+  advance.
+
+The property that makes the ordering safe — `operatorNet = payment − (principal + fee)` cannot
+underflow, because an advance is at most `CAP_BPS × 1.02 = 86.7%` of the immutable escrowed
+`customerPayment` — is asserted over the full rate range and random org histories by two
+256-run fuzz tests: **`testFuzz_settlement_escrowAlwaysCoversPool`** and
+**`testFuzz_advance_neverExceedsEscrow`**. Both pass, alongside the full 111-test contract suite.
+
+**What this review is not.** It was one pass by the author of the code — unaudited, and
+reviewed by no one else. Knowing what the code was *meant* to do is precisely the wrong prior
+for finding what it *actually* does, so the clean result above should be read as the author's
+claim about the author's own work, pending an independent audit — not as assurance.
+
 ## What this proof does NOT show
 
 This page proves the **money spine** — the part verifiable without trusting the operator.
@@ -214,4 +241,12 @@ It deliberately does not claim more.
   suite, but the penalty path has **not** been demonstrated on chain.
 - **USYC is a mock strategy** (`MockUSYCStrategy`). The yield seam is structurally real; the
   strategy behind it is not the permissioned Circle/Hashnote product.
+- **A latent escrow-stranding gap, recorded not fixed (LOW).** `JobVault.fund` does not require
+  the FloatPool to be wired, while `acceptDelivery` and `refund` both do. A customer who funds a
+  job before wiring, in a deployment where wiring never happens, would hold escrow that can be
+  neither accepted nor refunded. `refund` calls `floatPool.openAdvanceOf` unconditionally even
+  though no advance can exist while unwired, so the dependency is stricter than the logic
+  requires. **This is unreachable in this deployment:** FloatPool was wired at deploy, before any
+  job existed. Per ADR-014 the contracts are frozen and this is not a fund-loss bug, so it is
+  recorded here rather than remediated.
 - **Nothing here has been audited.** Unaudited hackathon code, one operator, testnet only.
