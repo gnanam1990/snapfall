@@ -428,7 +428,14 @@ export default function FloatPage() {
             principals, FloatPool.sol), so a silent lag reads as a contradiction on screen. */}
         {snapshot.historyStatus === 'pending' && snapshot.historyScannedThroughBlock !== null ? (
           <> History below is scanned through block{' '}
-            {snapshot.historyScannedThroughBlock.toLocaleString('en-US')} and is still catching up.</>
+            {snapshot.historyScannedThroughBlock.toLocaleString('en-US')}
+            {snapshot.historyScannedThroughBlock < snapshot.blockNumber
+              ? ' and is still catching up.'
+              : /* The cache can also be scanned PAST this response's head, because a concurrent
+                   request extended it after these views were read. Both directions are mixed
+                   observations and both read pending, but only one of them is the history lagging,
+                   so the copy must not claim it is. */
+                ', so the figures above are the older of the two.'}</>
         ) : null}
       </p>
 
