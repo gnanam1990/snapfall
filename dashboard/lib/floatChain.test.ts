@@ -256,6 +256,70 @@ test('incremental re-scan from the last cached block equals a single full scan',
   assert.equal(inc.openAdvances?.[0]?.jobId, JOB_REPAID);
 });
 
+// The failure-atomicity regression, from the review of PR #50.
+//
+// mergeLogs advances the money accumulators, then an await sits between that and the cursor
+// advance. When the cached ScanState was extended IN PLACE, anything throwing in that window
+// banked the additions with a stale cursor, so the next scan refetched the same range and added
+// every fee, loss and rate tick again. It was silent (route.ts swallows the error), it never
+// self-healed (SCAN_CACHE has no eviction), and the payload still said historyStatus 'complete'.
+//
+// Fixture note that matters: a job Issued AND Repaid inside the same batch is deleted from `open`,
+// so enrichOpenedAt makes no call and nothing throws. The window needs a STILL-OPEN advance.
+const POOL_ATOMIC = '0xde9f58a997cf7a3258d09a797eb5546877dc0006';
+// A separate address for the baseline: SCAN_CACHE is process-global and keyed by pool, so
+// reusing another test's pool would fold that test's logs into this one's expectation.
+const POOL_ATOMIC_REF = '0xde9f58a997cf7a3258d09a797eb5546877dc0007';
+
+test('a scan that throws after merging does not double-count on the next scan', async () => {
+  // Two jobs, deliberately. JOB_REPAID is issued in the WARM range and repaid in the EXTENSION
+  // range, so the extension genuinely advances feesAccrued (that is the number that doubles).
+  // JOB_OPEN is issued in the extension range and never repaid, so it survives in `open` and
+  // enrichOpenedAt is actually called, which is what gives the failure something to throw from.
+  const logs = [
+    issuedLog(POOL_ATOMIC, JOB_REPAID, ORG, TX_R2, 95),
+    repaidLog(POOL_ATOMIC, JOB_REPAID, TX_REPAID, 105),
+    issuedLog(POOL_ATOMIC, JOB_OPEN, ORG, TX_OPEN, 106),
+    rateLog(POOL_ATOMIC, ORG, TX_R1, 107, 5_500n),
+  ];
+
+  const headRef = { head: 100 };
+  const fail = { blocks: false };
+  const base = rangeRPC(logs, headRef);
+  const rpc: RPCTransport = async <T,>(method: string, params: unknown[]): Promise<T> => {
+    if (method === 'eth_getBlockByNumber' && fail.blocks) {
+      throw new RPCError('Arc RPC eth_getBlockByNumber returned HTTP 429', 429, undefined, 'rate limited');
+    }
+    return base<T>(method, params);
+  };
+
+  // 1. warm the cache to 100
+  const warm = await loadFloatSnapshot(cfg(POOL_ATOMIC), rpc);
+  const feesAt100 = warm.feesAccruedUsdc;
+
+  // 2. extend to 110 with enrichOpenedAt failing. The route swallows this, so the caller sees
+  //    whatever the snapshot says; what matters is what the CACHE now holds.
+  headRef.head = 110;
+  fail.blocks = true;
+  await loadFloatSnapshot(cfg(POOL_ATOMIC), rpc).catch(() => {});
+
+  // 3. retry with the RPC healthy. This must equal a single clean scan over 0..110, not double.
+  fail.blocks = false;
+  const after = await loadFloatSnapshot(cfg(POOL_ATOMIC), rpc);
+
+  const clean = await loadFloatSnapshot(cfg(POOL_ATOMIC_REF), rangeRPC(
+    logs.map((l) => ({ ...l, address: POOL_ATOMIC_REF })), { head: 110 },
+  ));
+
+  assert.equal(after.feesAccruedUsdc, clean.feesAccruedUsdc,
+    'fees double-counted: the failed extension banked its merge with a stale cursor');
+  assert.deepEqual(after.losses, clean.losses, 'loss totals double-counted');
+  assert.deepEqual(after.rateHistoryBps, clean.rateHistoryBps,
+    'rate history duplicated: same tick at the same block and txHash twice');
+  assert.notEqual(after.feesAccruedUsdc, feesAt100,
+    'the extension never landed at all, so this test is not exercising the path it claims');
+});
+
 // ── Forward-chunking + sticky shrink (Alchemy range-cap fix) ──────────────────
 
 const POOL_CHUNK = '0xde9f58a997cf7a3258d09a797eb5546877dc0004';
