@@ -40,6 +40,12 @@ type Server struct {
 	// the outbox publisher (the store is the bus's source of truth; seq gives replay and
 	// Last-Event-ID for free).
 	pollEvery time.Duration
+	// orgAddress is the operator treasury, read from the same env var seed_demo and
+	// spine_run use. It is the key for chain_org_rates, so without it the H2 aggregates'
+	// pool block cannot be computed and V11's ring has nothing to read. Read here rather
+	// than added to New's signature so every existing caller and test keeps compiling;
+	// empty simply means "no pool aggregate", which is the documented absent case.
+	orgAddress string
 	// Generate is the invoice-generation seam (H2 §4.1), wired by the daemon to Brain's
 	// GenerateInvoice with the owner-request trigger. Kept as a seam so this package
 	// never holds the billing agent — Brain does, from its single pinned site. Nil until
@@ -109,7 +115,12 @@ var positiveUSDCQuote = regexp.MustCompile(`^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$
 
 // New builds the server.
 func New(life *approval.Lifecycle, st *store.Store, log *slog.Logger) *Server {
-	return &Server{life: life, st: st, log: log, token: os.Getenv("SNAPFALL_OWNER_TOKEN"), pollEvery: 200 * time.Millisecond}
+	return &Server{
+		life: life, st: st, log: log,
+		token:      os.Getenv("SNAPFALL_OWNER_TOKEN"),
+		orgAddress: os.Getenv("SNAPFALL_TREASURY_ADDRESS"),
+		pollEvery:  200 * time.Millisecond,
+	}
 }
 
 // Handler returns the H2 routes. TWO PRINCIPALS, two auth domains, one handler: owner
@@ -420,23 +431,41 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// Snapshot first (H2 §2.1). Fields whose source is absent are null — the V5 mock's
 	// fixtures are placeholders, not contract.
-	snapshot := map[string]any{
-		"kind": "snapshot",
-		"snapshot": map[string]any{
-			"pendingApprovals": len(s.life.PendingRequests()),
-			"treasuryUsdc":     nil, "pool": nil, "openAdvances": nil, "activeJobs": nil,
-		},
+	//
+	// The chain-derived fields are filled from the indexer's projections when it has run. They
+	// used to be hardcoded nil, which is the correct answer for an un-indexed store and the
+	// wrong one for every other case: the treasury hero and the score ring rendered "—" against
+	// a live daemon while looking right against the mock, because the mock always sends them.
+	pending := len(s.life.PendingRequests())
+	snapBody := map[string]any{
+		"pendingApprovals": pending,
+		"treasuryUsdc":     nil, "pool": nil, "openAdvances": nil, "activeJobs": nil,
 	}
+	if agg := computeAggregates(r.Context(), s.st.DB(), s.orgAddress, pending); agg != nil {
+		if agg.TreasuryUsdc != nil {
+			snapBody["treasuryUsdc"] = *agg.TreasuryUsdc
+		}
+		if agg.Pool != nil {
+			snapBody["pool"] = agg.Pool
+		}
+		snapBody["openAdvances"] = agg.OpenAdvances
+		snapBody["activeJobs"] = agg.ActiveJobs
+	}
+	snapshot := map[string]any{"kind": "snapshot", "snapshot": snapBody}
 	if err := sseWrite(w, fl, 0, snapshot); err != nil {
 		return
 	}
 
 	// Live daemon events: read the events table by seq — the same store the outbox
-	// publisher drains, so ordering and replay come from the log itself. Chain events
-	// (source:"chain") are relayed here once the chain_* tables exist in this build's
-	// schema (H2 §4); until then they simply do not occur.
+	// publisher drains, so ordering and replay come from the log itself.
+	//
+	// Chain events (source:"chain") are relayed on the same tick, from the chain_events table
+	// the indexer writes. Both halves of H2 §2's "ONE stream, TWO sources" now exist; the chain
+	// half was specified, the tables were created and populated, and the read was never written,
+	// so indexed events stopped one table short of the browser.
 	tick := time.NewTicker(s.pollEvery)
 	defer tick.Stop()
+	chainAt := latestChainCursor(r.Context(), s.st.DB())
 	for {
 		select {
 		case <-r.Context().Done():
@@ -464,6 +493,24 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			batch = append(batch, x)
 		}
 		rows.Close()
+
+		// Chain first, then daemon. Within a tick the two sources have no shared ordering —
+		// they are different tables with different clocks — so the choice is arbitrary but
+		// must be FIXED: alternating would make the money graph's beat order depend on poll
+		// timing. Chain leads because a chain fact (the advance landed) is what a daemon
+		// event usually reports on.
+		if frames, err := readChainEvents(r.Context(), s.st.DB(), chainAt, 256); err == nil {
+			for _, f := range frames {
+				// id 0: chain frames deliberately write NO SSE id. Last-Event-ID carries the
+				// daemon seq and is parsed as an int64 (H2 §2.1), so an id of "512:3" would
+				// come back on reconnect as a daemon seq of 512 and silently skip the log.
+				if err := sseWrite(w, fl, 0, f.msg); err != nil {
+					return
+				}
+				chainAt = f.cursor
+			}
+		}
+
 		for _, x := range batch {
 			var payload any
 			if x.payload != "" {
