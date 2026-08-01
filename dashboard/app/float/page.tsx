@@ -341,7 +341,10 @@ export default function FloatPage() {
   }
 
   const utilizationWithinCap = Math.max(0, Math.min(100, (snapshot.utilizationBps / 8_000) * 100));
-  const feesAccrued = snapshot.feesAccruedUsdc ?? h2Pool?.feesAccruedUsdc ?? null;
+  // Chain scan only: the H2 stream reports 0 fees (it doesn't compute chain fees), and a
+  // non-null 0 masked the honest "Awaiting…" placeholder — an unknown rendered as a
+  // measured 0.00. Unknown must read as unknown. (review: chain-authoritative fee path)
+  const feesAccrued = snapshot.feesAccruedUsdc ?? null;
   const displayedAdvances = snapshot.openAdvances ?? h2Advances;
   const displayedRate = snapshot.orgRateBps ?? h2Pool?.orgRateBps ?? null;
 
