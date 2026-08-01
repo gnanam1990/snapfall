@@ -195,8 +195,19 @@ function normalizedAddress(value: string, label: string): string {
   return value.toLowerCase();
 }
 
-async function ethCall(rpc: RPCTransport, poolAddress: string, data: string, label: string): Promise<bigint> {
-  const result = await rpc<string>('eth_call', [{ to: poolAddress, data }, 'latest']);
+// `block` is REQUIRED, not defaulted to 'latest'. loadFloatViews captures a head and then makes
+// six of these calls; if each resolved 'latest' independently, a block arriving mid-sequence would
+// silently mix observations, and the payload would still name the captured head. That is the same
+// class of defect as reporting lagging history as complete, so it is fixed the same way: the block
+// is carried explicitly and the type will not let a caller forget it.
+async function ethCall(
+  rpc: RPCTransport,
+  poolAddress: string,
+  data: string,
+  label: string,
+  block: string,
+): Promise<bigint> {
+  const result = await rpc<string>('eth_call', [{ to: poolAddress, data }, block]);
   return parseHex(result, label);
 }
 
@@ -292,9 +303,11 @@ export async function loadFloatViews(config: FloatChainConfig, rpc: RPCTransport
 
   const chainHex = await rpc<string>('eth_chainId', []);
   const headHex = await rpc<string>('eth_blockNumber', []);
-  const totalAssets = await ethCall(rpc, poolAddress, SELECTOR.totalAssets, 'totalAssets');
-  const totalOutstanding = await ethCall(rpc, poolAddress, SELECTOR.totalOutstanding, 'totalOutstanding');
-  const reserve = await ethCall(rpc, poolAddress, SELECTOR.reserve, 'reserve');
+  // Every view read is pinned to headHex, so all six describe ONE block and blockNumber is a
+  // true label for them rather than a timestamp taken before the fact.
+  const totalAssets = await ethCall(rpc, poolAddress, SELECTOR.totalAssets, 'totalAssets', headHex);
+  const totalOutstanding = await ethCall(rpc, poolAddress, SELECTOR.totalOutstanding, 'totalOutstanding', headHex);
+  const reserve = await ethCall(rpc, poolAddress, SELECTOR.reserve, 'reserve', headHex);
   const chainId = toSafeNumber(parseHex(chainHex, 'chain ID'), 'chain ID');
   if (chainId !== config.chainId) {
     throw new Error(`Arc RPC chain ID ${chainId} does not match configured chain ID ${config.chainId}`);
@@ -307,9 +320,9 @@ export async function loadFloatViews(config: FloatChainConfig, rpc: RPCTransport
   let acceptedJobs: number | null = null;
   let writtenOffJobs: number | null = null;
   if (explicitOrg) {
-    const rate = await ethCall(rpc, poolAddress, encodeAddressCall(SELECTOR.advanceRate, explicitOrg), 'advanceRate');
-    const accepted = await ethCall(rpc, poolAddress, encodeAddressCall(SELECTOR.acceptedJobs, explicitOrg), 'acceptedJobs');
-    const writtenOff = await ethCall(rpc, poolAddress, encodeAddressCall(SELECTOR.writtenOffJobs, explicitOrg), 'writtenOffJobs');
+    const rate = await ethCall(rpc, poolAddress, encodeAddressCall(SELECTOR.advanceRate, explicitOrg), 'advanceRate', headHex);
+    const accepted = await ethCall(rpc, poolAddress, encodeAddressCall(SELECTOR.acceptedJobs, explicitOrg), 'acceptedJobs', headHex);
+    const writtenOff = await ethCall(rpc, poolAddress, encodeAddressCall(SELECTOR.writtenOffJobs, explicitOrg), 'writtenOffJobs', headHex);
     orgRateBps = toSafeNumber(rate, 'advance rate');
     acceptedJobs = toSafeNumber(accepted, 'accepted jobs');
     writtenOffJobs = toSafeNumber(writtenOff, 'written-off jobs');
@@ -545,6 +558,9 @@ export interface FloatHistory {
   losses: FloatLossTotals;
   rateHistoryBps: RateHistoryPoint[];
   latestObservedOrg: string | null;
+  /** The block this history was actually scanned through. Carried so a caller can tell whether
+   *  the history it holds covers the head the view figures came from. */
+  scannedThroughBlock: number;
 }
 
 function formatHistory(state: ScanState, config: FloatChainConfig, orgAddress: string | null): FloatHistory {
@@ -558,6 +574,7 @@ function formatHistory(state: ScanState, config: FloatChainConfig, orgAddress: s
     },
     rateHistoryBps: buildRateHistory(state, config, orgAddress ?? state.latestObservedOrg ?? null),
     latestObservedOrg: state.latestObservedOrg ?? null,
+    scannedThroughBlock: toSafeNumber(state.scannedThroughBlock, 'scannedThroughBlock'),
   };
 }
 
@@ -593,7 +610,17 @@ export function assembleSnapshot(
     openAdvances: history?.openAdvances ?? null,
     losses: history?.losses ?? null,
     rateHistoryBps: history?.rateHistoryBps ?? null,
-    historyStatus,
+    historyScannedThroughBlock: history?.scannedThroughBlock ?? null,
+    // A caller may ASK for 'complete', but it only holds if the history actually reaches the
+    // block the views were read at. Downgrading here rather than trusting the caller means the
+    // invariant lives in one place and cannot be forgotten at a call site.
+    // Equality, not "not behind". Concurrent requests can leave the cache scanned PAST this
+    // response's head, and history from a later block is just as mixed an observation as history
+    // from an earlier one. complete must mean every field describes blockNumber exactly.
+    historyStatus:
+      historyStatus === 'complete' && history?.scannedThroughBlock !== views.blockNumber
+        ? 'pending'
+        : historyStatus,
     observedAt: new Date().toISOString(),
   };
 }

@@ -422,6 +422,14 @@ export default function FloatPage() {
       <p className="float-accounting-note">
         <span aria-hidden="true">i</span>
         LP-owned capital excludes the reserve. Values observed at Arc block {snapshot.blockNumber.toLocaleString('en-US')}.
+        {/* One caption cannot honestly cover both when they are read at different blocks. The
+            view figures are always at blockNumber; history comes from a cache whose scan may
+            lag, and the two are the same quantity in places (totalOutstanding is the sum of open
+            principals, FloatPool.sol), so a silent lag reads as a contradiction on screen. */}
+        {snapshot.historyStatus === 'pending' && snapshot.historyScannedThroughBlock !== null ? (
+          <> History below is scanned through block{' '}
+            {snapshot.historyScannedThroughBlock.toLocaleString('en-US')} and is still catching up.</>
+        ) : null}
       </p>
 
       <RateEngine snapshot={snapshot} fallbackRateBps={displayedRate} />
