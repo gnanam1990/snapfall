@@ -44,7 +44,7 @@ export default function Sidebar() {
       </nav>
       <div className="sidebar-foot">
         <div className="sidebar-foot-row">
-          <div className="dot-live">● demo replay · Arc testnet next</div>
+          <div className="dot-live">● Arc testnet</div>
           <ThemeToggle />
         </div>
         <div style={{ marginTop: 4 }}>capital in a snap,<br />settlement in a waterfall</div>
