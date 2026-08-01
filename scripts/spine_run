@@ -494,7 +494,11 @@ EOF
 	#
 	# This prints before beat 1, so it can only report what was ASKED for. The logged label is
 	# derived later from the price the seed actually used.
-	if [[ -n "$price_usdc_arg" && "$price_usdc_arg" != "25.00" ]]; then
+	# The SAME numeric comparison the log column uses. Comparing the string against "25.00"
+	# meant --price 25 (seed_demo's own default spelling) or --price 25.000000 printed a bold
+	# reduced-scale warning and then logged full: the one distinction this whole change exists
+	# to keep unambiguous, contradicting itself on screen.
+	if [[ -n "$price_usdc_arg" ]] && (( $(usdc_to_micros "$price_usdc_arg") != prd_price_micros )); then
 		cat <<EOF
 REDUCED SCALE REQUESTED (--price $price_usdc_arg). Every beat above still runs and is still read
 back from chain. What shrinks is the funding: the job price, the advance drawn against it, and
