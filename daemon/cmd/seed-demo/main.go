@@ -232,14 +232,48 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 	// key funded the pool it would be lending itself money, and the dashboard would open on
 	// whatever that key had left over instead of zero. So the deposit uses its own key and the
 	// shares it mints belong to that LP.
-	if !plan.SeedAlreadySufficient() {
-		lp, err := chain.NewFromEnv(lpKeyEnv, dep.Network.RPCURL, dep.Network.ChainID)
-		if err != nil {
-			return fmt.Errorf("LP key: %w (the pool's liquidity must come from an LP, not the operator treasury; set %s)", err, lpKeyEnv)
+	// Resolved ONCE, whether or not a deposit follows. The identity check used to live inside
+	// the branch below, so seeding against an already-deep pool -- the whole point of
+	// --pool-seed 0 -- skipped the single assertion behind the demo's opening claim.
+	//
+	// A missing key is fatal only when a deposit actually needs one. When none is needed the
+	// key is genuinely irrelevant to THIS run, but the check still runs if it resolves, because
+	// a key that IS configured and IS the operator is a misconfiguration worth failing on
+	// whichever path finds it.
+	lp, lpErr := chain.NewFromEnv(lpKeyEnv, dep.Network.RPCURL, dep.Network.ChainID)
+	if lpErr == nil && strings.EqualFold(lp.Address().Hex(), orgAddr.Hex()) {
+		return fmt.Errorf("%s holds the operator address %s; the LP must be a separate wallet or the demo opens on a treasury that funded its own pool",
+			lpKeyEnv, orgAddr.Hex())
+	}
+
+	// When no deposit happens, the configured-key check proves nothing about the capital that
+	// is ALREADY in the pool, and that capital is what the run will actually borrow. So ask the
+	// chain directly: if the operator holds pool shares, the treasury is lending itself money
+	// and the demo's opening claim is false no matter which key is configured today.
+	//
+	// This is the check that makes --pool-seed 0 safe. Without it, seeding against an
+	// already-deep pool skipped every guard behind "the first working capital comes from
+	// someone else".
+	operatorShares, err := readUintAt(ctx, operator, fp, chain.CalldataSharesOf(orgAddr), at)
+	if err != nil {
+		return fmt.Errorf("read sharesOf(operator): %w", err)
+	}
+	if operatorShares.Sign() != 0 {
+		return fmt.Errorf("the operator %s holds %s pool shares, so the float it would borrow is its own capital and the demo does not open on a treasury funded by someone else; withdraw them or point the run at a pool an LP seeded",
+			orgAddr.Hex(), operatorShares)
+	}
+
+	if plan.SeedAlreadySufficient() {
+		if lpErr != nil {
+			fmt.Printf("  %-16s no deposit needed; the operator holds no pool shares, so the float it borrows is someone else's\n", "LP (funder)")
+		} else {
+			fmt.Printf("  %-16s %s (no deposit needed; the operator holds no pool shares, so the float it borrows is someone else's)\n", "LP (funder)", lp.Address().Hex())
 		}
-		if strings.EqualFold(lp.Address().Hex(), orgAddr.Hex()) {
-			return fmt.Errorf("%s holds the operator address %s; the LP must be a separate wallet or the demo opens on a treasury that funded its own pool",
-				lpKeyEnv, orgAddr.Hex())
+	}
+
+	if !plan.SeedAlreadySufficient() {
+		if lpErr != nil {
+			return fmt.Errorf("LP key: %w (the pool's liquidity must come from an LP, not the operator treasury; set %s)", lpErr, lpKeyEnv)
 		}
 		fmt.Printf("  %-16s %s\n", "LP (funder)", lp.Address().Hex())
 		r, err := lp.Submit(ctx, usdc, chain.CalldataApprove(fp, plan.DepositMicros))
@@ -338,6 +372,20 @@ func verify(ctx context.Context, c *chain.Client, jv, fp, org common.Address, jo
 		return nil, fmt.Errorf("verify: this job already has an open advance; a fresh run id should have prevented that")
 	}
 	fmt.Printf("  %-16s ok    no advance drawn yet\n", "verify advance")
+
+	// Ownership is re-read here for the same reason the position is: the opening check was a
+	// claim about a block that is now in the past. A deposit naming the operator as receiver
+	// between the two would leave "ready" printed over a pool the operator owns, which is the
+	// one thing the opening check exists to prevent.
+	shares, err := readUintAt(ctx, c, fp, chain.CalldataSharesOf(org), at)
+	if err != nil {
+		return nil, fmt.Errorf("verify sharesOf(operator): %w", err)
+	}
+	if shares.Sign() != 0 {
+		return nil, fmt.Errorf("verify: the operator %s holds %s pool shares at block %s, so the float it would borrow is its own capital",
+			org.Hex(), shares, at)
+	}
+	fmt.Printf("  %-16s ok    operator holds no pool shares, so the float is someone else's\n", "verify float")
 
 	// Re-read the whole position, not just TVL. The floor depends on exposure, and between the
 	// plan and now another org could have drawn against the same pool, so recomputing from fresh

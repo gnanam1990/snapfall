@@ -49,6 +49,100 @@ cd dashboard && npm run dev
 readiness check. Other flags: `--no-seed` (attach to the job already in `.demo/current.json`),
 `--skip-wallet-check`, `--job-label NAME`, `--log PATH`, `--timeout SECONDS`.
 
+### Running without waiting on the faucet
+
+At the PRD price the run needs a deep pool, and that depth is the whole faucet dependency.
+`FloatPool` caps one org's outstanding at 10% of TVL (`FloatPool.sol:220`,
+`ORG_EXPOSURE_CAP_BPS`), so a 25.00 job at a 50% rate draws a 12.50 advance and needs
+**125.00 USDC** of pool before it will clear. The Circle faucet pays 20 USDC per claim on a
+~2 hour cooldown behind a reCAPTCHA (`docs/RUNBOOK.md`), so filling that gap from a near-empty
+pool is upwards of twelve hours of human hands.
+
+`--price` moves that floor, because `seed_demo` deposits `max(0, target - current)` and the
+floor is ten times the advance:
+
+```bash
+./scripts/spine_run --scaled          # == --price 1.00 --pool-seed 0
+```
+
+Measured against the live pool on 1 Aug 2026, holding 20.0168 USDC:
+
+| | cap floor | target | deposit `seed_demo` would submit |
+|---|---|---|---|
+| PRD defaults (`--price 25.00`) | 125.00 | 150.00 | **129.9832 USDC** — about seven faucet claims |
+| `--price 25.00 --pool-seed 0` | 125.00 | 125.00 | **104.9832 USDC** — about six |
+| `--price 1.00 --pool-seed 0` | 5.00 | 5.00 | **none — the pool is already deep enough** |
+
+The first two differ because `--pool-seed` is a *desired* TVL and the target is
+`max(floor, desired)`: left alone, `seed_demo` aims at its own 150.00 cushion rather than at the
+125.00 the caps actually require.
+
+Every beat still runs and is still read back from chain. Nothing is faked or skipped: the
+escrow, the advance, the two purchases, the escalation, the settlement and the rate change all
+happen. What shrinks is the **funding** -- the job price, the advance drawn against it, and the
+pool depth that advance requires. The three x402 purchase amounts are unchanged, for the reason
+in the next section.
+
+**What does NOT scale, and why the harness enforces it.** The three x402 spends stay at 0.04,
+4.00 and 0.06. They are graded against `policy.DemoPolicy()`, whose thresholds are absolute
+rather than proportional (`daemon/internal/policy/demo.go`): `ApprovalAboveMicros` 0.10 is
+exactly what makes the two small spends auto-approve and the bait escalate. Divide the bait by
+the same factor as the price and it drops under 0.10, beat 4 auto-approves, and the run reports
+PASS for a spine that never exercised the rejection path at all. Push it the other way, past
+the 5.00 per-tx limit, and it is **denied** by an earlier rule instead of escalated
+(`policy.go:17`, "a deniable intent is denied, never escalated") so the owner is never asked.
+Both failures are silent.
+
+So the preflight asserts the relationships instead of trusting them, and refuses before beat 1
+with the beat named:
+
+```
+MISSING  beat 4's bait is 0.05, at or under the 0.10 approval threshold: it would
+         AUTO-APPROVE and there would be no escalation to reject
+```
+
+`spine_run` mirrors three of those thresholds as shell variables, since bash cannot import the
+Go package. `daemon/internal/policy/spine_figures_test.go` parses the script and fails when the
+mirror drifts, and drives the real `Evaluate` at each of the three shipped amounts to confirm
+they still land on AUTO_APPROVE / HUMAN_APPROVAL_REQUIRED / AUTO_APPROVE.
+
+**The wallet gate scales too.** `testnet-ops` holds the customer to 25.10 by default, which is
+the PRD price plus a 0.10 gas margin, tied to the price by documentation and nothing else. Left
+alone it refuses a scaled run at beat 0b for not holding 25x what that run will ever escrow, so
+`spine_run` derives the minimum from `--price` plus the same margin and passes it through
+(`--customer-min` overrides). Sanity check on the derivation: `--price 25.00` reproduces
+`testnet-ops`' own 25.10.
+
+**Two limits worth knowing before you lean on a scaled run.**
+
+`FloatPool` truncates toward zero, and the waterfall's smallest leg is `fee/5` where `fee` is
+`principal/50`. Below a principal of 250 micros the first-loss reserve cut rounds to **zero**, and
+beat 6 would still read Accepted and still print PASS for a settlement with a stage that never
+happened.
+
+The principal depends on the live rate, which the preflight does not read: the public Arc node
+rate-limits, and a preflight that fell over on a 429 would be a worse failure than the one it
+guards. So both bounds come from the contract clamp `[3000, 8500]` instead. A price is **refused**
+when it cannot work at the 8500 cap, and when it clears the 250 floor only above some rate the
+preflight says which rate that is rather than guessing. `--price 1.00` draws at least 300,000
+micros even at the 3000 floor, 1,200x the truncation floor and comfortably over the 100,000 the
+two purchases need. The exact check still runs after the seed, against the real rate.
+
+`--pool-seed 0` means `seed_demo` deposits nothing, and its LP-is-not-the-operator check used to
+live inside the deposit branch, so skipping the deposit skipped the one assertion behind the
+demo's opening claim that the treasury borrows *someone else's* capital.
+
+Comparing the configured LP key against the operator address does not actually answer that
+question, because it says nothing about the capital **already** in the pool, which is what a
+`--pool-seed 0` run borrows. So `seed_demo` now reads `sharesOf(operator)` from the chain and
+refuses when the operator holds pool shares, whichever path it is on. A pool the operator funded
+on an earlier day is a self-funded float no matter which key is configured today, and this is the
+check that says so.
+
+**A reduced run is not evidence for a done-when clause that names PRD figures.** It proves the
+machinery; it does not prove the 25.00 story. The `scale` column in the log is there so the two
+can never be confused, and the submission-day claim should rest on full-scale runs.
+
 ### What the preflight demands, and why
 
 It refuses **before** beat 1 and names every gap. A run that dies at beat 6 on an unset key has
@@ -151,11 +245,29 @@ what you saw in the log line by hand.
 
 `docs/spine-runs/spine-runs.tsv`, one tab-separated line appended per run, header written once:
 
+The shape of a line, with **invented** values. No spine run has been logged yet, so every row
+below is illustrative; the real file is still empty and nothing here should be read as a record
+of a run that happened.
+
 ```
-# started_utc	git_sha	verdict	first_bad_beat	vault_job_id	note
-2026-07-29T09:12:03Z	4e552b2	PASS	-	0x8f3a…	all beats observed
-2026-07-30T08:55:11Z	9c11d02	UNVERIFIED	3-SPEND	0x2b71…	the purchase stopped at purchase.pending_settlement
+# started_utc	git_sha	verdict	scale	first_bad_beat	vault_job_id	note
+<utc>	<sha>	PASS	full	-	<job id>	all beats observed
+<utc>	<sha>	UNVERIFIED	full	3-SPEND	<job id>	the purchase stopped at purchase.pending_settlement
+<utc>	<sha>	PASS	price=1.00	-	<job id>	all beats observed
 ```
+
+`scale` is `full` when the run's job price was the PRD 25.00, and `price=<amount>` otherwise. It
+is derived from the price the seed actually used -- or, under `--no-seed`, from the attached
+job -- rather than from which flags were typed, so `--price 25.00` records `full` and a run that
+merely asked for a smaller price but never got one cannot record a reduced label it did not earn.
+
+It is a column rather than a note because a reader scanning verdicts must not have to parse prose
+to tell a 25.00 run from a 1.00 one: both are honest PASSes of every beat, but only the first is
+evidence for a done-when clause that names the PRD amounts.
+
+A log written before this column existed has six fields. `spine_run` detects that header and
+**refuses to append** rather than shifting every column after the verdict; it prints the verdict
+and tells you to add `full` to the old rows first.
 
 `git_sha` carries a `+dirty` suffix when the worktree was not clean, because a run only proves
 the code that ran. The beat blamed is the **first** non-PASS: that is the one to debug in the

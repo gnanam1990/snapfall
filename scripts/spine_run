@@ -54,9 +54,59 @@ case "$sidecar_store" in
 esac
 
 # The demo figures, from PRD §5.1. Micros, never floats: 40000 = 0.04 USDC.
+#
+# These three are the x402 spends, and they are NOT scaled by --price. They are graded against
+# daemon-side policy constants that are absolute, not proportional: policy.DemoPolicy() sets
+# ApprovalAboveMicros 0.10, PerTxLimitMicros 5.00 and JobBudgetMicros 6.00
+# (daemon/internal/policy/demo.go:26-30). Dividing these by the same factor as the job price
+# would push the bait under the 0.10 threshold, and beat 4 would auto-approve instead of
+# escalating -- the run would still print PASS while proving the opposite of the beat it names.
+# check_figures() below enforces the relationships instead of trusting them.
 profile_micros=40000    # step 7, the auto-approved source
 premium_micros=4000000  # step 9, the escalation bait
 bench_micros=60000      # step 9, the cheaper alternative
+
+# The gas margin inside testnet-ops' 25.10 customer default (25.00 price + 0.10). A scaled run
+# re-derives that minimum from --price plus this, so the wallet gate tracks the price instead of
+# the PRD figure. Without it beat 0b refuses a run for not holding 25x what it will escrow.
+gas_margin_micros=100000
+
+# FloatPool truncates toward zero, so the waterfall's smallest leg has a hard floor:
+#   fee    = principal * 200  / 10_000 = principal / 50   (FloatPool.sol:33, :201)
+#   reserve= fee       * 2000 / 10_000 = fee / 5          (FloatPool.sol:34, :249)
+# A principal under 250 micros makes the first-loss reserve leg round to ZERO. Beat 6 would still
+# read Accepted and still print PASS, for a waterfall with a stage silently missing. seed_demo
+# already refuses an advance that rounds to zero outright (demoseed.BuildPlan), but not one that
+# merely truncates the reserve, and --price made this reachable by typing.
+min_principal_micros=250
+
+# FloatPool clamps the rate to [FLOOR_BPS, CAP_BPS] = [3000, 8500] (FloatPool.sol:28-31,
+# :112), so the SMALLEST advance any price can produce is price * 3000 / 10_000. That bound
+# needs no chain read, which is what lets the truncation guard run in the preflight instead
+# of after beat 1 has already created and funded a job on chain. The exact check still runs
+# after the seed against the real rate; this one only has to be conservative enough never to
+# reject a price that would have worked.
+rate_floor_bps=3000
+rate_cap_bps=8500
+
+# The on-chain scale. Empty means "seed_demo's own defaults" (price 25.00, pool-seed 150), which
+# is the PRD figure set and needs a pool of 125.00 USDC to clear the 10% org exposure cap.
+#
+# A smaller --price is what makes a run possible without the faucet. The cap floor is
+# 10 x advance (FloatPool.sol:220, ORG_EXPOSURE_CAP_BPS 1000), so price 1.00 at a 50% rate needs
+# only 5.00 USDC of pool depth against the 125.00 the PRD price demands. seed_demo deposits
+# max(0, target - current), so when the pool already clears the floor it submits nothing.
+price_usdc_arg=""
+pool_seed_arg=""
+customer_min_arg=""
+
+# The PRD job price. scale_label compares the price the run ACTUALLY used against this, rather
+# than reporting which flags were typed: --price 25.00 is the PRD figure set however it was
+# spelled, and --no-seed attaches a job this invocation never sized, so the flags describe
+# nothing. Beat 1 sets the real label from .demo/current.json; until then it is unknown, because
+# a run that dies during the seed genuinely does not know what it ran at.
+prd_price_micros=25000000
+scale_label="unknown"
 
 # Bounded waits, seconds. Every poll has a deadline: a spine run must end, red or green.
 wait_health=90
@@ -73,6 +123,27 @@ do_seed=1
 check_wallets=1
 job_label=""
 
+# need_arg fails loudly on a flag whose value is missing or is not a 6dp USDC amount. Without
+# it `--price` at the end of the line shifted past nothing, the value stayed empty, and the run
+# died later with an unexplained shell error instead of naming the flag.
+need_arg() { # need_arg <flag> <value>
+	local flag="$1" v="${2:-}"
+	if [[ -z "$v" || "$v" == -* ]]; then
+		printf 'spine_run: %s needs a USDC amount.\n\n' "$flag" >&2
+		usage >&2
+		exit 2
+	fi
+	# Matched here rather than delegated to usdc_to_micros, which is defined BELOW the flag
+	# parsing loop and so does not exist yet at this point. Same contract: optional 1-6 decimal
+	# places, no trailing dot.
+	if [[ ! "$v" =~ ^[0-9]+(\.[0-9]{1,6})?$ ]]; then
+		printf 'spine_run: %s %s is not a 6dp USDC amount.\n\n' "$flag" "$v" >&2
+		usage >&2
+		exit 2
+	fi
+	printf '%s' "$v"
+}
+
 usage() {
 	cat <<'EOF'
 usage: ./scripts/spine_run [options]
@@ -80,6 +151,22 @@ usage: ./scripts/spine_run [options]
   --dry-run              print the preflight and the beat plan; submit nothing, write nothing
   --no-seed              skip beat 1's seed and attach to the job in .demo/current.json
   --skip-wallet-check    skip the read-only wallet balance preflight (saves ~1 RPC round)
+  --price USDC           job price to seed (default: seed_demo's own 25.00, the PRD figure).
+                         The advance, and therefore the pool depth the run needs, scale with
+                         this: the cap floor is 10x the advance. --price 1.00 needs 5.00 USDC
+                         of pool where 25.00 needs 125.00, which is the difference between a
+                         run you can do now and one that waits ~12 hours on the faucet.
+  --pool-seed USDC       desired pool TVL (default: seed_demo's own 150). The exposure-cap
+                         floor wins if it is higher, so 0 means "deposit nothing beyond the
+                         floor". Use 0 with --price to run against the pool you already have.
+  --customer-min USDC    customer wallet minimum for beat 0b's balance check. Defaults to
+                         --price plus a 0.10 gas margin, or to testnet-ops' own 25.10 when
+                         --price is not given. Without this a scaled run is refused at beat 0b
+                         for not holding the PRD figure it was never going to spend.
+  --scaled               shorthand for --price 1.00 --pool-seed 0. Every beat still runs and
+                         is still read back from chain; only the amounts are smaller. The run
+                         is logged in a scale column (price=1.00,pool=0) so a reduced run is
+                         never counted as evidence for a done-when clause naming PRD figures.
   --job-label NAME       daemon-side job id (default: job_spine_<utc timestamp>)
   --log PATH             pass/fail log to append to (default docs/spine-runs/spine-runs.tsv)
   --timeout SECONDS      how long to wait for the DD task to reach its terminal stage
@@ -94,6 +181,10 @@ while (($#)); do
 		--dry-run) dry_run=1 ;;
 		--no-seed) do_seed=0 ;;
 		--skip-wallet-check) check_wallets=0 ;;
+		--price) shift; price_usdc_arg="$(need_arg --price "${1:-}")" ;;
+		--pool-seed) shift; pool_seed_arg="$(need_arg --pool-seed "${1:-}")" ;;
+		--customer-min) shift; customer_min_arg="$(need_arg --customer-min "${1:-}")" ;;
+		--scaled) price_usdc_arg="1.00"; pool_seed_arg="0" ;;
 		--job-label) shift; job_label="${1:-}" ;;
 		--log) shift; log_file="${1:-}" ;;
 		--timeout) shift; wait_terminal="${1:-}" ;;
@@ -102,6 +193,16 @@ while (($#)); do
 	esac
 	shift
 done
+
+# --price/--pool-seed only reach seed_demo, and --no-seed does not call it. Accepting both
+# together would silently ignore the figures the operator asked for and then label the run by
+# them, which is the one thing this label exists to prevent.
+if (( do_seed == 0 )) && [[ -n "$price_usdc_arg" || -n "$pool_seed_arg" ]]; then
+	printf 'spine_run: --price/--pool-seed/--scaled size the seed, and --no-seed skips it.\n' >&2
+	printf 'The attached job in .demo/current.json already has a price; drop one of the two flags.\n\n' >&2
+	usage >&2
+	exit 2
+fi
 
 run_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -195,6 +296,96 @@ usdc_short() {
 	printf '%s.%s' "$whole" "$frac"
 }
 
+# ── the policy figures this run is graded against ─────────────────────────────
+# MIRRORED from daemon/internal/policy/demo.go DemoPolicy(). A mirror can drift, so
+# daemon/internal/policy/spine_figures_test.go parses THIS file and fails when these four lines
+# stop matching DemoPolicy() -- a failing test instead of a failing take, the same guard the
+# merchant allowlist already uses.
+policy_approval_above=100000   # ApprovalAboveMicros: above this an intent escalates to the owner
+policy_per_tx_limit=5000000    # PerTxLimitMicros:    above this an intent is DENIED outright
+policy_job_budget=6000000      # JobBudgetMicros:     the operating budget the spends draw on
+
+# check_figures refuses any figure set that would let a beat pass while proving something other
+# than what the beat claims.
+#
+# This exists because --price makes the on-chain figures adjustable while the policy thresholds
+# above stay absolute. The dangerous case is quiet: if the bait ever fell to or below the 0.10
+# approval threshold it would AUTO-APPROVE, beat 4 would observe a completed purchase instead of
+# an escalation, and the run would print PASS for a spine that never tested the rejection path.
+# The reverse is just as quiet -- a bait above the per-tx limit is DENIED by an earlier rule
+# (daemon/internal/policy/policy.go:17, "a deniable intent is denied, never escalated") and the
+# owner is never asked. Neither shows up as an error anywhere, so it is asserted here.
+check_figures() {
+	fig_bad() { printf '   MISSING  %s\n' "$*"; preflight_missing=1; }
+
+	(( profile_micros < policy_approval_above )) \
+		|| fig_bad "beat 3 buys $(usdc_short $profile_micros) but the approval threshold is $(usdc_short $policy_approval_above): it would escalate instead of auto-approving"
+	(( bench_micros < policy_approval_above )) \
+		|| fig_bad "beat 5 buys $(usdc_short $bench_micros) but the approval threshold is $(usdc_short $policy_approval_above): the adaptation would need a second prompt"
+	(( premium_micros > policy_approval_above )) \
+		|| fig_bad "beat 4's bait is $(usdc_short $premium_micros), at or under the $(usdc_short $policy_approval_above) approval threshold: it would AUTO-APPROVE and there would be no escalation to reject"
+	(( premium_micros <= policy_per_tx_limit )) \
+		|| fig_bad "beat 4's bait is $(usdc_short $premium_micros), over the $(usdc_short $policy_per_tx_limit) per-tx limit: it would be DENIED by an earlier rule and the owner would never be asked"
+	(( premium_micros <= policy_job_budget )) \
+		|| fig_bad "beat 4's bait is $(usdc_short $premium_micros), over the $(usdc_short $policy_job_budget) job budget: it would be denied on budget rather than escalated"
+	(( profile_micros + bench_micros <= policy_job_budget )) \
+		|| fig_bad "beats 3 and 5 spend $(usdc_short $((profile_micros + bench_micros))) together, over the $(usdc_short $policy_job_budget) job budget"
+
+	# Catch an unrunnably small --price HERE, before beat 1 creates and funds a real job
+	# on chain. Bounded by the rate floor rather than the live rate, so it is
+	# conservative: it rejects only prices that cannot work at ANY rate the contract can
+	# return, and never a price that would have settled.
+	# --price is checked against BOTH floors here, before beat 1 creates and funds a real
+	# job. The advance depends on the live rate, which is not read here: the public Arc
+	# node rate-limits, and a preflight that fails on a 429 would trade one failure mode
+	# for a worse one. So the bounds come from the contract clamp [3000, 8500]:
+	#   at the CAP  it cannot work at any rate       -> refuse
+	#   at the FLOOR it works only if the rate is up -> say which rate it needs
+	# check_advance_covers_spends still makes the exact call once the rate is known.
+	if [[ -n "$price_usdc_arg" ]]; then
+		local pm floor_advance cap_advance need_micros need_bps
+		pm="$(usdc_to_micros "$price_usdc_arg")"
+		floor_advance=$(( pm * rate_floor_bps / 10000 ))
+		cap_advance=$(( pm * rate_cap_bps / 10000 ))
+		need_micros=$(( profile_micros + bench_micros ))
+
+		(( floor_advance >= min_principal_micros )) \
+			|| fig_bad "--price $price_usdc_arg draws at most $(micros_to_usdc $floor_advance) USDC at the ${rate_floor_bps}bps rate floor, under the $(micros_to_usdc $min_principal_micros) where FloatPool first-loss reserve cut truncates to zero: beat 6 would report a settled waterfall with a stage that never happened"
+
+		if (( cap_advance < need_micros )); then
+			fig_bad "--price $price_usdc_arg draws at most $(micros_to_usdc $cap_advance) USDC even at the ${rate_cap_bps}bps rate cap, and beats 3 and 5 spend $(usdc_short $need_micros): no rate this contract can return makes this price runnable"
+		elif (( floor_advance < need_micros )); then
+			need_bps=$(( (need_micros * 10000 + pm - 1) / pm ))
+			printf '   note     --price %s only covers the %s beats 3 and 5 spend if the live rate is at least %s bps; below that beat 1 will have funded a job this run cannot finish\n' \
+				"$price_usdc_arg" "$(usdc_short $need_micros)" "$need_bps"
+		fi
+	fi
+
+	if (( preflight_missing == 0 )); then
+		printf '   ok       demo figures: %s and %s auto-approve, %s escalates, all inside the %s budget\n' \
+			"$(usdc_short $profile_micros)" "$(usdc_short $bench_micros)" \
+			"$(usdc_short $premium_micros)" "$(usdc_short $policy_job_budget)"
+	fi
+}
+
+# check_advance_covers_spends runs AFTER beat 1, because the advance is only known once seed_demo
+# has read the live rate. At the PRD price the policy budget (6.00) is smaller than the advance
+# (12.50), so the budget is what binds; below a price of about 12.00 that inverts and the real
+# money becomes the binding constraint. The demo only ever pays profile + bench, so this is the
+# line that has to hold for a scaled run to mean anything.
+check_advance_covers_spends() {
+	local need=$(( profile_micros + bench_micros ))
+	# Truncation before headroom: an advance this small still moves money and still settles, so
+	# every beat would pass while one leg of the waterfall quietly rounded to nothing.
+	if (( advance_micros < min_principal_micros )); then
+		die "the advance is $(micros_to_usdc $advance_micros) USDC, under the $(micros_to_usdc $min_principal_micros) floor where FloatPool's first-loss reserve cut truncates to zero (fee/50, then /5); beat 6 would report a settled waterfall with a stage that never happened"
+	fi
+	if (( advance_micros < need )); then
+		die "the advance is $(micros_to_usdc $advance_micros) USDC but beats 3 and 5 spend $(micros_to_usdc $need) together; raise --price (the advance is the rate applied to it) or this run cannot complete honestly"
+	fi
+	info "advance $(usdc_short $advance_micros) covers the $(usdc_short $need) beats 3 and 5 spend"
+}
+
 # jsonq evaluates a JavaScript expression over the parsed document in `d` and prints the
 # result ('' for null/undefined). node is already a hard dependency of this repo, and this
 # keeps the script free of a jq requirement the other scripts do not have.
@@ -285,12 +476,27 @@ write_log_line() {
 	local note="${first_note//	/ }"
 	note="${note//$'\n'/ }"
 	mkdir -p "$(dirname "$log_file")"
+	# A log written before the scale column exists has six fields, and appending seven to it
+	# would make every consumer read `scale` as `first_bad_beat` for the new rows and nothing
+	# would complain. Refuse and say exactly what to do: the run's own result is printed above
+	# regardless, so nothing is lost but the append.
+	if [[ -s "$log_file" ]] && grep -q '^# started_utc' "$log_file" && ! grep -q '^# started_utc.*scale' "$log_file"; then
+		say ""
+		say "NOT LOGGED: $log_file uses the pre-scale six-column header."
+		say "Appending seven fields to it would silently shift every column after the verdict."
+		say "Add 'full' as a fourth field to the existing rows and 'scale' to the header, then rerun."
+		say "This run's verdict was $verdict${first_bad:+ (first non-PASS: $first_bad)}."
+		return 0
+	fi
 	if [[ ! -s "$log_file" ]]; then
 		printf '# Snapfall spine runs. One line per run, appended by scripts/spine_run.\n' >>"$log_file"
-		printf '# started_utc\tgit_sha\tverdict\tfirst_bad_beat\tvault_job_id\tnote\n' >>"$log_file"
+		printf '# started_utc\tgit_sha\tverdict\tscale\tfirst_bad_beat\tvault_job_id\tnote\n' >>"$log_file"
 	fi
-	printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-		"$run_started" "$git_sha$git_dirty" "$verdict" "$first_bad" "${vault_job:--}" "$note" >>"$log_file"
+	# scale is its own column, not a note: a PASS at reduced figures is a real PASS of every
+	# beat, but it is NOT evidence for a done-when clause that names the PRD figures, and a
+	# reader scanning verdicts must not have to parse prose to tell them apart.
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+		"$run_started" "$git_sha$git_dirty" "$verdict" "$scale_label" "$first_bad" "${vault_job:--}" "$note" >>"$log_file"
 	say ""
 	say "logged to $log_file:"
 	tail -n 1 "$log_file" | sed 's/^/   /'
@@ -341,6 +547,28 @@ Human-observed, never asserted here: V7 (job detail renders every transition), V
 graph animates with zero manual triggers), V11 (the ring moves on screen). Watch
 $dashboard_base during the run; the checklist prints at the end.
 EOF
+
+	# A reduced run is a real run of every beat, but it is NOT evidence for a done-when clause
+	# that names the PRD figures. Say so on screen, next to the plan, rather than only in the
+	# log column: the person deciding whether a clause is closed is reading this output.
+	#
+	# This prints before beat 1, so it can only report what was ASKED for. The logged label is
+	# derived later from the price the seed actually used.
+	# The SAME numeric comparison the log column uses. Comparing the string against "25.00"
+	# meant --price 25 (seed_demo's own default spelling) or --price 25.000000 printed a bold
+	# reduced-scale warning and then logged full: the one distinction this whole change exists
+	# to keep unambiguous, contradicting itself on screen.
+	if [[ -n "$price_usdc_arg" ]] && (( $(usdc_to_micros "$price_usdc_arg") != prd_price_micros )); then
+		cat <<EOF
+REDUCED SCALE REQUESTED (--price $price_usdc_arg). Every beat above still runs and is still read
+back from chain. What shrinks is the funding: the job price, the advance drawn against it, and
+the pool depth that advance needs. The three x402 purchases do NOT shrink -- they stay at
+$(usdc_short $profile_micros), $(usdc_short $premium_micros) and $(usdc_short $bench_micros),
+because they are graded against absolute policy thresholds (see --help). The log records the
+price this run actually used, and a reduced run does NOT close a done-when clause that names
+the PRD figures.
+EOF
+	fi
 }
 
 # ── preflight ─────────────────────────────────────────────────────────────────
@@ -378,6 +606,11 @@ preflight() {
 	# Keys and addresses. Three parties, because the contracts treat them as distinct
 	# (see scripts/README.md): the operator draws the advance, only the designated customer
 	# may fund its own escrow (SC-JV-001), and the LP supplies pool liquidity.
+	# The figures are checked before the keys, because a bad figure set is a bug in the
+	# invocation and no amount of correct credentials fixes it. Like every other preflight
+	# check it records and continues, so one run lists everything that is wrong.
+	check_figures
+
 	need_env TREASURY_PRIVATE_KEY          "operator: signs requestAdvance and createJob"
 	need_env SNAPFALL_CUSTOMER_PRIVATE_KEY "customer: funds its own escrow (SC-JV-001) and signs acceptDelivery"
 	need_env SNAPFALL_LP_PRIVATE_KEY       "pool LP: must NOT be the operator, or the 0.00 start is a lie"
@@ -513,7 +746,33 @@ if ! preflight; then refuse "the preflight above lists what is missing"; fi
 if (( check_wallets == 1 )); then
 	say ""
 	say "── beat 0b · WALLETS · read-only balance check (./scripts/testnet-ops)"
-	if ! "$repo_root/scripts/testnet-ops"; then
+	# testnet-ops' 25.10 customer default is the PRD price plus a gas margin, tied to the price
+	# by documentation and nothing else (cmd/testnet-ops/main.go). Unscaled it refuses a scaled
+	# run before beat 1, for holding less than a figure that run will never spend. Derived here
+	# so the relationship is code. Both --customer-min and the env var take a decimal STRING, so
+	# this passes one and never a micros integer.
+	#
+	# Under --no-seed there is no --price to derive from, but the attached job's price is already
+	# on disk in the state file. Without reading it, attaching to a job seeded at 1.00 still
+	# demanded the PRD 25.10 and the second run of a faucet-free workflow died at beat 0b.
+	ops_args=()
+	gate_price=""
+	if [[ -n "$price_usdc_arg" ]]; then
+		gate_price="$price_usdc_arg"
+	elif (( do_seed == 0 )) && [[ -f "$state_file" ]]; then
+		gate_price="$(jsonq 'd.priceUsdc' "$state_file" 2>/dev/null || printf '')"
+		[[ -n "$gate_price" ]] && info "--no-seed: sizing the wallet gate from the attached job's $gate_price USDC price"
+	fi
+	if [[ -n "$customer_min_arg" ]]; then
+		ops_args+=(--customer-min "$customer_min_arg")
+	elif [[ -n "$gate_price" ]]; then
+		customer_min_arg="$(micros_to_usdc $(( $(usdc_to_micros "$gate_price") + gas_margin_micros )))"
+		ops_args+=(--customer-min "$customer_min_arg")
+	fi
+	if ((${#ops_args[@]})); then
+		info "customer minimum $customer_min_arg USDC (the job price plus a $(usdc_short $gas_margin_micros) gas margin)"
+	fi
+	if ! "$repo_root/scripts/testnet-ops" "${ops_args[@]+"${ops_args[@]}"}"; then
 		refuse "a funded wallet is below its minimum; top up (faucet is a human path) then rerun"
 	fi
 fi
@@ -524,7 +783,11 @@ print_plan
 log_armed=1
 beat 1 FUND "external customer pays, escrow holds it, treasury still at 0.00"
 if (( do_seed == 1 )); then
-	if ! "$repo_root/scripts/seed_demo"; then
+	seed_args=()
+	[[ -n "$price_usdc_arg" ]] && seed_args+=(--price "$price_usdc_arg")
+	[[ -n "$pool_seed_arg" ]] && seed_args+=(--pool-seed "$pool_seed_arg")
+	if ((${#seed_args[@]})); then info "seed_demo ${seed_args[*]}"; fi
+	if ! "$repo_root/scripts/seed_demo" "${seed_args[@]+"${seed_args[@]}"}"; then
 		die "seed_demo failed; nothing was escrowed, so no later beat can mean anything"
 	fi
 else
@@ -540,6 +803,17 @@ rate_before="$(jsonq 'd.advanceRateBps' "$state_file")"
 [[ -n "$vault_job" && -n "$advance_usdc" && -n "$rate_before" ]] || die "$state_file is missing jobId/expectedAdvanceUsdc/advanceRateBps"
 advance_micros="$(usdc_to_micros "$advance_usdc")"
 price_micros="$(usdc_to_micros "$price_usdc")"
+
+# Derived from the job the run is about to prove, not from the invocation. Under --no-seed this
+# reads the ATTACHED job's price, which is the only figure that says anything about the evidence
+# this run can produce.
+if (( price_micros == prd_price_micros )); then
+	scale_label="full"
+else
+	scale_label="price=$price_usdc"
+fi
+
+check_advance_covers_spends
 
 info "vault job    $vault_job"
 info "escrowed     $price_usdc USDC, rate $rate_before bps, the snap should draw $advance_usdc USDC"
