@@ -66,6 +66,20 @@ profile_micros=40000    # step 7, the auto-approved source
 premium_micros=4000000  # step 9, the escalation bait
 bench_micros=60000      # step 9, the cheaper alternative
 
+# The gas margin inside testnet-ops' 25.10 customer default (25.00 price + 0.10). A scaled run
+# re-derives that minimum from --price plus this, so the wallet gate tracks the price instead of
+# the PRD figure. Without it beat 0b refuses a run for not holding 25x what it will escrow.
+gas_margin_micros=100000
+
+# FloatPool truncates toward zero, so the waterfall's smallest leg has a hard floor:
+#   fee    = principal * 200  / 10_000 = principal / 50   (FloatPool.sol:33, :201)
+#   reserve= fee       * 2000 / 10_000 = fee / 5          (FloatPool.sol:34, :249)
+# A principal under 250 micros makes the first-loss reserve leg round to ZERO. Beat 6 would still
+# read Accepted and still print PASS, for a waterfall with a stage silently missing. seed_demo
+# already refuses an advance that rounds to zero outright (demoseed.BuildPlan), but not one that
+# merely truncates the reserve, and --price made this reachable by typing.
+min_principal_micros=250
+
 # The on-chain scale. Empty means "seed_demo's own defaults" (price 25.00, pool-seed 150), which
 # is the PRD figure set and needs a pool of 125.00 USDC to clear the 10% org exposure cap.
 #
@@ -75,6 +89,7 @@ bench_micros=60000      # step 9, the cheaper alternative
 # max(0, target - current), so when the pool already clears the floor it submits nothing.
 price_usdc_arg=""
 pool_seed_arg=""
+customer_min_arg=""
 
 # The PRD job price. scale_label compares the price the run ACTUALLY used against this, rather
 # than reporting which flags were typed: --price 25.00 is the PRD figure set however it was
@@ -114,6 +129,10 @@ usage: ./scripts/spine_run [options]
   --pool-seed USDC       desired pool TVL (default: seed_demo's own 150). The exposure-cap
                          floor wins if it is higher, so 0 means "deposit nothing beyond the
                          floor". Use 0 with --price to run against the pool you already have.
+  --customer-min USDC    customer wallet minimum for beat 0b's balance check. Defaults to
+                         --price plus a 0.10 gas margin, or to testnet-ops' own 25.10 when
+                         --price is not given. Without this a scaled run is refused at beat 0b
+                         for not holding the PRD figure it was never going to spend.
   --scaled               shorthand for --price 1.00 --pool-seed 0. Every beat still runs and
                          is still read back from chain; only the amounts are smaller. The run
                          is logged in a scale column (price=1.00,pool=0) so a reduced run is
@@ -134,6 +153,7 @@ while (($#)); do
 		--skip-wallet-check) check_wallets=0 ;;
 		--price) shift; price_usdc_arg="${1:-}" ;;
 		--pool-seed) shift; pool_seed_arg="${1:-}" ;;
+		--customer-min) shift; customer_min_arg="${1:-}" ;;
 		--scaled) price_usdc_arg="1.00"; pool_seed_arg="0" ;;
 		--job-label) shift; job_label="${1:-}" ;;
 		--log) shift; log_file="${1:-}" ;;
@@ -295,6 +315,11 @@ check_figures() {
 # line that has to hold for a scaled run to mean anything.
 check_advance_covers_spends() {
 	local need=$(( profile_micros + bench_micros ))
+	# Truncation before headroom: an advance this small still moves money and still settles, so
+	# every beat would pass while one leg of the waterfall quietly rounded to nothing.
+	if (( advance_micros < min_principal_micros )); then
+		die "the advance is $(micros_to_usdc $advance_micros) USDC, under the $(micros_to_usdc $min_principal_micros) floor where FloatPool's first-loss reserve cut truncates to zero (fee/50, then /5); beat 6 would report a settled waterfall with a stage that never happened"
+	fi
 	if (( advance_micros < need )); then
 		die "the advance is $(micros_to_usdc $advance_micros) USDC but beats 3 and 5 spend $(micros_to_usdc $need) together; raise --price (the advance is the rate applied to it) or this run cannot complete honestly"
 	fi
@@ -657,7 +682,22 @@ if ! preflight; then refuse "the preflight above lists what is missing"; fi
 if (( check_wallets == 1 )); then
 	say ""
 	say "── beat 0b · WALLETS · read-only balance check (./scripts/testnet-ops)"
-	if ! "$repo_root/scripts/testnet-ops"; then
+	# testnet-ops' 25.10 customer default is the PRD price plus a gas margin, tied to the price
+	# by documentation and nothing else (cmd/testnet-ops/main.go). Unscaled it refuses a scaled
+	# run before beat 1, for holding less than a figure that run will never spend. Derived here
+	# so the relationship is code. Both --customer-min and the env var take a decimal STRING, so
+	# this passes one and never a micros integer.
+	ops_args=()
+	if [[ -n "$customer_min_arg" ]]; then
+		ops_args+=(--customer-min "$customer_min_arg")
+	elif [[ -n "$price_usdc_arg" ]]; then
+		customer_min_arg="$(micros_to_usdc $(( $(usdc_to_micros "$price_usdc_arg") + gas_margin_micros )))"
+		ops_args+=(--customer-min "$customer_min_arg")
+	fi
+	if ((${#ops_args[@]})); then
+		info "customer minimum $customer_min_arg USDC (the job price plus a $(usdc_short $gas_margin_micros) gas margin)"
+	fi
+	if ! "$repo_root/scripts/testnet-ops" "${ops_args[@]+"${ops_args[@]}"}"; then
 		refuse "a funded wallet is below its minimum; top up (faucet is a human path) then rerun"
 	fi
 fi

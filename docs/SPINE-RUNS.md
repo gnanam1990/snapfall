@@ -101,6 +101,28 @@ Go package. `daemon/internal/policy/spine_figures_test.go` parses the script and
 mirror drifts, and drives the real `Evaluate` at each of the three shipped amounts to confirm
 they still land on AUTO_APPROVE / HUMAN_APPROVAL_REQUIRED / AUTO_APPROVE.
 
+**The wallet gate scales too.** `testnet-ops` holds the customer to 25.10 by default, which is
+the PRD price plus a 0.10 gas margin, tied to the price by documentation and nothing else. Left
+alone it refuses a scaled run at beat 0b for not holding 25x what that run will ever escrow, so
+`spine_run` derives the minimum from `--price` plus the same margin and passes it through
+(`--customer-min` overrides). Sanity check on the derivation: `--price 25.00` reproduces
+`testnet-ops`' own 25.10.
+
+**Two limits worth knowing before you lean on a scaled run.**
+
+`FloatPool` truncates toward zero, and the waterfall's smallest leg is `fee/5` where `fee` is
+`principal/50`. Below a principal of 250 micros the first-loss reserve cut rounds to **zero**, and
+beat 6 would still read Accepted and still print PASS for a settlement with a stage that never
+happened. The preflight refuses below that floor; at `--price 1.00` the principal is 500,000
+micros, four orders of magnitude clear of it.
+
+`--pool-seed 0` means `seed_demo` deposits nothing, and its LP-is-not-the-operator check used to
+live inside the deposit branch, so skipping the deposit skipped the one assertion behind the
+demo's opening claim that the treasury borrows *someone else's* capital. That check now runs
+either way. It still does not prove the capital **already** in the pool came from an LP: a pool
+the operator funded on an earlier day passes it and is nonetheless a self-funded float. Closing
+that needs a `sharesOf(operator)` read, which no helper exposes yet.
+
 **A reduced run is not evidence for a done-when clause that names PRD figures.** It proves the
 machinery; it does not prove the 25.00 story. The `scale` column in the log is there so the two
 can never be confused, and the submission-day claim should rest on full-scale runs.
