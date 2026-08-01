@@ -545,6 +545,9 @@ export interface FloatHistory {
   losses: FloatLossTotals;
   rateHistoryBps: RateHistoryPoint[];
   latestObservedOrg: string | null;
+  /** The block this history was actually scanned through. Carried so a caller can tell whether
+   *  the history it holds covers the head the view figures came from. */
+  scannedThroughBlock: number;
 }
 
 function formatHistory(state: ScanState, config: FloatChainConfig, orgAddress: string | null): FloatHistory {
@@ -558,6 +561,7 @@ function formatHistory(state: ScanState, config: FloatChainConfig, orgAddress: s
     },
     rateHistoryBps: buildRateHistory(state, config, orgAddress ?? state.latestObservedOrg ?? null),
     latestObservedOrg: state.latestObservedOrg ?? null,
+    scannedThroughBlock: toSafeNumber(state.scannedThroughBlock, 'scannedThroughBlock'),
   };
 }
 
@@ -593,7 +597,14 @@ export function assembleSnapshot(
     openAdvances: history?.openAdvances ?? null,
     losses: history?.losses ?? null,
     rateHistoryBps: history?.rateHistoryBps ?? null,
-    historyStatus,
+    historyScannedThroughBlock: history?.scannedThroughBlock ?? null,
+    // A caller may ASK for 'complete', but it only holds if the history actually reaches the
+    // block the views were read at. Downgrading here rather than trusting the caller means the
+    // invariant lives in one place and cannot be forgotten at a call site.
+    historyStatus:
+      historyStatus === 'complete' && (history?.scannedThroughBlock ?? -1) < views.blockNumber
+        ? 'pending'
+        : historyStatus,
     observedAt: new Date().toISOString(),
   };
 }

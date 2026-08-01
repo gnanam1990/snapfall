@@ -88,8 +88,16 @@ export interface FloatSnapshot {
   /** The org's rate progression from chain (RateChanged ticks + the base origin).
    *  null while the history scan is pending or unavailable. */
   rateHistoryBps: RateHistoryPoint[] | null;
-  // 'pending' = immediate views returned; the historical log scan is still running and
-  // history fields are null for now (a later poll returns them 'complete').
+  /** The block the history fields were actually scanned through, or null when there is no
+   *  history. Compare against blockNumber: when it lags, the history is real but older than the
+   *  view figures, which are read at the current head. */
+  historyScannedThroughBlock: number | null;
+  // 'complete' = history was scanned THROUGH blockNumber, so every field on this payload
+  //   describes the same block and they can be shown together.
+  // 'pending'  = the view figures are current but history is missing or older than blockNumber.
+  //   A later poll returns 'complete'. Consumers must not present a 'pending' history figure
+  //   alongside a view figure as though they were one observation.
+  // 'unavailable' = history was not requested or cannot be read at all.
   historyStatus: 'complete' | 'unavailable' | 'pending';
   observedAt: string;
 }

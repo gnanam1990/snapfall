@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createRPCTransport, floatChainInternals, loadFloatSnapshot, RPCError, type RPCTransport } from './floatChain';
+import { assembleSnapshot, createRPCTransport, floatChainInternals, loadFloatSnapshot, loadFloatViews, peekFloatHistory, RPCError, type RPCTransport } from './floatChain';
 
 const ORG = '0x7a9c0000000000000000000000000000000041d2';
 const POOL = '0xde9f58a997cf7a3258d09a797eb5546877dc86e5';
@@ -349,6 +349,48 @@ test('a scan that throws after merging does not double-count on the next scan', 
     'rate history duplicated: same tick at the same block and txHash twice');
   assert.notEqual(after.feesAccruedUsdc, feesAt100,
     'the extension never landed at all, so this test is not exercising the path it claims');
+});
+
+// The second blocking finding from the review of PR #50.
+//
+// The warm path returns cached history immediately and extends toward the new head in the
+// background. The view figures always come from eth_call at the CURRENT head, so when the cache
+// lags, one payload carries two different observations. totalOutstanding and the sum of
+// openAdvances are the same quantity (FloatPool.sol: totalOutstanding is the sum of open
+// principals), so the lag does not read as staleness on screen, it reads as a contradiction, and
+// nothing in the payload let a consumer detect it.
+const POOL_LAG = '0xde9f58a997cf7a3258d09a797eb5546877dc0008';
+
+test('history that lags the view head is reported pending, not complete', async () => {
+  const logs = [
+    issuedLog(POOL_LAG, JOB_REPAID, ORG, TX_R2, 95),
+    // lands AFTER the cache is warmed, so a warm read at head 110 has not seen it
+    issuedLog(POOL_LAG, JOB_OPEN, ORG, TX_OPEN, 105),
+  ];
+  const headRef = { head: 100 };
+  const rpc = rangeRPC(logs, headRef);
+
+  // warm to 100
+  const warm = await loadFloatSnapshot(cfg(POOL_LAG), rpc);
+  assert.equal(warm.historyStatus, 'complete');
+  assert.equal(warm.historyScannedThroughBlock, 100);
+  assert.equal(warm.blockNumber, 100, 'a fully scanned snapshot must agree with its own head');
+
+  // The chain moves on. Assemble a payload the way the warm route does: fresh views at the new
+  // head, plus the history still cached at the old one.
+  headRef.head = 110;
+  const views = await loadFloatViews(cfg(POOL_LAG), rpc);
+  const stale = peekFloatHistory(cfg(POOL_LAG), views.orgAddress);
+  assert.ok(stale, 'the cache should still hold the block-100 scan');
+  const payload = assembleSnapshot(views, stale, 'complete');
+
+  assert.equal(payload.blockNumber, 110);
+  assert.equal(payload.historyScannedThroughBlock, 100);
+  assert.equal(
+    payload.historyStatus,
+    'pending',
+    'a complete request must be downgraded when the history does not reach the view head',
+  );
 });
 
 // ── Forward-chunking + sticky shrink (Alchemy range-cap fix) ──────────────────
