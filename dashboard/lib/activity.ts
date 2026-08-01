@@ -45,6 +45,13 @@ export interface ActivityMessage {
   threadKey?: string;
   /** Present on settlement events that report both waterfall legs. */
   settlement?: SettlementSplit;
+  /**
+   * True when this message comes from the local scripted demo replay. Its `explorerUrl` (if
+   * any) points at a fabricated tx hash, so the UI must render it as a visible placeholder,
+   * never as a live "verify on explorer" link. A fake verification link is worse than a
+   * labelled fake event: the event is captioned, the link masquerades as the real thing.
+   */
+  placeholder?: boolean;
 }
 
 type Dict = Record<string, unknown>;
@@ -323,11 +330,13 @@ export function humanizeStreamEvent(message: Extract<StreamMessage, { kind: 'eve
     jobId: event.jobId || (event.kind === 'RateChanged' ? undefined : event.entityId),
     explorerUrl: pickString(event.payload, 'explorerUrl', 'explorer_url'),
     settlement: settlementSplit(event.payload),
+    placeholder: message.demo === true,
   };
 }
 
-/** Compatibility for the local V5 snapshot while the daemon snapshot has no history. */
-export function humanizeLegacyEvent(event: FinancialEvent): ActivityMessage {
+/** Compatibility for the local V5 snapshot while the daemon snapshot has no history.
+ *  `demo` marks the seed events as scripted so their explorer links render as placeholders. */
+export function humanizeLegacyEvent(event: FinancialEvent, demo = false): ActivityMessage {
   const tone: ActivityTone =
     event.category === 'Approval' ? 'owner' : event.category === 'Finance' || event.category === 'Float' ? 'funding' : 'brain';
   const identities = {
@@ -348,5 +357,6 @@ export function humanizeLegacyEvent(event: FinancialEvent): ActivityMessage {
     amountUsdc: event.amountUsdc,
     explorerUrl: event.explorerUrl,
     filter: event.category === 'Approval' ? 'approvals' : event.category === 'Finance' || event.category === 'Float' ? 'money' : 'work',
+    placeholder: demo,
   };
 }

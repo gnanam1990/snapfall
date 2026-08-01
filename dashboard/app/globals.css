@@ -469,6 +469,13 @@ a { color: inherit; text-decoration: none; }
 .activity-tags strong { color: var(--text); font-variant-numeric: tabular-nums; font-size: 11.5px; }
 .activity-tags a { color: var(--sky); }
 .activity-tags a:hover { text-decoration: underline; }
+/* Demo-replay explorer marker: deliberately NOT a link and visibly muted/italic so it can
+   never be mistaken for a real "verify on explorer" affordance. */
+.activity-explorer-placeholder { color: var(--muted); font-size: 11px; font-style: italic; cursor: default; }
+.disconnected-links { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.disconnected-links li { color: var(--muted); line-height: 1.5; }
+.disconnected-links a { color: var(--sky); }
+.disconnected-links a:hover { text-decoration: underline; }
 .activity-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
 .activity-action {
   display: inline-flex;
