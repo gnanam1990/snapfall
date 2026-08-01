@@ -100,6 +100,25 @@ func TestSpineRunDemoSpendsLandOnTheRightSideOfEveryThreshold(t *testing.T) {
 		t.Errorf("beats 3 and 5 spend %d together, over the %d job budget", profile+bench, cfg.JobBudgetMicros)
 	}
 
+	// Budget headroom is a CUMULATIVE property, so assert it the way the engine sees it:
+	// with beat 3 already committed, beat 5 must still auto-approve. Checking profile+bench
+	// against JobBudgetMicros by hand would pass even if Evaluate counted committed spend
+	// differently, which is the whole reason to ask the engine instead.
+	afterProfile := SpendState{JobCommittedMicros: profile}
+	in := wouldAutoApprove()
+	in.AmountMicros = bench
+	if got := Evaluate(cfg, afterProfile, in).Outcome; got != AutoApprove {
+		t.Errorf("beat 5 gave %v with beat 3's %d already committed, want %v: the adaptation would stall mid-demo",
+			got, profile, AutoApprove)
+	}
+	// And the bait still escalates rather than tipping into a budget denial at that point,
+	// which is the case that turns beat 4 into a different beat entirely.
+	in.AmountMicros = premium
+	if got := Evaluate(cfg, afterProfile, in).Outcome; got != HumanApprovalRequired {
+		t.Errorf("beat 4's bait gave %v with beat 3's %d already committed, want %v: the owner would never be asked",
+			got, profile, HumanApprovalRequired)
+	}
+
 	// The engine is the authority, so drive the real evaluator rather than trusting the
 	// inequalities above to stay equivalent to it.
 	for _, tc := range []struct {
@@ -121,8 +140,12 @@ func TestSpineRunDemoSpendsLandOnTheRightSideOfEveryThreshold(t *testing.T) {
 }
 
 // shellInt reads `name=<digits>` from the script, ignoring any trailing comment.
+//
+// The match is anchored through end-of-line on purpose. Without it `profile_micros=40000bogus`
+// parses as 40000 and this test goes green over an assignment bash would not treat as a number
+// at all -- the exact failure mode the test exists to catch, one level down.
 func shellInt(src, name string) (int64, error) {
-	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `=(\d+)`)
+	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `=(\d+)[ \t]*(?:#[^\r\n]*)?\r?$`)
 	m := re.FindStringSubmatch(src)
 	if m == nil {
 		return 0, fmt.Errorf("scripts/spine_run no longer assigns %s=<digits>; if it was renamed, update this test with it", name)

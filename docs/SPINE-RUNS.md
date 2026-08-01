@@ -74,7 +74,9 @@ Measured against the live pool on 1 Aug 2026, holding 20.0168 USDC:
 
 Every beat still runs and is still read back from chain. Nothing is faked or skipped: the
 escrow, the advance, the two purchases, the escalation, the settlement and the rate change all
-happen, just at smaller amounts.
+happen. What shrinks is the **funding** -- the job price, the advance drawn against it, and the
+pool depth that advance requires. The three x402 purchase amounts are unchanged, for the reason
+in the next section.
 
 **What does NOT scale, and why the harness enforces it.** The three x402 spends stay at 0.04,
 4.00 and 0.06. They are graded against `policy.DemoPolicy()`, whose thresholds are absolute
@@ -205,17 +207,29 @@ what you saw in the log line by hand.
 
 `docs/spine-runs/spine-runs.tsv`, one tab-separated line appended per run, header written once:
 
+The shape of a line, with **invented** values. No spine run has been logged yet, so every row
+below is illustrative; the real file is still empty and nothing here should be read as a record
+of a run that happened.
+
 ```
 # started_utc	git_sha	verdict	scale	first_bad_beat	vault_job_id	note
-2026-07-29T09:12:03Z	4e552b2	PASS	full	-	0x8f3a…	all beats observed
-2026-07-30T08:55:11Z	9c11d02	UNVERIFIED	full	3-SPEND	0x2b71…	the purchase stopped at purchase.pending_settlement
-2026-07-31T07:40:55Z	e59e72a	PASS	price=1.00,pool=0	-	0x51c9…	all beats observed
+<utc>	<sha>	PASS	full	-	<job id>	all beats observed
+<utc>	<sha>	UNVERIFIED	full	3-SPEND	<job id>	the purchase stopped at purchase.pending_settlement
+<utc>	<sha>	PASS	price=1.00	-	<job id>	all beats observed
 ```
 
-`scale` is `full` for a run at the PRD figures, or the flags that changed them. It is a column
-rather than a note because a reader scanning verdicts must not have to parse prose to tell a
-25.00 run from a 1.00 one: both are honest PASSes of every beat, but only the first is evidence
-for a done-when clause that names the PRD amounts.
+`scale` is `full` when the run's job price was the PRD 25.00, and `price=<amount>` otherwise. It
+is derived from the price the seed actually used -- or, under `--no-seed`, from the attached
+job -- rather than from which flags were typed, so `--price 25.00` records `full` and a run that
+merely asked for a smaller price but never got one cannot record a reduced label it did not earn.
+
+It is a column rather than a note because a reader scanning verdicts must not have to parse prose
+to tell a 25.00 run from a 1.00 one: both are honest PASSes of every beat, but only the first is
+evidence for a done-when clause that names the PRD amounts.
+
+A log written before this column existed has six fields. `spine_run` detects that header and
+**refuses to append** rather than shifting every column after the verdict; it prints the verdict
+and tells you to add `full` to the old rows first.
 
 `git_sha` carries a `+dirty` suffix when the worktree was not clean, because a run only proves
 the code that ran. The beat blamed is the **first** non-PASS: that is the one to debug in the

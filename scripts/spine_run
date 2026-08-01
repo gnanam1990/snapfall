@@ -75,7 +75,14 @@ bench_micros=60000      # step 9, the cheaper alternative
 # max(0, target - current), so when the pool already clears the floor it submits nothing.
 price_usdc_arg=""
 pool_seed_arg=""
-scale_label="full"
+
+# The PRD job price. scale_label compares the price the run ACTUALLY used against this, rather
+# than reporting which flags were typed: --price 25.00 is the PRD figure set however it was
+# spelled, and --no-seed attaches a job this invocation never sized, so the flags describe
+# nothing. Beat 1 sets the real label from .demo/current.json; until then it is unknown, because
+# a run that dies during the seed genuinely does not know what it ran at.
+prd_price_micros=25000000
+scale_label="unknown"
 
 # Bounded waits, seconds. Every poll has a deadline: a spine run must end, red or green.
 wait_health=90
@@ -137,11 +144,14 @@ while (($#)); do
 	shift
 done
 
-# scale_label goes in the run log so a small run can never be read as a PRD-figure run. It is
-# derived from the flags rather than set by --scaled, so --price 1.00 typed out longhand is
-# labelled the same as the shorthand.
-if [[ -n "$price_usdc_arg" || -n "$pool_seed_arg" ]]; then
-	scale_label="price=${price_usdc_arg:-default},pool=${pool_seed_arg:-default}"
+# --price/--pool-seed only reach seed_demo, and --no-seed does not call it. Accepting both
+# together would silently ignore the figures the operator asked for and then label the run by
+# them, which is the one thing this label exists to prevent.
+if (( do_seed == 0 )) && [[ -n "$price_usdc_arg" || -n "$pool_seed_arg" ]]; then
+	printf 'spine_run: --price/--pool-seed/--scaled size the seed, and --no-seed skips it.\n' >&2
+	printf 'The attached job in .demo/current.json already has a price; drop one of the two flags.\n\n' >&2
+	usage >&2
+	exit 2
 fi
 
 run_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -381,6 +391,18 @@ write_log_line() {
 	local note="${first_note//	/ }"
 	note="${note//$'\n'/ }"
 	mkdir -p "$(dirname "$log_file")"
+	# A log written before the scale column exists has six fields, and appending seven to it
+	# would make every consumer read `scale` as `first_bad_beat` for the new rows and nothing
+	# would complain. Refuse and say exactly what to do: the run's own result is printed above
+	# regardless, so nothing is lost but the append.
+	if [[ -s "$log_file" ]] && grep -q '^# started_utc' "$log_file" && ! grep -q '^# started_utc.*scale' "$log_file"; then
+		say ""
+		say "NOT LOGGED: $log_file uses the pre-scale six-column header."
+		say "Appending seven fields to it would silently shift every column after the verdict."
+		say "Add 'full' as a fourth field to the existing rows and 'scale' to the header, then rerun."
+		say "This run's verdict was $verdict${first_bad:+ (first non-PASS: $first_bad)}."
+		return 0
+	fi
 	if [[ ! -s "$log_file" ]]; then
 		printf '# Snapfall spine runs. One line per run, appended by scripts/spine_run.\n' >>"$log_file"
 		printf '# started_utc\tgit_sha\tverdict\tscale\tfirst_bad_beat\tvault_job_id\tnote\n' >>"$log_file"
@@ -444,12 +466,18 @@ EOF
 	# A reduced run is a real run of every beat, but it is NOT evidence for a done-when clause
 	# that names the PRD figures. Say so on screen, next to the plan, rather than only in the
 	# log column: the person deciding whether a clause is closed is reading this output.
-	if [[ "$scale_label" != "full" ]]; then
+	#
+	# This prints before beat 1, so it can only report what was ASKED for. The logged label is
+	# derived later from the price the seed actually used.
+	if [[ -n "$price_usdc_arg" && "$price_usdc_arg" != "25.00" ]]; then
 		cat <<EOF
-REDUCED SCALE ($scale_label). Every beat above still runs and is still read back from chain;
-only the on-chain amounts are smaller. The x402 spends are unchanged, because they are graded
-against absolute policy thresholds (see --help). This run is logged with a scale column and
-does NOT close a done-when clause that names the PRD figures.
+REDUCED SCALE REQUESTED (--price $price_usdc_arg). Every beat above still runs and is still read
+back from chain. What shrinks is the funding: the job price, the advance drawn against it, and
+the pool depth that advance needs. The three x402 purchases do NOT shrink -- they stay at
+$(usdc_short $profile_micros), $(usdc_short $premium_micros) and $(usdc_short $bench_micros),
+because they are graded against absolute policy thresholds (see --help). The log records the
+price this run actually used, and a reduced run does NOT close a done-when clause that names
+the PRD figures.
 EOF
 	fi
 }
@@ -660,6 +688,16 @@ rate_before="$(jsonq 'd.advanceRateBps' "$state_file")"
 [[ -n "$vault_job" && -n "$advance_usdc" && -n "$rate_before" ]] || die "$state_file is missing jobId/expectedAdvanceUsdc/advanceRateBps"
 advance_micros="$(usdc_to_micros "$advance_usdc")"
 price_micros="$(usdc_to_micros "$price_usdc")"
+
+# Derived from the job the run is about to prove, not from the invocation. Under --no-seed this
+# reads the ATTACHED job's price, which is the only figure that says anything about the evidence
+# this run can produce.
+if (( price_micros == prd_price_micros )); then
+	scale_label="full"
+else
+	scale_label="price=$price_usdc"
+fi
+
 check_advance_covers_spends
 
 info "vault job    $vault_job"
