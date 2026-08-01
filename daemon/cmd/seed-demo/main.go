@@ -246,15 +246,28 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 			lpKeyEnv, orgAddr.Hex())
 	}
 
+	// When no deposit happens, the configured-key check proves nothing about the capital that
+	// is ALREADY in the pool, and that capital is what the run will actually borrow. So ask the
+	// chain directly: if the operator holds pool shares, the treasury is lending itself money
+	// and the demo's opening claim is false no matter which key is configured today.
+	//
+	// This is the check that makes --pool-seed 0 safe. Without it, seeding against an
+	// already-deep pool skipped every guard behind "the first working capital comes from
+	// someone else".
+	operatorShares, err := readUintAt(ctx, operator, fp, chain.CalldataSharesOf(orgAddr), at)
+	if err != nil {
+		return fmt.Errorf("read sharesOf(operator): %w", err)
+	}
+	if operatorShares.Sign() != 0 {
+		return fmt.Errorf("the operator %s holds %s pool shares, so the float it would borrow is its own capital and the demo does not open on a treasury funded by someone else; withdraw them or point the run at a pool an LP seeded",
+			orgAddr.Hex(), operatorShares)
+	}
+
 	if plan.SeedAlreadySufficient() {
-		// Say plainly what was and was not established. This run put no capital in, so it has
-		// no evidence about where the capital already there came from: a pool the operator
-		// funded on a previous day passes every check above and is still a self-funded float.
-		// Proving otherwise needs a sharesOf(operator) read, which no helper exposes yet.
 		if lpErr != nil {
-			fmt.Printf("  %-16s no deposit needed, and %s did not resolve, so nothing was checked about who funded the existing pool\n", "LP (funder)", lpKeyEnv)
+			fmt.Printf("  %-16s no deposit needed; the operator holds no pool shares, so the float it borrows is someone else's\n", "LP (funder)")
 		} else {
-			fmt.Printf("  %-16s %s (no deposit needed; this run adds no capital and does not establish who funded the pool it borrows from)\n", "LP (funder)", lp.Address().Hex())
+			fmt.Printf("  %-16s %s (no deposit needed; the operator holds no pool shares, so the float it borrows is someone else's)\n", "LP (funder)", lp.Address().Hex())
 		}
 	}
 

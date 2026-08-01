@@ -84,6 +84,16 @@ func CalldataTotalAssets() []byte { return pack("totalAssets()") }
 // CalldataTotalOutstanding reads principal currently lent out.
 func CalldataTotalOutstanding() []byte { return pack("totalOutstanding()") }
 
+// CalldataSharesOf reads one address's LP shares in the pool (FloatPool.sol:51, a public
+// mapping). The demo's opening claim is that the operator's first working capital comes from
+// SOMEONE ELSE's pool, and the only way to check that is to ask whether the operator holds
+// shares. Comparing the configured LP key against the operator address does not answer it: a
+// pool the operator funded on a previous day, or from a key not configured now, passes that
+// check and is still a self-funded float.
+func CalldataSharesOf(account common.Address) []byte {
+	return pack("sharesOf(address)", addrWord(account))
+}
+
 // CalldataOrgOutstanding reads one org's drawn principal. The exposure cap is checked against
 // this value PLUS the new principal, so a seed that ignores it can under-seed a pool that
 // already carries an open advance for the same org.

@@ -118,10 +118,14 @@ micros, four orders of magnitude clear of it.
 
 `--pool-seed 0` means `seed_demo` deposits nothing, and its LP-is-not-the-operator check used to
 live inside the deposit branch, so skipping the deposit skipped the one assertion behind the
-demo's opening claim that the treasury borrows *someone else's* capital. That check now runs
-either way. It still does not prove the capital **already** in the pool came from an LP: a pool
-the operator funded on an earlier day passes it and is nonetheless a self-funded float. Closing
-that needs a `sharesOf(operator)` read, which no helper exposes yet.
+demo's opening claim that the treasury borrows *someone else's* capital.
+
+Comparing the configured LP key against the operator address does not actually answer that
+question, because it says nothing about the capital **already** in the pool, which is what a
+`--pool-seed 0` run borrows. So `seed_demo` now reads `sharesOf(operator)` from the chain and
+refuses when the operator holds pool shares, whichever path it is on. A pool the operator funded
+on an earlier day is a self-funded float no matter which key is configured today, and this is the
+check that says so.
 
 **A reduced run is not evidence for a done-when clause that names PRD figures.** It proves the
 machinery; it does not prove the 25.00 story. The `scale` column in the log is there so the two
