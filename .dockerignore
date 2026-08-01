@@ -1,0 +1,34 @@
+# Keep the build context lean. Only dashboard/ and deployments/ are COPYed by the Dockerfile,
+# so everything else — above all the ~400 MB of foundry deps under contracts/lib — is excluded.
+
+# Sibling services not needed to build the dashboard.
+contracts/
+daemon/
+sidecar/
+docs/
+scripts/
+
+# VCS and OS cruft.
+.git/
+.gitignore
+**/.DS_Store
+**/*.log
+
+# Node / Next build outputs — reinstalled and regenerated inside the image.
+**/node_modules/
+**/.next/
+dashboard/out/
+
+# Foundry artifacts (belt-and-suspenders in case contracts/ is ever un-ignored).
+**/lib/forge-std/
+**/lib/openzeppelin-contracts/
+**/out/
+**/cache/
+**/broadcast/
+
+# Local env — never bake secrets into the image.
+**/.env
+**/.env.local
+
+# Vercel linkage from the other deploy path.
+**/.vercel/
