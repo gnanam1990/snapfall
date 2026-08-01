@@ -80,6 +80,14 @@ gas_margin_micros=100000
 # merely truncates the reserve, and --price made this reachable by typing.
 min_principal_micros=250
 
+# FloatPool clamps the rate to [FLOOR_BPS, CAP_BPS] = [3000, 8500] (FloatPool.sol:28-31,
+# :112), so the SMALLEST advance any price can produce is price * 3000 / 10_000. That bound
+# needs no chain read, which is what lets the truncation guard run in the preflight instead
+# of after beat 1 has already created and funded a job on chain. The exact check still runs
+# after the seed against the real rate; this one only has to be conservative enough never to
+# reject a price that would have worked.
+rate_floor_bps=3000
+
 # The on-chain scale. Empty means "seed_demo's own defaults" (price 25.00, pool-seed 150), which
 # is the PRD figure set and needs a pool of 125.00 USDC to clear the 10% org exposure cap.
 #
@@ -300,6 +308,21 @@ check_figures() {
 		|| fig_bad "beat 4's bait is $(usdc_short $premium_micros), over the $(usdc_short $policy_job_budget) job budget: it would be denied on budget rather than escalated"
 	(( profile_micros + bench_micros <= policy_job_budget )) \
 		|| fig_bad "beats 3 and 5 spend $(usdc_short $((profile_micros + bench_micros))) together, over the $(usdc_short $policy_job_budget) job budget"
+
+	# Catch an unrunnably small --price HERE, before beat 1 creates and funds a real job
+	# on chain. Bounded by the rate floor rather than the live rate, so it is
+	# conservative: it rejects only prices that cannot work at ANY rate the contract can
+	# return, and never a price that would have settled.
+	if [[ -n "$price_usdc_arg" ]]; then
+		local pm floor_advance
+		if ! pm="$(usdc_to_micros "$price_usdc_arg")"; then
+			fig_bad "--price $price_usdc_arg is not a 6dp USDC amount"
+		else
+			floor_advance=$(( pm * rate_floor_bps / 10000 ))
+			(( floor_advance >= min_principal_micros )) \
+				|| fig_bad "--price $price_usdc_arg draws at most $(micros_to_usdc $floor_advance) USDC at the ${rate_floor_bps}bps rate floor, under the $(micros_to_usdc $min_principal_micros) where FloatPool first-loss reserve cut truncates to zero: beat 6 would report a settled waterfall with a stage that never happened"
+		fi
+	fi
 
 	if (( preflight_missing == 0 )); then
 		printf '   ok       demo figures: %s and %s auto-approve, %s escalates, all inside the %s budget\n' \
