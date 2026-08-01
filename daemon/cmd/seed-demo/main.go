@@ -232,31 +232,35 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 	// key funded the pool it would be lending itself money, and the dashboard would open on
 	// whatever that key had left over instead of zero. So the deposit uses its own key and the
 	// shares it mints belong to that LP.
-	// The identity check is about WHOSE key this is, not about whether a deposit happens, so it
-	// runs either way. It used to sit inside the branch below, which meant that seeding against
-	// an already-deep pool -- the whole point of --pool-seed 0 -- skipped the one assertion
-	// behind the demo's opening claim that the treasury borrows someone else's capital.
+	// Resolved ONCE, whether or not a deposit follows. The identity check used to live inside
+	// the branch below, so seeding against an already-deep pool -- the whole point of
+	// --pool-seed 0 -- skipped the single assertion behind the demo's opening claim.
 	//
-	// What this still does NOT prove: that the capital ALREADY in the pool came from an LP. A
-	// pool the operator funded on a previous day passes this and remains a self-funded float.
-	// Closing that needs a sharesOf(operator) read, which no helper exposes yet.
-	if lpKeyEnv != "" {
-		if lp, err := chain.NewFromEnv(lpKeyEnv, dep.Network.RPCURL, dep.Network.ChainID); err == nil {
-			if strings.EqualFold(lp.Address().Hex(), orgAddr.Hex()) {
-				return fmt.Errorf("%s holds the operator address %s; the LP must be a separate wallet or the demo opens on a treasury that funded its own pool",
-					lpKeyEnv, orgAddr.Hex())
-			}
+	// A missing key is fatal only when a deposit actually needs one. When none is needed the
+	// key is genuinely irrelevant to THIS run, but the check still runs if it resolves, because
+	// a key that IS configured and IS the operator is a misconfiguration worth failing on
+	// whichever path finds it.
+	lp, lpErr := chain.NewFromEnv(lpKeyEnv, dep.Network.RPCURL, dep.Network.ChainID)
+	if lpErr == nil && strings.EqualFold(lp.Address().Hex(), orgAddr.Hex()) {
+		return fmt.Errorf("%s holds the operator address %s; the LP must be a separate wallet or the demo opens on a treasury that funded its own pool",
+			lpKeyEnv, orgAddr.Hex())
+	}
+
+	if plan.SeedAlreadySufficient() {
+		// Say plainly what was and was not established. This run put no capital in, so it has
+		// no evidence about where the capital already there came from: a pool the operator
+		// funded on a previous day passes every check above and is still a self-funded float.
+		// Proving otherwise needs a sharesOf(operator) read, which no helper exposes yet.
+		if lpErr != nil {
+			fmt.Printf("  %-16s no deposit needed, and %s did not resolve, so nothing was checked about who funded the existing pool\n", "LP (funder)", lpKeyEnv)
+		} else {
+			fmt.Printf("  %-16s %s (no deposit needed; this run adds no capital and does not establish who funded the pool it borrows from)\n", "LP (funder)", lp.Address().Hex())
 		}
 	}
 
 	if !plan.SeedAlreadySufficient() {
-		lp, err := chain.NewFromEnv(lpKeyEnv, dep.Network.RPCURL, dep.Network.ChainID)
-		if err != nil {
-			return fmt.Errorf("LP key: %w (the pool's liquidity must come from an LP, not the operator treasury; set %s)", err, lpKeyEnv)
-		}
-		if strings.EqualFold(lp.Address().Hex(), orgAddr.Hex()) {
-			return fmt.Errorf("%s holds the operator address %s; the LP must be a separate wallet or the demo opens on a treasury that funded its own pool",
-				lpKeyEnv, orgAddr.Hex())
+		if lpErr != nil {
+			return fmt.Errorf("LP key: %w (the pool's liquidity must come from an LP, not the operator treasury; set %s)", lpErr, lpKeyEnv)
 		}
 		fmt.Printf("  %-16s %s\n", "LP (funder)", lp.Address().Hex())
 		r, err := lp.Submit(ctx, usdc, chain.CalldataApprove(fp, plan.DepositMicros))

@@ -691,11 +691,22 @@ if (( check_wallets == 1 )); then
 	# run before beat 1, for holding less than a figure that run will never spend. Derived here
 	# so the relationship is code. Both --customer-min and the env var take a decimal STRING, so
 	# this passes one and never a micros integer.
+	#
+	# Under --no-seed there is no --price to derive from, but the attached job's price is already
+	# on disk in the state file. Without reading it, attaching to a job seeded at 1.00 still
+	# demanded the PRD 25.10 and the second run of a faucet-free workflow died at beat 0b.
 	ops_args=()
+	gate_price=""
+	if [[ -n "$price_usdc_arg" ]]; then
+		gate_price="$price_usdc_arg"
+	elif (( do_seed == 0 )) && [[ -f "$state_file" ]]; then
+		gate_price="$(jsonq 'd.priceUsdc' "$state_file" 2>/dev/null || printf '')"
+		[[ -n "$gate_price" ]] && info "--no-seed: sizing the wallet gate from the attached job's $gate_price USDC price"
+	fi
 	if [[ -n "$customer_min_arg" ]]; then
 		ops_args+=(--customer-min "$customer_min_arg")
-	elif [[ -n "$price_usdc_arg" ]]; then
-		customer_min_arg="$(micros_to_usdc $(( $(usdc_to_micros "$price_usdc_arg") + gas_margin_micros )))"
+	elif [[ -n "$gate_price" ]]; then
+		customer_min_arg="$(micros_to_usdc $(( $(usdc_to_micros "$gate_price") + gas_margin_micros )))"
 		ops_args+=(--customer-min "$customer_min_arg")
 	fi
 	if ((${#ops_args[@]})); then
