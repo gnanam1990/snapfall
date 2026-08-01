@@ -297,10 +297,15 @@ test('a scan that throws after merging does not double-count on the next scan', 
 
   const headRef = { head: 100 };
   const fail = { blocks: false };
+  const seen = { getLogs: 0, blocks: 0 };
   const base = rangeRPC(logs, headRef);
   const rpc: RPCTransport = async <T,>(method: string, params: unknown[]): Promise<T> => {
-    if (method === 'eth_getBlockByNumber' && fail.blocks) {
-      throw new RPCError('Arc RPC eth_getBlockByNumber returned HTTP 429', 429, undefined, 'rate limited');
+    if (method === 'eth_getLogs') seen.getLogs += 1;
+    if (method === 'eth_getBlockByNumber') {
+      seen.blocks += 1;
+      if (fail.blocks) {
+        throw new RPCError('Arc RPC eth_getBlockByNumber returned HTTP 429', 429, undefined, 'rate limited');
+      }
     }
     return base<T>(method, params);
   };
@@ -313,14 +318,19 @@ test('a scan that throws after merging does not double-count on the next scan', 
   //    whatever the snapshot says; what matters is what the CACHE now holds.
   headRef.head = 110;
   fail.blocks = true;
+  const before = { ...seen };
   let threw = false;
   await loadFloatSnapshot(cfg(POOL_ATOMIC), rpc).catch(() => {
     threw = true;
   });
-  // Without this the test passes vacuously the moment the injection stops firing, for instance if
-  // enrichOpenedAt stops making an eth_getBlockByNumber call or scanFloatHistory starts swallowing
-  // the error itself. The whole point is that a throw lands between the merge and the cursor.
-  assert.ok(threw, 'step 2 did not throw, so the merge-then-cursor window was never exercised');
+  // Three separate things, because a bare "it threw" would pass vacuously the moment the injection
+  // stops firing, and would still pass if a refactor moved the enrich BEFORE the merge, at which
+  // point the window this test exists for is no longer being exercised at all.
+  assert.ok(threw, 'step 2 did not throw, so nothing exercised the failure path');
+  assert.ok(seen.getLogs > before.getLogs,
+    'the extension never fetched logs, so it failed before the merge and not in the merge-to-cursor window');
+  assert.ok(seen.blocks > before.blocks,
+    'eth_getBlockByNumber was never reached, so enrichOpenedAt no longer runs after the merge and this test needs a new injection point');
 
   // 3. retry with the RPC healthy. This must equal a single clean scan over 0..110, not double.
   fail.blocks = false;
