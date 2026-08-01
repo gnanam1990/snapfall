@@ -92,7 +92,14 @@ export default function TeamActivityFeed({
                 <div className="activity-tags">
                   {message.jobId ? <span className="activity-job">{message.jobId}</span> : null}
                   {message.amountUsdc ? <strong>{formatUsdc(message.amountUsdc)} USDC</strong> : null}
-                  {message.explorerUrl && isSafeExplorerUrl(message.explorerUrl) ? (
+                  {/* A demo-replay event's explorer URL is a fabricated hash. Never render it as a
+                      live link — a fake "verify on explorer" is the exact thing this project exists
+                      to not do. Show a plain, non-clickable placeholder marker instead. */}
+                  {message.explorerUrl && message.placeholder ? (
+                    <span className="activity-explorer-placeholder" title="Demo replay — not a real transaction">
+                      Explorer (demo placeholder)
+                    </span>
+                  ) : message.explorerUrl && isSafeExplorerUrl(message.explorerUrl) ? (
                     <a href={message.explorerUrl} target="_blank" rel="noreferrer">Explorer ↗</a>
                   ) : null}
                 </div>

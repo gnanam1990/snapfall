@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS events (                          -- tamper-evident l
   kind TEXT NOT NULL, entity_id TEXT, actor TEXT, payload_json TEXT, payload_hash TEXT NOT NULL
 );
 
+-- The reservation ledger (internal/budget) and every other boot-time fold read the log
+-- by kind in seq order. Without this the fold is a full table scan of events on every
+-- restart; CREATE INDEX IF NOT EXISTS also applies cleanly to an existing .db, which a
+-- new column would not (see the budget package doc).
+CREATE INDEX IF NOT EXISTS events_kind_seq_idx ON events(kind, seq);
+
 CREATE TABLE IF NOT EXISTS outbox (                          -- transactional outbox for the typed bus
   id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, payload_json TEXT NOT NULL,
   published INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL

@@ -65,6 +65,23 @@ type Client struct {
 	mu sync.Mutex // the single-signer serialization (see package doc)
 }
 
+// NewReadOnly builds a client that can only read. It holds no key, so Submit fails
+// closed on it; use it for view calls (balances, rates, job status) where constructing a
+// signer would demand a secret the caller has no reason to hold.
+func NewReadOnly(rpcURL string, chainID uint64) (*Client, error) {
+	// Store the TRIMMED url. Validating a trimmed copy while keeping the padded original
+	// accepts configuration that then fails on the first view call, which is a confusing
+	// place to learn about a stray newline in an env var (review: PR #41).
+	rpcURL = strings.TrimSpace(rpcURL)
+	if rpcURL == "" {
+		return nil, fmt.Errorf("chain reader: rpc url is empty")
+	}
+	return &Client{
+		rpcURL: rpcURL, http: &http.Client{Timeout: 30 * time.Second},
+		chainID: new(big.Int).SetUint64(chainID),
+	}, nil
+}
+
 // NewFromEnv builds a client from a private-key environment variable. Fail-closed:
 // missing or malformed key is a refusal at construction, never a stub at use. The key
 // value never reaches a return, an error message, or a log.
@@ -116,6 +133,11 @@ func (c *Client) SubmitWithGas(ctx context.Context, to common.Address, calldata 
 func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte, fixedGas uint64) (Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// A read-only client holds no key: refuse here rather than panicking in the signer.
+	if c.key == nil {
+		return Receipt{}, fmt.Errorf("refusing to submit: this client is read-only (no signing key)")
+	}
 
 	// Verify the endpoint is the chain we signed up for — refuse to sign for a
 	// different chain id than configured (same posture as the indexer).
@@ -202,12 +224,42 @@ func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte,
 
 // CallView executes a read-only eth_call.
 func (c *Client) CallView(ctx context.Context, to common.Address, calldata []byte) ([]byte, error) {
+	return c.CallViewAt(ctx, to, calldata, "latest")
+}
+
+// CallViewAt is CallView pinned to a block tag ("latest", "finalized", or a 0x-hex height).
+//
+// Separate eth_calls are separate points in time. Anything that reads several values and then
+// reasons about them TOGETHER has to pin them to one block, or it can compute a confident answer
+// from a position that never existed: the demo seed reads pool assets and two outstanding
+// balances to size a floor, and a mid-sequence advance by another org silently invalidates it
+// (review: PR #41).
+func (c *Client) CallViewAt(ctx context.Context, to common.Address, calldata []byte, block string) ([]byte, error) {
+	if strings.TrimSpace(block) == "" {
+		return nil, fmt.Errorf("CallViewAt: block tag is empty")
+	}
 	var out string
 	call := map[string]any{"to": to.Hex(), "data": "0x" + hex.EncodeToString(calldata)}
-	if err := c.rpc(ctx, "eth_call", []any{call, "latest"}, &out); err != nil {
+	if err := c.rpc(ctx, "eth_call", []any{call, block}, &out); err != nil {
 		return nil, err
 	}
 	return common.FromHex(out), nil
+}
+
+// BlockNumber reads the current head height and returns it as the 0x-hex tag eth_call wants,
+// so a caller can take one snapshot and read every value against it.
+func (c *Client) BlockNumber(ctx context.Context) (string, error) {
+	var out string
+	if err := c.rpc(ctx, "eth_blockNumber", []any{}, &out); err != nil {
+		return "", err
+	}
+	h := new(big.Int).SetBytes(common.FromHex(out))
+	if h.Sign() == 0 {
+		// Genesis is not a plausible head for a live network, and a node that answers 0x0 is
+		// more likely still syncing than genuinely at block zero.
+		return "", fmt.Errorf("eth_blockNumber returned %q; the node may still be syncing", out)
+	}
+	return "0x" + h.Text(16), nil
 }
 
 // ── minimal JSON-RPC (runbook rule: HTTP 200 does NOT mean RPC success) ──

@@ -58,6 +58,15 @@ export interface FloatLossTotals {
   socializedUsdc: string;
 }
 
+/** One point on the org's advance-rate curve. Ordered strictly by block (a write-off
+ *  lowers the rate, so the series is not monotonic). The origin point (rate 5000, the
+ *  base) has no tx — it is the pre-tick value, never emitted on chain. */
+export interface RateHistoryPoint {
+  rateBps: number;
+  blockNumber: number;
+  txHash: string | null;
+}
+
 /** Authoritative read-only FloatPool snapshot returned by /api/float. */
 export interface FloatSnapshot {
   chainId: number;
@@ -76,12 +85,33 @@ export interface FloatSnapshot {
   writtenOffJobs: number | null;
   openAdvances: FloatOpenAdvance[] | null;
   losses: FloatLossTotals | null;
-  historyStatus: 'complete' | 'unavailable';
+  /** The org's rate progression from chain (RateChanged ticks + the base origin).
+   *  null while the history scan is pending or unavailable. */
+  rateHistoryBps: RateHistoryPoint[] | null;
+  /** The block the history fields were actually scanned through, or null when there is no
+   *  history. Compare against blockNumber: when it lags, the history is real but older than the
+   *  view figures, which are read at the current head. */
+  historyScannedThroughBlock: number | null;
+  // 'complete' = history was scanned THROUGH blockNumber, so every field on this payload
+  //   describes the same block and they can be shown together.
+  // 'pending'  = the view figures are current but history is missing or older than blockNumber.
+  //   A later poll returns 'complete'. Consumers must not present a 'pending' history figure
+  //   alongside a view figure as though they were one observation.
+  // 'unavailable' = history was not requested or cannot be read at all.
+  historyStatus: 'complete' | 'unavailable' | 'pending';
   observedAt: string;
 }
 
 export interface JobSummary {
+  /** The daemon's business job id (e.g. job_demo_1) — NOT the chain entity. */
   jobId: string;
+  /**
+   * The bytes32 JobVault entity, when the job has an on-chain identity. The daemon models
+   * these separately (jobs.vault_job_id), and a job has no vault id until it is created on
+   * chain, so this is optional and its absence is a real state, not missing data. V7's
+   * detail page can only read the chain when this is present.
+   */
+  vaultJobId?: string | null;
   customer: string;
   title: string;
   state: JobState;
@@ -105,6 +135,13 @@ export interface OverviewSnapshot {
   openAdvances: OpenAdvance[] | null;
   /** Present in the local demo fixture; the real H2 snapshot may omit history. */
   recentEvents?: FinancialEvent[] | null;
+  /**
+   * False when this deployment has no daemon wired (SNAPFALL_OWNER_API_URL unset) and the
+   * demo replay is off. The Overview renders an honest "no daemon connected" banner instead
+   * of a hero + activity feed, so a public visitor never sees fabricated agent activity.
+   * Absent/true on a real daemon snapshot and on the local demo replay.
+   */
+  daemonConnected?: boolean;
 }
 
 export interface StreamEvent {
@@ -124,13 +161,16 @@ export interface OverviewAggregates {
   pendingApprovals?: number;
 }
 
-/** Ratified H2 envelope: one stream, daemon and chain source vocabularies unchanged. */
+/** Ratified H2 envelope: one stream, daemon and chain source vocabularies unchanged.
+ *  `demo: true` marks a message from the local scripted replay so consumers can flag its
+ *  contents — above all its explorer links — as placeholders, never as real chain proof. */
 export type StreamMessage =
-  | { kind: 'snapshot'; snapshot: OverviewSnapshot }
+  | { kind: 'snapshot'; snapshot: OverviewSnapshot; demo?: boolean }
   | {
       kind: 'event';
       source: 'daemon' | 'chain';
       seq: number | string;
       event: StreamEvent;
       aggregates?: OverviewAggregates;
+      demo?: boolean;
     };

@@ -102,3 +102,145 @@ test('keeps unknown event kinds readable instead of exposing raw payloads', () =
   assert.equal(message.text, 'Recorded future event kind.');
   assert.doesNotMatch(message.text, /script/i);
 });
+
+test('carries both waterfall legs from a chain settlement so the money graph need not infer them', () => {
+  const message = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 42,
+    event: {
+      kind: 'JobSettled',
+      jobId: 'job_demo_1',
+      actor: 'funding',
+      at: '2026-07-24T10:00:00Z',
+      payload: { advanceRepaidAtomic: '12750000', operatorNetAtomic: '12250000' },
+    },
+  });
+
+  assert.deepEqual(message.settlement, {
+    advanceRepaidUsdc: '12750000',
+    operatorNetUsdc: '12250000',
+  });
+  // The repaid leg doubles as the event's headline amount.
+  assert.equal(message.amountUsdc, '12750000');
+});
+
+test('accepts the snake_case settlement spelling and omits the split when neither leg is present', () => {
+  const snake = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 43,
+    event: {
+      kind: 'JobSettled',
+      jobId: 'job_demo_1',
+      at: '2026-07-24T10:00:00Z',
+      payload: { advance_repaid_atomic: '900', operator_net_atomic: '100' },
+    },
+  });
+  assert.deepEqual(snake.settlement, { advanceRepaidUsdc: '900', operatorNetUsdc: '100' });
+
+  const bare = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 44,
+    event: { kind: 'RateChanged', at: '2026-07-24T10:00:00Z', payload: { rateBps: 5500 } },
+  });
+  assert.equal(bare.settlement, undefined);
+});
+
+test('a settlement reporting only one leg is not a split at all', () => {
+  const onlyRepaid = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 45,
+    event: {
+      kind: 'JobSettled',
+      jobId: 'job_demo_1',
+      at: '2026-07-24T10:00:00Z',
+      payload: { advanceRepaidAtomic: '12750000' },
+    },
+  });
+  // Returning a split here would hand the money graph an empty string where an amount
+  // belongs, and it would treat that partial report as authoritative.
+  assert.equal(onlyRepaid.settlement, undefined);
+  // The repaid leg is still usable as the headline amount.
+  assert.equal(onlyRepaid.amountUsdc, '12750000');
+
+  const onlyNet = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 46,
+    event: {
+      kind: 'JobSettled',
+      jobId: 'job_demo_1',
+      at: '2026-07-24T10:00:00Z',
+      payload: { operatorNetAtomic: '12250000' },
+    },
+  });
+  assert.equal(onlyNet.settlement, undefined);
+});
+
+test('AdvanceRepaid stays a repayment-leg event, distinct from a full settlement', () => {
+  const repaid = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 47,
+    event: {
+      kind: 'AdvanceRepaid',
+      jobId: 'job_demo_1',
+      at: '2026-07-24T10:00:00Z',
+      payload: { amountAtomic: '12750000' },
+    },
+  });
+  assert.equal(repaid.kind, 'AdvanceRepaid');
+  // It reports no split, so nothing downstream may infer the operator's share from it.
+  assert.equal(repaid.settlement, undefined);
+  assert.match(repaid.text, /repaid first/i);
+});
+
+test('approval.requested carries its state, because the kind alone cannot classify it', () => {
+  // The stream normalizes BOTH a pending escalation and an executed purchase to this one kind.
+  const pending = humanizeStreamEvent({
+    kind: 'event',
+    source: 'daemon',
+    seq: 60,
+    event: {
+      kind: 'approval.requested',
+      jobId: 'job_demo_1',
+      at: '2026-07-24T10:00:00Z',
+      payload: {
+        request_id: 'apr_1',
+        state: 'PENDING',
+        intent: { Merchant: 'api.example', Resource: 'GET /v1/premium', AmountMicros: 4_000_000, Purpose: 'premium dataset' },
+      },
+    },
+  });
+  const approved = humanizeStreamEvent({
+    kind: 'event',
+    source: 'daemon',
+    seq: 61,
+    event: {
+      kind: 'approval.requested',
+      jobId: 'job_demo_1',
+      at: '2026-07-24T10:00:05Z',
+      payload: {
+        request_id: 'apr_2',
+        state: 'APPROVED',
+        intent: { Merchant: 'api.example', Resource: 'GET /v1/benchmark', AmountMicros: 60_000, Purpose: 'benchmark', AlternativeTo: 'apr_1' },
+      },
+    },
+  });
+
+  assert.equal(pending.kind, approved.kind, 'both really do share one kind, which is the problem');
+  assert.equal(pending.approvalState, 'pending');
+  assert.equal(approved.approvalState, 'approved');
+
+  // The `approval` field is NOT a usable substitute: it is absent for approved AND for every
+  // non-approval event, so its absence cannot mean "approved".
+  assert.ok(pending.approval, 'a pending request is actionable');
+  assert.equal(approved.approval, undefined);
+
+  // The amount must survive, since the graph totals it as a spend.
+  assert.equal(approved.amountUsdc, '60000');
+  assert.equal(pending.amountUsdc, '4000000');
+});

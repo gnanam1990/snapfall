@@ -3,8 +3,15 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 audit_source="$repo_root/scripts/a14-audit"
+allow_source="$repo_root/scripts/a14-audit.allow"
 fixture_root="$(mktemp -d)"
 trap 'rm -rf "$fixture_root"' EXIT
+
+commit_fixture() {
+  local target="$1" message="$2"
+  git -c commit.gpgsign=false -c core.hooksPath=/dev/null -C "$target" \
+    commit --no-verify -q -m "$message"
+}
 
 init_fixture() {
   local target="$1"
@@ -13,7 +20,22 @@ init_fixture() {
   git -C "$target" config user.name "A14 audit test"
   git -C "$target" config user.email "a14-audit@example.invalid"
   cp "$audit_source" "$target/scripts/a14-audit"
+  cp "$allow_source" "$target/scripts/a14-audit.allow"
   chmod +x "$target/scripts/a14-audit"
+}
+
+failures=0
+expect_failure() {
+  local label="$1" target="$2" expected="$3" output
+  if output="$(cd "$target" && ./scripts/a14-audit 2>&1)"; then
+    echo "FAIL: $label unexpectedly passed"
+    printf '%s\n' "$output"
+    failures=$((failures + 1))
+  elif [[ "$output" != *"$expected"* ]]; then
+    echo "FAIL: $label did not report the expected reason: $expected"
+    printf '%s\n' "$output"
+    failures=$((failures + 1))
+  fi
 }
 
 docs_repo="$fixture_root/documentation"
@@ -21,11 +43,9 @@ init_fixture "$docs_repo"
 mkdir -p "$docs_repo/docs"
 printf '# A14 audit evidence\n' >"$docs_repo/docs/A14-SECRET-INTEGRITY-AUDIT.md"
 git -C "$docs_repo" add .
-git -C "$docs_repo" commit -q -m "Add audit documentation"
-
-failures=0
+commit_fixture "$docs_repo" "Add audit documentation"
 if ! docs_output="$(cd "$docs_repo" && ./scripts/a14-audit 2>&1)"; then
-  echo "FAIL: the audit rejects its own documentation filename"
+  echo "FAIL: the audit rejects its reviewed documentation allowlist"
   printf '%s\n' "$docs_output"
   failures=$((failures + 1))
 fi
@@ -33,20 +53,93 @@ fi
 history_repo="$fixture_root/history"
 init_fixture "$history_repo"
 git -C "$history_repo" add .
-git -C "$history_repo" commit -q -m "Add audit command"
+commit_fixture "$history_repo" "Add audit command"
 printf 'retired test credential: %s%s\n' 'AKIA' 'ABCDEFGHIJKLMNOP' >"$history_repo/retired.txt"
 git -C "$history_repo" add retired.txt
-git -C "$history_repo" commit -q -m "Add credential fixture"
+commit_fixture "$history_repo" "Add credential fixture"
 git -C "$history_repo" rm -q retired.txt
-git -C "$history_repo" commit -q -m "Remove credential fixture"
+commit_fixture "$history_repo" "Remove credential fixture"
+expect_failure \
+  "reachable-history secret" "$history_repo" \
+  "FAIL: high-confidence secret pattern(s) in reachable Git tree history:"
 
-if history_output="$(cd "$history_repo" && ./scripts/a14-audit 2>&1)"; then
-  echo "FAIL: the audit missed a high-confidence secret in reachable history"
-  printf '%s\n' "$history_output"
+shapes_repo="$fixture_root/credential-shapes"
+init_fixture "$shapes_repo"
+mkdir -p "$shapes_repo/config"
+key_hex="$(printf 'ab%.0s' {1..32})"
+printf '{"privateKey": "0x%s"}\n' "$key_hex" >"$shapes_repo/config/deploy.json"
+printf 'Private_Key = "0x%s"\n' "$key_hex" >"$shapes_repo/config/foundry.toml"
+printf '%s %s\n' '--private-key' "0x$key_hex" >"$shapes_repo/config/command.txt"
+printf 'SIDECAR_AUTH_TOKEN=%s%s\n' 'base64-value-' 'long-enough-for-a-real-hmac-key' >"$shapes_repo/config/service.env.txt"
+git -C "$shapes_repo" add .
+commit_fixture "$shapes_repo" "Add credential-shape fixtures"
+expect_failure "quoted and project-specific credentials" "$shapes_repo" "config/deploy.json"
+
+env_repo="$fixture_root/env-example"
+init_fixture "$env_repo"
+mkdir -p "$env_repo/sidecar"
+printf 'SIDECAR_AUTH_TOKEN=%s%s\n' 'not-a-' 'placeholder-value' >"$env_repo/sidecar/.env.example"
+git -C "$env_repo" add -f .
+commit_fixture "$env_repo" "Populate unsafe env example"
+expect_failure "populated env example" "$env_repo" "populated secret value in sidecar/.env.example"
+
+merge_repo="$fixture_root/merge-path"
+init_fixture "$merge_repo"
+git -C "$merge_repo" add .
+commit_fixture "$merge_repo" "Base"
+git -C "$merge_repo" switch -q -c topic
+printf 'topic\n' >"$merge_repo/topic.txt"
+git -C "$merge_repo" add topic.txt
+commit_fixture "$merge_repo" "Topic"
+git -C "$merge_repo" switch -q master
+printf 'main\n' >"$merge_repo/main.txt"
+git -C "$merge_repo" add main.txt
+commit_fixture "$merge_repo" "Main"
+git -C "$merge_repo" merge -q --no-commit topic
+mkdir -p "$merge_repo/keystores"
+printf '\0' >"$merge_repo/keystores/snapfall-deployer"
+git -C "$merge_repo" add keystores/snapfall-deployer
+commit_fixture "$merge_repo" "Merge topic with keystore path"
+expect_failure "merge-only sensitive path" "$merge_repo" "keystores/snapfall-deployer"
+
+error_repo="$fixture_root/git-error"
+init_fixture "$error_repo"
+git -C "$error_repo" add .
+commit_fixture "$error_repo" "Add audit command"
+mkdir -p "$error_repo/test-bin"
+real_git="$(command -v git)"
+printf '%s\n' '#!/bin/sh' \
+  'if [ "${A14_TEST_FAIL_GREP:-}" = 1 ] && [ "${1:-}" = grep ]; then' \
+  '  echo "injected git grep failure" >&2' \
+  '  exit 128' \
+  'fi' \
+  'exec "$A14_REAL_GIT" "$@"' >"$error_repo/test-bin/git"
+chmod +x "$error_repo/test-bin/git"
+if error_output="$(cd "$error_repo" && PATH="$error_repo/test-bin:$PATH" A14_REAL_GIT="$real_git" A14_TEST_FAIL_GREP=1 ./scripts/a14-audit 2>&1)"; then
+  echo "FAIL: the audit passed after an injected git grep failure"
   failures=$((failures + 1))
-elif [[ "$history_output" != *"reachable Git history"* ]]; then
-  echo "FAIL: history rejection did not identify the historical scan"
-  printf '%s\n' "$history_output"
+elif [[ "$error_output" != *"injected git grep failure"* || "$error_output" != *"ERROR:"* ]]; then
+  echo "FAIL: the audit did not surface the injected git failure"
+  printf '%s\n' "$error_output"
+  failures=$((failures + 1))
+fi
+
+shallow_source="$fixture_root/shallow-source"
+init_fixture "$shallow_source"
+git -C "$shallow_source" add .
+commit_fixture "$shallow_source" "First"
+printf 'second\n' >"$shallow_source/second.txt"
+git -C "$shallow_source" add second.txt
+commit_fixture "$shallow_source" "Second"
+git clone -q --depth 1 "file://$shallow_source" "$fixture_root/shallow"
+expect_failure "shallow history" "$fixture_root/shallow" "refusing an incomplete shallow history"
+
+# The suite must also catch drift between the fixture assumptions and the repository that
+# ships the command. This is what detects a future innocent path such as seed_demo making the
+# real preflight red while all synthetic cases remain green.
+if ! repo_output="$(cd "$repo_root" && ./scripts/a14-audit 2>&1)"; then
+  echo "FAIL: the audit does not pass against its own repository"
+  printf '%s\n' "$repo_output"
   failures=$((failures + 1))
 fi
 

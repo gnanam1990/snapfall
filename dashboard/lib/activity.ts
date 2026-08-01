@@ -9,6 +9,14 @@ export interface ApprovalMoment {
   intentHash: string;
 }
 
+/** Settlement split as the chain reports it, when the event carries both legs.
+ *  JobSettled is the only event that moves money two ways at once, so the waterfall
+ *  visual (F1) reads the exact figures instead of inferring them. */
+export interface SettlementSplit {
+  advanceRepaidUsdc: string;
+  operatorNetUsdc: string;
+}
+
 export interface ActivityMessage {
   id: string;
   actor: string;
@@ -23,8 +31,27 @@ export interface ActivityMessage {
   explorerUrl?: string;
   filter: Exclude<ActivityFilter, 'all'>;
   approval?: ApprovalMoment;
+  /**
+   * Lowercased state of an `approval.requested` event, e.g. 'pending' or 'approved'.
+   *
+   * The stream normalizes BOTH a pending escalation and an already-approved purchase to the same
+   * `approval.requested` kind, so the kind alone cannot tell "someone is being asked" from
+   * "money left the treasury". Consumers that care about the difference need this. The `approval`
+   * field above is not a substitute: it is absent for every non-pending state AND for every
+   * non-approval event, so its absence does not mean "approved".
+   */
+  approvalState?: string;
   /** Stable request id joining rejection/request-alternative to its replacement. */
   threadKey?: string;
+  /** Present on settlement events that report both waterfall legs. */
+  settlement?: SettlementSplit;
+  /**
+   * True when this message comes from the local scripted demo replay. Its `explorerUrl` (if
+   * any) points at a fabricated tx hash, so the UI must render it as a visible placeholder,
+   * never as a live "verify on explorer" link. A fake verification link is worse than a
+   * labelled fake event: the event is captioned, the link masquerades as the real thing.
+   */
+  placeholder?: boolean;
 }
 
 type Dict = Record<string, unknown>;
@@ -94,11 +121,27 @@ function actorFor(event: StreamEvent): Pick<ActivityMessage, 'actor' | 'role' | 
   return { actor: 'Brain', role: 'Orchestrator', initials: 'BR', tone: 'brain' };
 }
 
+/**
+ * Both waterfall legs, when the settlement event reports them.
+ *
+ * BOTH are required: a split with one leg missing would satisfy the type while handing the
+ * consumer an empty string where an amount belongs, and the money graph would then treat a
+ * partial report as authoritative. A single leg is not a split (review: PR #40).
+ */
+function settlementSplit(payload: unknown): SettlementSplit | undefined {
+  const outer = record(payload);
+  const repaid = pickString(outer, 'advanceRepaidAtomic', 'advance_repaid_atomic', 'advanceRepaidUsdc');
+  const net = pickString(outer, 'operatorNetAtomic', 'operator_net_atomic', 'operatorNetUsdc');
+  if (!repaid || !net) return undefined;
+  return { advanceRepaidUsdc: repaid, operatorNetUsdc: net };
+}
+
 function eventAmount(payload: unknown): string {
   const outer = record(payload);
   const intent = record(outer.intent ?? outer.Intent);
   return (
     pickString(outer, 'amountUsdc', 'amountAtomic', 'amount_atomic', 'amount') ||
+    pickString(outer, 'advanceRepaidAtomic', 'advance_repaid_atomic') ||
     pickString(intent, 'AmountMicros', 'amountMicros', 'amount_usdc', 'amountUsdc')
   );
 }
@@ -178,6 +221,7 @@ function humanText(event: StreamEvent): {
   filter: Exclude<ActivityFilter, 'all'>;
   amount?: string;
   approval?: ApprovalMoment;
+  approvalState?: string;
   threadKey?: string;
 } {
   const payload = record(event.payload);
@@ -196,6 +240,7 @@ function humanText(event: StreamEvent): {
         filter: 'approvals',
         amount: req.amount,
         approval: req.state.toLowerCase() === 'pending' ? { requestId: req.requestId, intentHash: req.intentHash } : undefined,
+        approvalState: req.state.toLowerCase(),
         threadKey: req.alternativeTo,
       };
     }
@@ -207,6 +252,7 @@ function humanText(event: StreamEvent): {
       filter: 'approvals',
       amount: req.amount,
       approval: pending ? { requestId: req.requestId, intentHash: req.intentHash } : undefined,
+      approvalState: req.state.toLowerCase(),
       threadKey: req.requestId,
     };
   }
@@ -283,11 +329,14 @@ export function humanizeStreamEvent(message: Extract<StreamMessage, { kind: 'eve
     kind: event.kind,
     jobId: event.jobId || (event.kind === 'RateChanged' ? undefined : event.entityId),
     explorerUrl: pickString(event.payload, 'explorerUrl', 'explorer_url'),
+    settlement: settlementSplit(event.payload),
+    placeholder: message.demo === true,
   };
 }
 
-/** Compatibility for the local V5 snapshot while the daemon snapshot has no history. */
-export function humanizeLegacyEvent(event: FinancialEvent): ActivityMessage {
+/** Compatibility for the local V5 snapshot while the daemon snapshot has no history.
+ *  `demo` marks the seed events as scripted so their explorer links render as placeholders. */
+export function humanizeLegacyEvent(event: FinancialEvent, demo = false): ActivityMessage {
   const tone: ActivityTone =
     event.category === 'Approval' ? 'owner' : event.category === 'Finance' || event.category === 'Float' ? 'funding' : 'brain';
   const identities = {
@@ -308,5 +357,6 @@ export function humanizeLegacyEvent(event: FinancialEvent): ActivityMessage {
     amountUsdc: event.amountUsdc,
     explorerUrl: event.explorerUrl,
     filter: event.category === 'Approval' ? 'approvals' : event.category === 'Finance' || event.category === 'Float' ? 'money' : 'work',
+    placeholder: demo,
   };
 }

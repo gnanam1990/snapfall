@@ -1,0 +1,2 @@
+# Exact repository-relative path | justification reviewed in code review
+docs/A14-SECRET-INTEGRITY-AUDIT.md | The audit report necessarily names the secret classes it checks; it contains no credential values.

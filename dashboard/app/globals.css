@@ -1,28 +1,242 @@
+/* ══ Design tokens ══
+ *
+ * Every colour in this stylesheet resolves through a token here. That is not tidiness for its
+ * own sake: a second theme is impossible while surfaces, borders and tints are written inline,
+ * and this file previously carried 103 hardcoded dark-only literals.
+ *
+ * The vocabulary is deliberately small. Each semantic hue gets the hue itself (for text and
+ * strokes), a soft tinted background, and a tinted border; a few carry a -strong step where the
+ * UI uses brightness to mean emphasis. Anything named --on-X is foreground text that sits on a
+ * filled X, and is the one place a contrast pair is fixed rather than derived.
+ *
+ * Dark is the default and lives on :root. Light is an override under :root[data-theme='light'],
+ * so a browser that never runs the theme script still gets a complete, correct theme.
+ */
 :root {
+  color-scheme: dark;
+
+  /* surfaces, back to front */
   --bg: #0a0e14;
   --bg-2: #0d131b;
+  --bg-glow-top: #10202a;
+  --well: #111923;
+  --well-2: #0e151e;
   --panel: #121821;
   --panel-2: #161e29;
+  --panel-3: #1a2430;
+  --panel-a: rgba(18, 24, 33, 0.96);
+  --panel-b: rgba(13, 19, 27, 0.96);
+  --scrim: rgba(18, 24, 33, 0.72);
+  --inset: rgba(10, 14, 20, 0.35);
+  --inset-2: rgba(10, 14, 20, 0.22);
+  --hover: rgba(255, 255, 255, 0.035);
+
+  /* lines */
   --border: #202b38;
   --border-2: #2a3947;
+  --border-3: #263544;
+
+  /* type. In dark the worst case is the LIGHTEST surface a token can land on, the mirror of
+     light's rule, so these are checked against --panel-2 #161e29 and the page radial's
+     --bg-glow-top #10202a rather than against --bg.
+     --muted-2 was #5f7186: 3.56:1 on --panel, 3.35:1 on --panel-2, 3.32:1 on --bg-glow-top. It
+     shipped that way because fixing it changes existing dark rendering, and only light was
+     corrected at the time (deferred from review #43). The large-text 3:1 exemption never applied:
+     this token styles .float-metric small at 10.5px, .job-event-meta and .ring-hint at 11.5px and
+     .sidebar-foot at 12px, all normal text. #75879a is the MINIMAL lightening that clears 4.5:1 on
+     every surface the token actually lands on (--panel 4.83, --panel-2 4.54, --bg-glow-top 4.51,
+     --bg-2 5.05, --well 4.79, --scrim over --well 4.82), which preserves the largest separation
+     still available from --muted, 1.23:1. Light's ramp separation is 1.32:1 and dark cannot match
+     it while clearing AA, the same squeeze documented in the light block. Dark captions therefore
+     render slightly lighter than before: that is the intended, visible cost of the fix.
+     --panel-3 measures 4.25:1 and is not a counter-example, it carries no --muted-2 text (its one
+     use is the .utilization-track bar). */
   --text: #e6edf3;
+  --text-2: #c9d4df;
   --muted: #8697a8;
-  --muted-2: #5f7186;
+  --muted-2: #75879a;
+
+  /* accent (teal): the brand hue and the money-in-motion hue */
   --accent: #2dd4bf;
+  --accent-bright: #62e6d6;
   --accent-dim: #123c39;
-  --sky: #38bdf8;
+  --accent-bg: #0c1f1d;
+  --accent-border: #1c5c50;
+  --accent-glow-2: rgba(45, 212, 191, 0.22);
+  --accent-glow-3: rgba(45, 212, 191, 0.16);
+  --accent-wash: rgba(45, 212, 191, 0.08);
+  --on-accent: #04120e;
+  --cta-from: #159b96;
+  --cta-to: #23b7ae;
+  --cta-glow: rgba(35, 183, 174, 0.13);
+  --pipe-accent: #1f4a45;
+
+  /* positive: settled, repaid, accepted */
   --pos: #34d399;
+  --pos-bg: #0e2018;
+  --pos-border: #1c4634;
+  --pos-bg-strong: #103129;
+  --pos-border-strong: #176d55;
+  --pos-glow: rgba(52, 211, 153, 0.5);
+
+  /* negative: refunded, written off, failed */
   --neg: #fb7185;
+  --neg-bg: #230b12;
+  --neg-border: #58222f;
+  --on-neg: #150406;
+
+  /* warning: awaiting a human, degraded, waiting on a feed */
   --warn: #fbbf24;
+  --warn-bg: #201806;
+  --warn-border: #574314;
+
+  /* informational: in flight, in progress */
+  --sky: #38bdf8;
+  --sky-bright: #55c8ec;
+  --sky-bg: #0b1c26;
+  --sky-border: #14374a;
+  --sky-border-strong: #1c5d72;
+  --sky-wash: rgba(56, 189, 248, 0.12);
+
   --violet: #a78bfa;
+  --tick: rgba(134, 151, 168, 0.45);
+  /* The soft focus wash used where a field cannot carry a full outline (.watcher-config packs its
+     inputs against a hairline grid). It has to be a per-theme token, not one shared alpha: the
+     same 45% mix measured 2.67:1 in dark and 2.03:1 in light against the composited field, and the
+     alpha that reaches the 3:1 a focus indicator owes is 50% in dark but 67% in light, so one
+     bumped number would fix dark and leave light failing (deferred from review #43). Both values
+     carry margin over their own floor: dark 55% = 3.37:1, light 70% = 3.23:1. */
+  --focus-wash: color-mix(in srgb, var(--sky) 55%, transparent);
+  /* the activity-feed avatar plate: how much actor hue, mixed into what */
+  --avatar-tint: 16%;
+  --avatar-tint-base: var(--bg-2);
+
   --radius: 12px;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.22);
+}
+
+/* ══ Light theme ══
+ *
+ * The same system with surfaces inverted, not a different design. Two things are NOT simply
+ * lightened:
+ *
+ *  - The semantic hues are re-picked, not reused. #34d399, #fbbf24 and #38bdf8 read well on a
+ *    dark panel and fail WCAG AA against a light one (a 3.19:1 amber is not a warning anyone can
+ *    read). The light values below are the darker members of each ramp, chosen so body-size text
+ *    clears 4.5:1 against the DARKEST surface it can land on, not merely against white: several
+ *    of these tokens style captions sitting on --well or --panel-3, and checking only against
+ *    --panel is how --muted-2 and --sky-bright initially shipped values that failed. The
+ *    ui-rework draft used #059669 / #D97706 / #0284C7 here, all of which fail; these are their
+ *    AA-passing counterparts.
+ *  - Shadows and washes lose most of their strength. Dark UI separates surfaces with light
+ *    (glows, inset highlights); light UI separates them with shadow and hairlines, and a wash
+ *    tuned for a dark panel turns into a muddy stain on a white one.
+ */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f6f7f9;
+  --bg-2: #eef1f5;
+  --bg-glow-top: #e6ecf4;
+  --well: #f2f4f7;
+  --well-2: #eaeef3;
+  --panel: #ffffff;
+  --panel-2: #fbfcfd;
+  --panel-3: #f2f5f8;
+  --panel-a: rgba(255, 255, 255, 0.96);
+  --panel-b: rgba(248, 250, 252, 0.96);
+  --scrim: rgba(255, 255, 255, 0.82);
+  --inset: rgba(15, 23, 42, 0.04);
+  --inset-2: rgba(15, 23, 42, 0.025);
+  --hover: rgba(15, 23, 42, 0.035);
+
+  --border: #dfe4ea;
+  --border-2: #cbd3dc;
+  --border-3: #d5dce4;
+
+  /* The type ramp. Every step clears 4.5:1 against the DARKEST surface it can land on, not merely
+     against white. That surface is --bg-glow-top #e6ecf4, the page radial's 0% stop, and not
+     --well-2 #eaeef3 as this note previously said: .float-live-meta small renders --muted-2 over
+     the radial in the top right of the float page, exactly where the stop is strongest. Measured
+     there the ramp is 13.85 / 7.96 / 5.86 / 4.58, and --muted-2 had to move from #5f6d7d, which
+     was 4.68 on --well-2 but 4.45 on --bg-glow-top: the AA miss was smaller than the dark one but
+     the same miss (found while fixing dark's --muted-2, see the note in :root).
+     An earlier draft had --muted-2 at #7c8b9a (3.00:1 worst) and excused it as large-text-only.
+     That was wrong: this token styles .float-metric small at 10.5px, .job-event-meta and
+     .ring-hint at 11.5px and .sidebar-foot at 12px, all normal text (review: cubic on #43).
+     Fixing only --muted-2 collapsed it into --muted, because AA on small text over light
+     surfaces leaves little room below --muted, so --muted moved down too and the ramp keeps four
+     distinguishable steps. Light --muted at 5.86:1 worst still mirrors dark's 5.55:1 worst.
+     Separation between the bottom two steps is 1.28:1 here and 1.23:1 in dark: that is as much as
+     AA leaves, and it is why neither theme can push --muted-2 further from --muted. */
+  --text: #16202b;
+  --text-2: #3a4757;
+  --muted: #4d5b69;
+  --muted-2: #5d6b7b;
+
+  /* 5.47:1 on white, 4.97:1 on the off-white well */
+  --accent: #0f766e;
+  --accent-bright: #0d9488;
+  --accent-dim: #d8f1ee;
+  --accent-bg: #edfaf8;
+  --accent-border: #a7ddd6;
+  --accent-glow-2: rgba(15, 118, 110, 0.14);
+  --accent-glow-3: rgba(15, 118, 110, 0.1);
+  --accent-wash: rgba(15, 118, 110, 0.05);
+  --on-accent: #ffffff;
+  --cta-from: #0f766e;
+  --cta-to: #12897f;
+  --cta-glow: rgba(15, 118, 110, 0.18);
+  --pipe-accent: #9ed3cc;
+
+  /* 5.48:1 on white; the draft's #059669 was 3.77:1 */
+  --pos: #047857;
+  --pos-bg: #ecfdf5;
+  --pos-border: #a7e3cb;
+  --pos-bg-strong: #d6f5e6;
+  --pos-border-strong: #5cc79b;
+  --pos-glow: rgba(4, 120, 87, 0.24);
+
+  /* 6.29:1 on white */
+  --neg: #be123c;
+  --neg-bg: #fff1f3;
+  --neg-border: #f3c0cb;
+  --on-neg: #ffffff;
+
+  /* 5.02:1 on white; the draft's #D97706 was 3.19:1 */
+  --warn: #b45309;
+  --warn-bg: #fffbeb;
+  --warn-border: #f0d59a;
+
+  /* 5.93:1 on white; the draft's #0284C7 was 4.10:1 */
+  --sky: #0369a1;
+  /* 6.86:1 on --sky-bg, the only surface it is used on. #0284c7 measured 3.82:1 there and this
+     token is NOT decorative: .permission-chip renders 10px label text in it (review: cubic on
+     #43). Darker also preserves the dark theme's semantics, where -bright means more emphasis. */
+  --sky-bright: #075985;
+  --sky-bg: #f0f8ff;
+  --sky-border: #b3d8ee;
+  --sky-border-strong: #6ab2da;
+  --sky-wash: rgba(3, 105, 161, 0.06);
+
+  --violet: #6d28d9;
+  --tick: rgba(92, 107, 122, 0.4);
+  /* 70%, not dark's 55%: --sky is darker here but the field it washes is near white, so the same
+     alpha buys far less separation. 3.23:1 against the composited field (see the dark note). */
+  --focus-wash: color-mix(in srgb, var(--sky) 70%, transparent);
+  /* less hue, and over --panel not --bg-2: a light plate must stay lighter than its glyph */
+  --avatar-tint: 12%;
+  --avatar-tint-base: var(--panel);
+
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 20px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.09);
 }
 
 * { box-sizing: border-box; }
 html, body { padding: 0; margin: 0; }
 body {
-  background: radial-gradient(1200px 600px at 80% -10%, #10202a 0%, var(--bg) 55%);
+  background: radial-gradient(1200px 600px at 80% -10%, var(--bg-glow-top) 0%, var(--bg) 55%);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -46,11 +260,8 @@ a { color: inherit; text-decoration: none; }
   height: 100vh;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
-.brand-mark {
-  width: 26px; height: 26px; border-radius: 8px;
-  background: linear-gradient(135deg, var(--accent), var(--sky));
-  box-shadow: 0 0 16px rgba(45, 212, 191, 0.5);
-}
+/* The mark inherits currentColor, so the accent comes from the theme rather than the asset. */
+.brand > svg { color: var(--accent); flex: none; display: block; }
 .brand-name { font-weight: 700; letter-spacing: -0.02em; font-size: 16px; }
 .nav-link {
   display: flex; align-items: center; justify-content: space-between;
@@ -59,7 +270,7 @@ a { color: inherit; text-decoration: none; }
 }
 .nav-link:hover { background: var(--panel); color: var(--text); }
 .nav-link.active { background: var(--accent-dim); color: var(--accent); }
-.nav-link .pill { font-size: 11px; background: var(--neg); color: #150406; border-radius: 999px; padding: 0 7px; font-weight: 700; }
+.nav-link .pill { font-size: 11px; background: var(--neg); color: var(--on-neg); border-radius: 999px; padding: 0 7px; font-weight: 700; }
 .sidebar-foot { margin-top: auto; padding: 10px 8px 0; color: var(--muted-2); font-size: 12px; }
 .dot-live { color: var(--pos); }
 
@@ -69,10 +280,15 @@ a { color: inherit; text-decoration: none; }
 .page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
 .page-sub { color: var(--muted); margin: 4px 0 0; }
 .badge-live { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
-.badge-live::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: var(--pos); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); animation: pulse 1.8s infinite; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); } 70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+.badge-live::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: var(--pos); box-shadow: 0 0 0 0 var(--pos-glow); animation: pulse 1.8s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 var(--pos-glow); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 .badge-reconnecting::before { background: var(--warn); animation: none; }
-/* WCAG 2.3.3: the ambient pulse is decorative; honor reduced-motion preferences. */
+/* The live-badge pulse runs indefinitely, which is the case SC 2.2.2 (Pause, Stop, Hide) covers;
+   the hero figure's value transition is brief and data-driven, so no criterion compels removing
+   it, but it is still motion a user may not want. Neither is essential to the information, so
+   both stop on request.
+   NOT SC 2.3.3: that criterion is about motion triggered by user INTERACTION, and neither of
+   these is interaction-triggered. */
 @media (prefers-reduced-motion: reduce) {
   .badge-live::before { animation: none; }
   .hero-num { transition: none; }
@@ -109,7 +325,7 @@ a { color: inherit; text-decoration: none; }
   grid-column: 1 / -1;
   display: flex; align-items: center; justify-content: space-between;
   background:
-    radial-gradient(600px 200px at 90% 0%, rgba(56, 189, 248, 0.12), transparent 60%),
+    radial-gradient(600px 200px at 90% 0%, var(--sky-wash), transparent 60%),
     linear-gradient(180deg, var(--panel), var(--panel-2));
   border: 1px solid var(--border-2);
   border-radius: 16px;
@@ -125,7 +341,7 @@ a { color: inherit; text-decoration: none; }
 .activity {
   overflow: hidden;
   background:
-    radial-gradient(600px 260px at 70% -20%, rgba(45, 212, 191, 0.08), transparent 62%),
+    radial-gradient(600px 260px at 70% -20%, var(--accent-wash), transparent 62%),
     linear-gradient(180deg, var(--panel), var(--panel-2));
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -147,9 +363,9 @@ a { color: inherit; text-decoration: none; }
   align-items: center;
   gap: 6px;
   padding: 3px 8px;
-  border: 1px solid #1b4d3b;
+  border: 1px solid var(--pos-border);
   border-radius: 999px;
-  background: #0d2119;
+  background: var(--pos-bg);
   color: var(--pos);
   font-size: 10px;
   font-weight: 800;
@@ -157,7 +373,7 @@ a { color: inherit; text-decoration: none; }
   text-transform: uppercase;
 }
 .activity-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
-.activity-live.is-waiting { color: var(--warn); border-color: #574314; background: #201806; }
+.activity-live.is-waiting { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
 .activity-filters { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .activity-filter {
   appearance: none;
@@ -170,7 +386,7 @@ a { color: inherit; text-decoration: none; }
   font-size: 12px;
   cursor: pointer;
 }
-.activity-filter:hover { color: var(--text); background: rgba(255, 255, 255, 0.035); }
+.activity-filter:hover { color: var(--text); background: var(--hover); }
 .activity-filter.is-active { color: var(--text); background: var(--bg-2); border-color: var(--border-2); }
 .activity-filter:focus-visible, .activity-action:focus-visible {
   outline: 2px solid var(--sky);
@@ -220,7 +436,12 @@ a { color: inherit; text-decoration: none; }
   display: grid;
   place-items: center;
   clip-path: polygon(25% 5%, 75% 5%, 98% 50%, 75% 95%, 25% 95%, 2% 50%);
-  background: color-mix(in srgb, var(--actor-color) 16%, var(--bg-2));
+  /* Authored per theme rather than derived. Mixing 16% of the actor hue into --bg-2 pulls a
+     light plate TOWARD the glyph, so the 11px/850 initials measured 3.89-4.21:1 for four of the
+     five actor tones in light (only violet passed). Lowering the percentage alone does not fix
+     it; the base has to be the lighter --panel. Dark's rendered output is unchanged, and light's
+     worst tone goes from 3.89:1 to 4.63:1 (audit finding). */
+  background: color-mix(in srgb, var(--actor-color) var(--avatar-tint), var(--avatar-tint-base));
   color: var(--actor-color);
   font-size: 11px;
   font-weight: 850;
@@ -230,7 +451,7 @@ a { color: inherit; text-decoration: none; }
 .activity-identity { display: flex; align-items: baseline; gap: 8px; }
 .activity-identity strong { font-size: 14px; }
 .activity-identity span { color: var(--muted); font-size: 11.5px; }
-.activity-copy p { margin: 5px 0 0; color: #cfdae4; font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.activity-copy p { margin: 5px 0 0; color: var(--text-2); font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .activity-meta { min-width: 126px; color: var(--muted); text-align: right; font-size: 11.5px; }
 .activity-meta time { font-variant-numeric: tabular-nums; }
 .activity-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-top: 8px; }
@@ -248,6 +469,13 @@ a { color: inherit; text-decoration: none; }
 .activity-tags strong { color: var(--text); font-variant-numeric: tabular-nums; font-size: 11.5px; }
 .activity-tags a { color: var(--sky); }
 .activity-tags a:hover { text-decoration: underline; }
+/* Demo-replay explorer marker: deliberately NOT a link and visibly muted/italic so it can
+   never be mistaken for a real "verify on explorer" affordance. */
+.activity-explorer-placeholder { color: var(--muted); font-size: 11px; font-style: italic; cursor: default; }
+.disconnected-links { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.disconnected-links li { color: var(--muted); line-height: 1.5; }
+.disconnected-links a { color: var(--sky); }
+.disconnected-links a:hover { text-decoration: underline; }
 .activity-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
 .activity-action {
   display: inline-flex;
@@ -263,9 +491,9 @@ a { color: inherit; text-decoration: none; }
   font-weight: 700;
 }
 .activity-action:hover { color: var(--text); border-color: var(--muted-2); }
-.activity-action.approve { color: var(--pos); border-color: #1c4634; background: #0e2018; }
-.activity-action.reject { color: var(--neg); border-color: #58222f; background: #230b12; }
-.activity-action.alternative { color: var(--warn); border-color: #574314; background: #201806; }
+.activity-action.approve { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
+.activity-action.reject { color: var(--neg); border-color: var(--neg-border); background: var(--neg-bg); }
+.activity-action.alternative { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
 .activity-item.has-thread::after {
   content: "";
   position: absolute;
@@ -304,11 +532,16 @@ table.t { width: 100%; border-collapse: collapse; }
 
 /* ── badges ── */
 .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--border-2); color: var(--muted); }
-.badge.Funded, .badge.Accepted, .badge.Repaid { color: var(--pos); border-color: #1c4634; background: #0e2018; }
-.badge.InProgress, .badge.Delivered, .badge.DeliveryReady { color: var(--sky); border-color: #14374a; background: #0b1c26; }
-.badge.Issued { color: var(--accent); border-color: var(--accent-dim); background: #0c1f1d; }
-.badge.Failed, .badge.Refunded, .badge.Cancelled, .badge.WrittenOff { color: var(--neg); border-color: #58222f; background: #230b12; }
-.badge.AwaitingFunding { color: var(--warn); border-color: #574314; background: #201806; }
+.badge.Funded, .badge.Accepted, .badge.Repaid { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
+.badge.InProgress, .badge.Delivered, .badge.DeliveryReady { color: var(--sky); border-color: var(--sky-border); background: var(--sky-bg); }
+/* --accent-border, not --accent-dim: --accent-dim is a FILL token (it paints .nav-link.active) and
+   in light it is lighter than the --accent-bg it would edge, 1.11:1, so the pill lost its border
+   while every sibling state kept one (pos 1.38, warn 1.38, sky 1.40, neg 1.45). --accent-border
+   lands in that band at 1.41:1 light, and reads 2.19:1 in dark against 1.39-1.86 for the siblings,
+   a slightly firmer edge there rather than a missing one (deferred from review #43). */
+.badge.Issued { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg); }
+.badge.Failed, .badge.Refunded, .badge.Cancelled, .badge.WrittenOff { color: var(--neg); border-color: var(--neg-border); background: var(--neg-bg); }
+.badge.AwaitingFunding { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
 .badge.Draft { color: var(--muted-2); }
 
 .loading { color: var(--muted); padding: 60px 0; text-align: center; }
@@ -324,20 +557,20 @@ table.t { width: 100%; border-collapse: collapse; }
   align-items: center;
   gap: 8px;
   padding: 7px 12px;
-  border: 1px solid #1b4d3b;
+  border: 1px solid var(--pos-border);
   border-radius: 9px;
-  background: #0d2119;
+  background: var(--pos-bg);
   color: var(--pos);
   font-size: 12px;
   font-weight: 700;
 }
 .float-live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentcolor; }
-.float-live.is-waiting { color: var(--warn); border-color: #574314; background: #201806; }
+.float-live.is-waiting { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
 .float-stale {
   padding: 8px 12px;
-  border: 1px solid #574314;
+  border: 1px solid var(--warn-border);
   border-radius: 8px;
-  background: #201806;
+  background: var(--warn-bg);
   color: var(--warn);
   font-size: 12px;
 }
@@ -358,8 +591,8 @@ table.t { width: 100%; border-collapse: collapse; }
   border: 1px solid var(--border-2);
   border-radius: 16px;
   background:
-    radial-gradient(760px 260px at 92% -20%, rgba(56, 189, 248, 0.09), transparent 62%),
-    linear-gradient(145deg, #111923, #0e151e);
+    radial-gradient(760px 260px at 92% -20%, var(--sky-wash), transparent 62%),
+    linear-gradient(145deg, var(--well), var(--well-2));
   box-shadow: var(--shadow);
 }
 .float-capital-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
@@ -388,18 +621,18 @@ table.t { width: 100%; border-collapse: collapse; }
   align-items: center;
   border: 1px solid var(--border-2);
   border-radius: 999px;
-  background: #1a2430;
+  background: var(--panel-3);
 }
 .utilization-track > span {
   position: absolute;
   inset: 0 auto 0 0;
   min-width: 3px;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), #62e6d6);
-  box-shadow: 0 0 18px rgba(45, 212, 191, 0.22);
+  background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+  box-shadow: 0 0 18px var(--accent-glow-2);
   transition: width 0.45s ease;
 }
-.utilization-track i { z-index: 1; width: 1px; height: 6px; background: rgba(134, 151, 168, 0.45); }
+.utilization-track i { z-index: 1; width: 1px; height: 6px; background: var(--tick); }
 .float-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .float-metric {
   min-height: 128px;
@@ -437,7 +670,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 11px 15px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgba(18, 24, 33, 0.72);
+  background: var(--scrim);
   color: var(--muted);
   font-size: 12px;
 }
@@ -460,8 +693,8 @@ table.t { width: 100%; border-collapse: collapse; }
   border: 1px solid var(--border-2);
   border-radius: 16px;
   background:
-    radial-gradient(680px 240px at 74% -20%, rgba(45, 212, 191, 0.055), transparent 62%),
-    linear-gradient(145deg, #111923, #0e151e);
+    radial-gradient(680px 240px at 74% -20%, var(--accent-wash), transparent 62%),
+    linear-gradient(145deg, var(--well), var(--well-2));
   box-shadow: var(--shadow);
 }
 .rate-engine { margin-top: 12px; padding: 26px 28px 0; overflow: hidden; }
@@ -471,7 +704,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 27px 25px;
   border: 1px solid var(--border-2);
   border-radius: 13px;
-  background: rgba(10, 14, 20, 0.35);
+  background: var(--inset);
 }
 .rate-current > span { color: var(--muted); font-size: 15px; }
 .rate-current > strong {
@@ -485,20 +718,20 @@ table.t { width: 100%; border-collapse: collapse; }
 .rate-delta {
   display: inline-flex;
   padding: 7px 10px;
-  border: 1px solid #1c5c50;
+  border: 1px solid var(--accent-border);
   border-radius: 8px;
-  background: #0c201d;
+  background: var(--accent-bg);
   color: var(--pos);
   font-size: 11.5px;
   font-weight: 650;
 }
-.rate-delta.is-negative { border-color: #58222f; background: #230b12; color: var(--neg); }
+.rate-delta.is-negative { border-color: var(--neg-border); background: var(--neg-bg); color: var(--neg); }
 .rate-derivation {
   min-width: 0;
   padding: 24px 26px;
   border: 1px solid var(--border-2);
   border-radius: 13px;
-  background: rgba(10, 14, 20, 0.22);
+  background: var(--inset-2);
 }
 .rate-equation { display: grid; grid-template-columns: repeat(7, auto); align-items: center; gap: 10px; }
 .rate-term {
@@ -514,11 +747,11 @@ table.t { width: 100%; border-collapse: collapse; }
 }
 .rate-term strong { font-size: 30px; font-variant-numeric: tabular-nums; }
 .rate-term span { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.rate-term.growth { border-color: #1c5c50; }
+.rate-term.growth { border-color: var(--accent-border); }
 .rate-term.growth strong { color: var(--pos); }
-.rate-term.penalty { border-color: #58222f; }
+.rate-term.penalty { border-color: var(--neg-border); }
 .rate-term.penalty strong { color: var(--neg); }
-.rate-term.result { border-color: #1c4d68; }
+.rate-term.result { border-color: var(--sky-border-strong); }
 .rate-term.result strong { color: var(--sky); }
 .rate-operator { color: var(--muted); font-size: 27px; }
 .rate-scale { position: relative; min-height: 118px; margin-top: 27px; padding-top: 30px; }
@@ -545,12 +778,12 @@ table.t { width: 100%; border-collapse: collapse; }
   width: 15px;
   height: 15px;
   margin-top: 5px;
-  border: 3px solid #153b38;
+  border: 3px solid var(--accent-border);
   border-radius: 50%;
   background: var(--accent);
 }
 .rate-scale-label { position: absolute; top: 58px; display: grid; color: var(--muted); }
-.rate-scale-label strong { color: #b5c2cf; font-size: 16px; font-variant-numeric: tabular-nums; }
+.rate-scale-label strong { color: var(--text-2); font-size: 16px; font-variant-numeric: tabular-nums; }
 .rate-scale-label span { font-size: 11px; }
 .rate-scale-label.floor { left: 20px; }
 .rate-scale-label.base { left: 36.36%; transform: translateX(-50%); }
@@ -578,7 +811,7 @@ table.t { width: 100%; border-collapse: collapse; }
   height: 52px;
   padding: 0 16px;
   border-right: 1px solid var(--border);
-  background: rgba(22, 30, 41, 0.72);
+  background: var(--scrim);
   color: var(--muted);
   font-size: 10.5px;
   font-weight: 700;
@@ -591,7 +824,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 0 16px;
   border-top: 1px solid var(--border-2);
   border-right: 1px solid var(--border);
-  color: #cbd6e0;
+  color: var(--text-2);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -603,9 +836,9 @@ table.t { width: 100%; border-collapse: collapse; }
   align-items: center;
   gap: 7px;
   padding: 5px 9px;
-  border: 1px solid #1c4634;
+  border: 1px solid var(--pos-border);
   border-radius: 999px;
-  background: #0e2018;
+  background: var(--pos-bg);
   color: var(--pos);
   font-size: 11px;
   font-weight: 700;
@@ -651,7 +884,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 16px;
   border: 1px solid var(--border-2);
   border-radius: 12px;
-  background: #111923;
+  background: var(--well);
 }
 .loss-stages li > span {
   width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center;
@@ -667,9 +900,9 @@ table.t { width: 100%; border-collapse: collapse; }
   justify-items: center;
   gap: 8px;
   padding: 24px;
-  border: 1px solid #58222f;
+  border: 1px solid var(--neg-border);
   border-radius: 14px;
-  background: #180b10;
+  background: var(--neg-bg);
   color: var(--muted);
   text-align: center;
 }
@@ -726,9 +959,13 @@ table.t { width: 100%; border-collapse: collapse; }
 .portal-status { margin: 20px 0; }
 .portal-body { color: var(--text); line-height: 1.55; margin: 0 0 20px; }
 .portal-accepted { color: var(--pos); }
+/* Deliberately still --accent-dim, unlike .badge.Issued and .job-chip.is-open. Here the border
+   sits on a solid --accent fill rather than a tint, and --accent-dim is the DARKER of the two
+   there: 6.52:1 dark / 4.62:1 light against the fill, where --accent-border would drop it to
+   4.18:1 / 3.64:1. Swapping it would weaken the primary CTA's edge, not fix it. */
 .portal-accept {
   width: 100%; min-height: 46px; border-radius: 10px; border: 1px solid var(--accent-dim);
-  background: var(--accent); color: #04120e; font: inherit; font-weight: 700; font-size: 15px; cursor: pointer;
+  background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 700; font-size: 15px; cursor: pointer;
 }
 .portal-accept:disabled { opacity: 0.6; cursor: default; }
 .portal-note { margin: 16px 0 0; color: var(--pos); font-size: 13.5px; text-transform: capitalize; }
@@ -749,7 +986,14 @@ table.t { width: 100%; border-collapse: collapse; }
   background: var(--bg); color: var(--text); border: 1px solid var(--border-2); border-radius: 8px;
   font: inherit; font-size: 13px;
 }
-.approval-reason:focus { outline: none; border-color: var(--accent-dim); }
+/* The only `outline: none` in this file used to substitute a border swap to --accent-dim, which
+   assumes that token is darker than the field. In light it is LIGHTER, so focusing dropped the
+   border from 1.41:1 to 1.10:1 against the field: focus made the indicator worse. It never
+   conformed in dark either (a 1.59:1 isoluminant nudge). A real ring, matching the pattern this
+   file already uses for .theme-toggle, at 5.39:1 light / 8.26:1 dark against the field.
+   --sky rather than --accent because approvals/page.tsx already paints the deep-linked card's
+   border with --accent (audit finding). */
+.approval-reason:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 .approval-result { margin: 12px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .approval-result.approved, .approval-result.alternative_requested { color: var(--pos); }
 .approval-result.rejected { color: var(--neg); }
@@ -759,7 +1003,7 @@ table.t { width: 100%; border-collapse: collapse; }
 /* ── A12 workforce manifest gallery ── */
 .workforce-page {
 
-  --workforce-line: #263544;
+  --workforce-line: var(--border-3);
   display: grid;
   gap: 18px;
 }
@@ -777,7 +1021,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(18, 24, 33, 0.72);
+  background: var(--scrim);
 }
 .workforce-policy::before {
   content: "◇";
@@ -789,8 +1033,8 @@ table.t { width: 100%; border-collapse: collapse; }
   border: 1px solid var(--border);
   border-radius: 14px;
   background:
-    radial-gradient(560px 220px at 8% -30%, rgba(45, 212, 191, 0.06), transparent 70%),
-    linear-gradient(180deg, rgba(18, 24, 33, 0.96), rgba(13, 19, 27, 0.96));
+    radial-gradient(560px 220px at 8% -30%, var(--accent-wash), transparent 70%),
+    linear-gradient(180deg, var(--panel-a), var(--panel-b));
   box-shadow: var(--shadow);
 }
 .workforce-active { padding: 18px 20px 20px; }
@@ -849,15 +1093,15 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 11px;
   border: 1px solid var(--border-2);
   border-radius: 10px;
-  background: linear-gradient(145deg, rgba(20, 29, 40, 0.95), rgba(13, 19, 27, 0.95));
+  background: linear-gradient(145deg, var(--panel-a), var(--panel-b));
 }
 .active-agent-icon,
 .manifest-icon {
   display: grid;
   place-items: center;
-  border: 1px solid #195b58;
+  border: 1px solid var(--accent-border);
   border-radius: 9px;
-  background: #0c2928;
+  background: var(--accent-bg);
   color: var(--accent);
   font-size: 21px;
   line-height: 1;
@@ -868,8 +1112,8 @@ table.t { width: 100%; border-collapse: collapse; }
   flex: 0 0 auto;
 }
 .active-agent-icon.sky {
-  border-color: #174a69;
-  background: #0c2232;
+  border-color: var(--sky-border-strong);
+  background: var(--sky-bg);
   color: var(--sky);
 }
 .active-agent div { min-width: 0; display: grid; gap: 2px; }
@@ -918,12 +1162,12 @@ table.t { width: 100%; border-collapse: collapse; }
   min-width: 0;
   border: 1px solid var(--border-2);
   border-radius: 12px;
-  background: linear-gradient(160deg, #111923, #0d131b);
+  background: linear-gradient(160deg, var(--well), var(--bg-2));
 }
 .manifest-featured {
   padding: 16px;
   border-color: color-mix(in srgb, var(--accent) 75%, var(--border));
-  box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.05), 0 14px 40px rgba(0, 0, 0, 0.22);
+  box-shadow: inset 0 0 0 1px var(--accent-wash), var(--shadow-lg);
 }
 .manifest-card-head,
 .manifest-identity {
@@ -955,19 +1199,19 @@ table.t { width: 100%; border-collapse: collapse; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid #176d55;
+  border: 1px solid var(--pos-border-strong);
   border-radius: 7px;
   padding: 4px 7px;
-  background: #0b241c;
+  background: var(--pos-bg);
   color: var(--pos);
   font-size: 10px;
   font-weight: 700;
   white-space: nowrap;
 }
-.manifest-status.is-active { background: #103129; }
+.manifest-status.is-active { background: var(--pos-bg-strong); }
 .manifest-description {
   margin: 15px 0 0;
-  color: #c4d0dc;
+  color: var(--text-2);
   font-size: 12.5px;
   line-height: 1.65;
 }
@@ -982,10 +1226,10 @@ table.t { width: 100%; border-collapse: collapse; }
   align-items: center;
   gap: 6px;
   padding: 5px 7px;
-  border: 1px solid #1c5d72;
+  border: 1px solid var(--sky-border-strong);
   border-radius: 6px;
-  background: #0a1b26;
-  color: #55c8ec;
+  background: var(--sky-bg);
+  color: var(--sky-bright);
   font-size: 10px;
   white-space: nowrap;
 }
@@ -1014,7 +1258,7 @@ table.t { width: 100%; border-collapse: collapse; }
   place-items: center;
   border: 1px solid var(--border-2);
   border-radius: 9px;
-  background: #101923;
+  background: var(--well);
   color: var(--accent);
   font-size: 19px;
 }
@@ -1034,7 +1278,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 5px 13px 10px;
   border: 1px solid var(--border-2);
   border-radius: 10px;
-  background: rgba(21, 30, 41, 0.82);
+  background: var(--scrim);
 }
 .watcher-config label,
 .watcher-readonly {
@@ -1064,12 +1308,12 @@ table.t { width: 100%; border-collapse: collapse; }
 .watcher-config input::placeholder { color: var(--muted-2); }
 .watcher-config input:focus-visible {
   border-radius: 4px;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sky) 45%, transparent);
+  box-shadow: 0 0 0 2px var(--focus-wash);
 }
 .watcher-config input:disabled { opacity: 0.7; }
 .watcher-readonly code {
   overflow: hidden;
-  color: #ccd7e2;
+  color: var(--text-2);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 10.5px;
   text-overflow: ellipsis;
@@ -1088,15 +1332,26 @@ table.t { width: 100%; border-collapse: collapse; }
   margin-top: 11px;
   border: 0;
   border-radius: 7px;
-  background: linear-gradient(90deg, #159b96, #23b7ae);
-  color: #041817;
+  background: linear-gradient(90deg, var(--cta-from), var(--cta-to));
+  color: var(--on-accent);
   font: inherit;
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
-  box-shadow: 0 7px 20px rgba(35, 183, 174, 0.13);
+  box-shadow: 0 7px 20px var(--cta-glow);
 }
+/* brightness(1.08) is theme-blind while --on-accent flips polarity (#04120e dark, #ffffff
+   light). Brightening the fill RAISES contrast against a near-black label (dark: 5.61 -> 6.45)
+   and LOWERS it against a white one (light: 4.28 -> 3.73), so the same rule reads as a hover
+   affordance in dark and a contrast regression in light.
+   brightness(0.92) is not the fix: `filter` applies to the element's content too, so it darkens
+   the white label as well and still lands at 4.13:1. The light theme therefore gets a
+   non-filter affordance, scoped so dark cannot regress (audit finding). */
 .watcher-activate:hover:not(:disabled) { filter: brightness(1.08); }
+:root[data-theme='light'] .watcher-activate:hover:not(:disabled) {
+  filter: none;
+  box-shadow: 0 7px 20px var(--cta-glow), 0 0 0 3px var(--cta-glow);
+}
 .watcher-activate:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 .watcher-activate:disabled { cursor: not-allowed; opacity: 0.46; box-shadow: none; }
 .watcher-feedback { min-height: 30px; padding-top: 8px; }
@@ -1121,8 +1376,8 @@ table.t { width: 100%; border-collapse: collapse; }
 .manifest-soon h3 { margin-top: 15px; }
 .coming-soon {
   margin-top: 14px;
-  border-color: #1d5271;
-  background: #0b1b27;
+  border-color: var(--sky-border-strong);
+  background: var(--sky-bg);
   color: var(--sky);
 }
 .manifest-soon .manifest-description { min-height: 82px; }
@@ -1160,4 +1415,351 @@ table.t { width: 100%; border-collapse: collapse; }
   .manifest-soon:last-child { grid-column: auto; }
   .watcher-config label,
   .watcher-readonly { grid-template-columns: 1fr; gap: 4px; padding: 8px 0; }
+}
+
+/* ── V7 job detail ── */
+.job-grid { display: grid; gap: 2px; }
+.job-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--border); }
+.job-row:first-child { border-top: none; }
+.job-row-label { color: var(--muted); font-size: 12.5px; }
+.job-row-value { font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; word-break: break-all; }
+
+.job-figure { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.job-figure-muted { font-size: 17px; font-weight: 600; color: var(--muted); }
+.job-chip { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-2); }
+/* Same swap, same reason as .badge.Issued above. */
+.job-chip.is-open { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg); }
+.job-chip.is-repaid { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
+
+/* lifecycle rail */
+.job-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 0; }
+.job-stage { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 108px; font-size: 12.5px; position: relative; }
+.job-stage::after { content: ""; flex: 1; height: 2px; background: var(--border); margin-right: 6px; }
+.job-stage:last-child::after { display: none; }
+.job-stage-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border-2); flex: none; }
+.job-stage-name { color: var(--muted-2); white-space: nowrap; }
+.job-stage.is-done .job-stage-dot { background: var(--pos); }
+.job-stage.is-done .job-stage-name { color: var(--muted); }
+.job-stage.is-done::after { background: var(--pos-border); }
+.job-stage.is-current .job-stage-dot { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-glow-3); }
+.job-stage.is-current .job-stage-name { color: var(--text); font-weight: 700; }
+.job-alt-terminal { margin: 0; font-size: 13px; color: var(--warn); }
+
+/* budget bar */
+.job-budget { display: grid; gap: 8px; }
+.job-budget-bar { height: 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border); overflow: hidden; }
+.job-budget-fill { height: 100%; background: linear-gradient(90deg, var(--sky), var(--accent)); transition: width 0.4s ease; }
+.job-budget-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.job-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
+.job-links a { color: var(--sky); }
+
+/* per-job timeline */
+.job-timeline { list-style: none; margin: 0; padding: 0; position: relative; }
+.job-timeline::before { content: ""; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 1px; background: linear-gradient(var(--border-2), var(--border), transparent); }
+.job-event { display: flex; gap: 12px; padding: 8px 0; position: relative; }
+.job-event-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); margin-top: 5px; flex: none; z-index: 1; }
+.job-event.tone-funding .job-event-dot { background: var(--accent); }
+.job-event.tone-owner .job-event-dot { background: var(--warn); }
+.job-event.tone-qa .job-event-dot { background: var(--violet); }
+.job-event.tone-worker .job-event-dot { background: var(--sky); }
+.job-event.tone-brain .job-event-dot { background: var(--pos); }
+.job-event-body { min-width: 0; flex: 1; }
+.job-event-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.job-event-actor { font-size: 12.5px; font-weight: 700; }
+.job-event-text { font-size: 13px; flex: 1; min-width: 0; }
+.job-event-amount { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
+.job-event-meta { display: flex; gap: 8px; margin-top: 1px; font-size: 11.5px; color: var(--muted-2); }
+
+@media (max-width: 640px) {
+  .job-stages { flex-direction: column; }
+  .job-stage::after { display: none; }
+  .job-row { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .job-row-value { text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .job-budget-fill { transition: none; }
+}
+
+/* ── F1 Live Money Graph + F2 Score Ring (V10/V11, PRD §8) ── */
+.mg {
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.mg-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px 6px;
+}
+.mg-heading { min-width: 0; }
+.mg-heading h2 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
+.mg-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--pos-border);
+  border-radius: 999px;
+  background: var(--pos-bg);
+  color: var(--pos);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.mg-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
+.mg-live.is-waiting { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
+.mg-beat {
+  margin: 8px 0 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--muted);
+  min-height: 25px;
+  /* No idle opacity. Dimming --muted to 0.55 put this 17px/600 caption at 2.50:1 in light and
+     2.69:1 in dark, i.e. failing in BOTH themes, on the resting state of the flagship panel.
+     Tuning the value does not help: --muted needs 0.83 light / 0.84 dark to clear 4.5:1, which
+     is no perceptible dim at all. The idle-to-beat emphasis is carried by the hue rules below
+     instead, so idle now sits at full --muted: 6.96:1 light / 5.95:1 dark (audit finding). */
+  transition: color 0.3s;
+}
+.mg-beat-fund, .mg-beat-spend { color: var(--sky); }
+.mg-beat-snap, .mg-beat-fall { color: var(--accent); }
+.mg-beat-reject { color: var(--warn); }
+.mg-beat-flywheel { color: var(--violet); }
+
+.mg-stage { padding: 0 10px 8px; }
+.mg-svg { width: 100%; height: auto; display: block; }
+
+.mg-pipe {
+  stroke: var(--border-2);
+  stroke-width: 2;
+  stroke-dasharray: 2 8;
+  stroke-linecap: round;
+  opacity: 0.75;
+  animation: mg-pipeflow 1.4s linear infinite;
+}
+.mg-pipe-snap, .mg-pipe-repay { stroke: var(--pipe-accent); opacity: 0.95; }
+@keyframes mg-pipeflow { to { stroke-dashoffset: -10; } }
+
+.mg-drop-fund, .mg-drop-spend { fill: var(--sky); }
+.mg-drop-snap, .mg-drop-fall-pool { fill: var(--accent); }
+.mg-drop-fall-op { fill: var(--pos); }
+
+.mg-box { fill: var(--panel-2); stroke: var(--border-2); stroke-width: 1.5; }
+.mg-node .mg-box[style] { stroke: var(--n); filter: drop-shadow(0 0 8px color-mix(in srgb, var(--n) 32%, transparent)); }
+.mg-name { fill: var(--muted); font-size: 13px; font-weight: 600; text-anchor: middle; }
+.mg-bal { fill: var(--text); font-size: 14px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
+
+/* F2 Score Ring: only the percentage sits inside the circle; captions flow beneath it. */
+.ring { width: 128px; flex: none; text-align: center; }
+.ring-figure { position: relative; width: 104px; height: 104px; margin: 0 auto; }
+.ring-figure.is-bumping { animation: ring-bump 0.5s ease; }
+@keyframes ring-bump { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.06); } }
+.ring-svg { width: 100%; height: 100%; display: block; }
+.ring-track { fill: none; stroke: var(--border-2); stroke-width: 8; }
+.ring-arc {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.1s linear;
+}
+.ring-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.ring-pct { font-size: 23px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ring-cap { margin-top: 8px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.ring-hint { margin-top: 1px; font-size: 11.5px; color: var(--muted-2); }
+.ring-hint b { color: var(--pos); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) {
+  .mg-head { flex-direction: column; align-items: flex-start; }
+  .ring { margin: 0 auto; }
+}
+/* Same reasoning as the live badge above: the pipe shimmer animates indefinitely (SC 2.2.2), and
+   the ring bump and beat transition are brief and driven by data rather than interaction, so no
+   criterion demands removing them; they are decorative, so they stop anyway.
+   NOT SC 2.3.3, which covers interaction-triggered motion. */
+@media (prefers-reduced-motion: reduce) {
+  .mg-pipe { animation: none; }
+  .ring-figure.is-bumping { animation: none; }
+  .mg-beat { transition: none; }
+}
+
+/* ── theme toggle ── */
+.sidebar-foot-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.theme-toggle {
+  width: 30px; height: 30px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--border-2); background: var(--panel-2); }
+.theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Sized in a block so the empty pre-mount span holds the same footprint and nothing reflows
+   when the icon appears. */
+.theme-toggle-icon { width: 15px; height: 15px; display: block; fill: none; stroke: currentColor; stroke-width: 1.7; }
+
+/* ══ Card system ══
+ *
+ * Backs components/Card.tsx, components/Badge.tsx and components/PageHeader.tsx, ported from the
+ * feat/ui-rework branch. That branch expressed the same system in Tailwind utilities plus
+ * framer-motion; this dashboard has neither dependency and is staying that way, so what is ported
+ * is the visual system and the component API, not the implementation. Every colour resolves through
+ * a token that already existed: the port adds no literal and no hue.
+ *
+ * Mapping from the branch's token names: --color-card -> --panel, --color-border -> --border,
+ * --color-divider -> --border, --color-well -> --inset, --color-faint -> --muted-2,
+ * --color-muted -> --muted, --color-accent -> --accent, --shadow-card -> --shadow.
+ *
+ * Two things from the branch are deliberately dropped rather than translated. The card's "inset top
+ * highlight in dark" is a light-leak decoration, and the branch's filled status pills carried a
+ * tinted fill per state; both pull against the flat, monochrome, semantic-colour-only register this
+ * UI is built in, and the highlight would have needed a new white literal to express. Surfaces here
+ * are flat fills separated by hairlines and one shadow token, with no gradient and no glow.
+ *
+ * .card-shell is a sibling of .card, not a replacement: .card keeps its gradient and its 12px
+ * radius for the pages that already use it, and nothing here restyles it.
+ *
+ * Contrast, computed rather than eyeballed, dark / light, worst case across the three surfaces a
+ * card can paint (--panel, --panel-2, .card-well):
+ *   .card-heading, --text        14.20 / 15.19
+ *   .card-meta, --muted-2         4.54 / 5.03
+ *   .card-body prose, --text-2   11.16 / 8.74
+ *   .page-header-sub, --muted     5.55 / 5.86  (this one sits on the page radial, not a card)
+ *   .status-badge worst tint      4.54 / 4.63  (--muted-2 dark, --warn light)
+ * .page-header h1 in --text is 14.08 / 13.85 on the same radial. The hairlines are not text and are
+ * not held to 4.5: --border reads 1.24 / 1.28 on --panel.
+ */
+.card-shell {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+/* A real header row, so a card's title is a landmark a screen reader can jump to and not a styled
+   paragraph. 46px is the floor, not the height: a two-line title grows the row. */
+.card-head {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.card-heading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* CardTitle, the back-compat kicker, is the same heading standing alone inside a body. */
+.card-heading-block { margin-bottom: 16px; }
+.card-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.card-body { padding: 20px; }
+/* The nested canvas for visuals. --inset rather than --well because it is an alpha over whatever
+   surface it lands on, so it recedes from its parent in both themes instead of only in light:
+   1.03:1 dark and 1.08:1 light against --panel, where --well would give 1.01:1 dark. At that
+   separation the recession is really carried by the hairline, which is why the border is not
+   optional here. */
+.card-well {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--inset);
+}
+
+/* Status as a dot plus a label rather than a filled pill: the same information with one hue
+   instead of three, which is what keeps a table of twelve states quiet. The dot inherits
+   currentcolor, so each state is a single declaration and the tint cannot drift from the text.
+   The kind names are the contract's state names, so they are the class names too, matching the
+   .badge.<State> convention this file already uses. */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.status-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: currentcolor;
+}
+.status-badge.Funded, .status-badge.Accepted, .status-badge.Repaid { color: var(--pos); }
+.status-badge.InProgress, .status-badge.Delivered, .status-badge.DeliveryReady { color: var(--sky); }
+.status-badge.Issued { color: var(--accent); }
+.status-badge.AwaitingFunding { color: var(--warn); }
+.status-badge.Failed, .status-badge.Refunded, .status-badge.WrittenOff { color: var(--neg); }
+.status-badge.Draft, .status-badge.Cancelled { color: var(--muted-2); }
+
+/* Page header: one bold line and a muted lede, the register the rest of the product uses. Sibling
+   of .topbar/.page-title, which the current pages still use. */
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0 24px;
+}
+.page-header-text { min-width: 0; }
+.page-header h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 3.4vw, 2.2rem);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+.page-header-sub {
+  max-width: 560px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: clamp(0.9rem, 2vw, 1rem);
+  line-height: 1.65;
+}
+.page-header-aside { flex: none; }
+@media (min-width: 640px) {
+  .page-header { padding-top: 16px; }
+}
+/* The branch animated these three nodes with framer-motion's fadeUp and a per-node stagger. Two
+   keyframes and a delay reproduce it without the dependency, and without making PageHeader a
+   client component: it has no state, so as plain CSS it renders on the server. */
+@keyframes page-header-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+/* Staggered on the three leaves, not on the wrapper: nesting one rise inside another would
+   compound both the transform and the opacity. */
+.page-header h1, .page-header-sub, .page-header-aside {
+  animation: page-header-rise 0.32s ease-out both;
+}
+.page-header-sub { animation-delay: 0.06s; }
+.page-header-aside { animation-delay: 0.12s; }
+/* Entry motion is decorative, and `animation: none` on a `both`-filled animation returns the node
+   to its resting opacity rather than freezing it at 0. */
+@media (prefers-reduced-motion: reduce) {
+  .page-header h1, .page-header-sub, .page-header-aside { animation: none; }
 }

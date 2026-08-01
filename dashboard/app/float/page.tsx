@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatBps, formatUsdcExact, isSafeExplorerUrl, relativeTime } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import Badge from '@/components/Badge';
 import type {
   FloatLossTotals,
   FloatOpenAdvance,
@@ -214,7 +215,11 @@ function OpenAdvances({
                     <td>{formatUsdcExact(advance.feeUsdc)} <span className="u">USDC</span></td>
                     <td>{formatBps(advance.rateBps)}</td>
                     <td>{openedAt ? relativeTime(openedAt) : '—'}</td>
-                    <td><span className="float-issued"><i />{advance.status}</span></td>
+                    {/* Was a hand-rolled dot-plus-label span, .float-issued, which painted every
+                        row in the positive tint. advance.status is AdvanceStatus, so it can also be
+                        Repaid or WrittenOff, and a written-off advance rendering green is a lie the
+                        markup could tell. Badge keys the tint off the state name, so it cannot. */}
+                    <td><Badge kind={advance.status} /></td>
                     <td>
                       {explorerUrl && isSafeExplorerUrl(explorerUrl) ? (
                         <a href={explorerUrl} target="_blank" rel="noreferrer">View ↗</a>
@@ -336,7 +341,10 @@ export default function FloatPage() {
   }
 
   const utilizationWithinCap = Math.max(0, Math.min(100, (snapshot.utilizationBps / 8_000) * 100));
-  const feesAccrued = snapshot.feesAccruedUsdc ?? h2Pool?.feesAccruedUsdc ?? null;
+  // Chain scan only: the H2 stream reports 0 fees (it doesn't compute chain fees), and a
+  // non-null 0 masked the honest "Awaiting…" placeholder — an unknown rendered as a
+  // measured 0.00. Unknown must read as unknown. (review: chain-authoritative fee path)
+  const feesAccrued = snapshot.feesAccruedUsdc ?? null;
   const displayedAdvances = snapshot.openAdvances ?? h2Advances;
   const displayedRate = snapshot.orgRateBps ?? h2Pool?.orgRateBps ?? null;
 
@@ -414,6 +422,21 @@ export default function FloatPage() {
       <p className="float-accounting-note">
         <span aria-hidden="true">i</span>
         LP-owned capital excludes the reserve. Values observed at Arc block {snapshot.blockNumber.toLocaleString('en-US')}.
+        {/* One caption cannot honestly cover both when they are read at different blocks. The
+            view figures are always at blockNumber; history comes from a cache whose scan may
+            lag, and the two are the same quantity in places (totalOutstanding is the sum of open
+            principals, FloatPool.sol), so a silent lag reads as a contradiction on screen. */}
+        {snapshot.historyStatus === 'pending' && snapshot.historyScannedThroughBlock !== null ? (
+          <> History below is scanned through block{' '}
+            {snapshot.historyScannedThroughBlock.toLocaleString('en-US')}
+            {snapshot.historyScannedThroughBlock < snapshot.blockNumber
+              ? ' and is still catching up.'
+              : /* The cache can also be scanned PAST this response's head, because a concurrent
+                   request extended it after these views were read. Both directions are mixed
+                   observations and both read pending, but only one of them is the history lagging,
+                   so the copy must not claim it is. */
+                ', so the figures above are the older of the two.'}</>
+        ) : null}
       </p>
 
       <RateEngine snapshot={snapshot} fallbackRateBps={displayedRate} />

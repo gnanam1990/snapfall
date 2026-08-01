@@ -2,6 +2,12 @@
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+keystores/
 
 # node / bun
 node_modules/
@@ -30,3 +36,9 @@ daemon/snapfall.db-shm
 daemon/snapfalld
 *.redeploy-guard.json
 *.redeploy-guard.json.pending
+
+# demo run state (V12 seed_demo)
+.demo/
+
+# local editor/preview tooling; the port and port choice are machine-specific
+.claude/launch.json

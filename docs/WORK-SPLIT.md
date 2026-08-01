@@ -80,7 +80,7 @@ After Friday: schema changes need all-three agreement + version bump. This is wh
 
 ### Phase 2 · Mon 27 Jul – Sun 2 Aug
 - **A5. Explorer helper.** tx/address → explorer URL, exposed through H2 for every financial row. *(0.25d)*
-- **A6. CI + test wiring.** Contracts' 84 tests in CI; wire AT-16/17/18 harnesses (17: second advance on prior job reverts; 18: facilitator endpoints asserted to be Circle's from V1's fixtures). *Done when:* one CI run executes contract + integration suites green. *(1d)*
+- **A6. CI + test wiring.** Contracts' full suite in CI; wire AT-16/17/18 harnesses (17: second advance on prior job reverts; 18: facilitator endpoints asserted to be Circle's from V1's fixtures). *Done when:* one CI run executes contract + integration suites green. *(1d)*
 - **A7. Testnet ops kit.** Wallet funding script, balance checks, redeploy script honoring the 48h cadence, gas/faucet guards. *Done when:* one command reports all wallets healthy or tops them up. *(0.5d)*
 - **A8. USYC sweep.** Interface + mock implementation; timebox 0.5d to investigate real testnet USYC — integrate if trivially available, else mock ships. *(0.5–1d)*
 - **A9. F3 Humanized activity feed.** Named agents (Brain, workers) rendered as team chat from the event stream; hosts the approval moment surface Vasanth's inbox actions land in. *Done when:* the rejection beat reads as a conversation on screen during a live run. *(1d)*

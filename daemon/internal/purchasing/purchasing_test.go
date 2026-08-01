@@ -70,7 +70,10 @@ func newPurchaser(t *testing.T) (*Purchaser, *approval.Lifecycle, *fakeClock, *s
 	l := approval.New(st, fc.Now)
 	l.Policy = func() (policy.PolicyConfig, string) { return policy.DemoPolicy(), "pol_7" }
 	l.Spend = func(string) policy.SpendState { return policy.SpendState{} }
-	p := New(l, st, fc, "org_demo", 5*time.Minute)
+	// nil fund + nil led: these six tests predate V6 and assert the pre-payment behaviour.
+	// Both nils are honoured explicitly (quoteIntoIntent returns early, the executor branches
+	// to pendingSettlement, release is a no-op), so the honest stop is what they still exercise.
+	p := New(l, st, nil, nil, fc, "org_demo", 5*time.Minute)
 	return p, l, fc, st
 }
 

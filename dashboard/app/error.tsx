@@ -13,7 +13,9 @@ export default function Error({ error, reset }: { error: Error & { digest?: stri
         onClick={reset}
         style={{
           background: 'var(--accent)',
-          color: '#06231f',
+          // Not a literal: the light theme's accent is a DARK teal, so a hardcoded near-black
+          // foreground here rendered at roughly 1.5:1. --on-accent is the pinned pair.
+          color: 'var(--on-accent)',
           border: 'none',
           borderRadius: 999,
           padding: '8px 18px',

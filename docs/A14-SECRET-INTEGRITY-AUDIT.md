@@ -1,16 +1,15 @@
 # A14 Secret and Recording-Integrity Audit
 
-Audit time: 2026-07-24T13:41:35Z
+Audit refreshed: 2026-08-01
 
-Audited baseline: `main` at `4260a9c3880f3e8fe674976f36730bc783d8e5b1`
+Audited integration baseline: `main` at `e562c4aed36f8b626d9d30cafee2faa6103fecab`
 
 ## Result
 
-The repository and all reachable Git history are clean of high-confidence private-key,
-provider-token, bearer-token, mnemonic, embedded-credential URL, and private-key-file
-findings. No committed runtime logs, screenshots, HAR captures, or video files exist to
-inspect. `sidecar/.env.example` is the only `.env` path ever committed and all of its secret
-values are empty.
+The repository's current tracked tree and every ref-reachable commit tree are clean of the
+high-confidence credential formats listed below. No committed runtime logs, screenshots, HAR
+captures, or video files exist to inspect. `sidecar/.env.example` is the only `.env` path ever
+committed; every reachable version has empty values for its secret-named variables.
 
 No credential rotation or history rewrite is required by this audit.
 
@@ -20,20 +19,31 @@ Run the repeatable filename-only preflight from the repository root:
 ./scripts/a14-audit
 ```
 
-The command reports file paths, never matching values. It scans the current tracked tree and
-every reachable commit. High-confidence matches fail the command; tracked recording artifacts
-are inventoried for the mandatory manual visual review below.
+The command reports file paths and variable names, never matching values. It scans the current
+tracked tree and every ref-reachable commit tree. It fails closed for shallow clones, empty
+history, missing objects, or Git command errors, and prints its revision/path coverage
+denominator. High-confidence matches fail the command; tracked recording artifacts are
+inventoried for the mandatory manual visual review below.
+
+The automated preflight does not claim to scan unreachable objects, force-pushed GitHub
+objects absent from local refs, commit/tag messages, untracked files, arbitrary bearer tokens,
+or BIP-39 word sequences. A confirmed credential leak requires rotation even if a later local
+checkout cannot reach the leaked object.
 
 ## Secret review
 
 The audit covered:
 
-- PEM private-key headers; AWS, GitHub, Slack, OpenAI-style and Telegram token formats;
-- hard-coded 32-byte values assigned to key, mnemonic, API-key, owner-token, approval-secret,
-  auth-token, or bot-token names;
+- PEM private-key headers; AWS, GitHub, Slack, OpenAI/Anthropic-style and Telegram token
+  formats;
+- quoted or unquoted 32-byte values assigned to private-key, API-key, owner-token,
+  approval-secret, auth-token, access-key, bot-token, or seed-phrase names;
+- non-empty assignments to Snapfall's real credential variables, including Circle, H2/H3,
+  treasury, customer, LP, and owner credentials;
+- raw `--private-key` arguments, Circle API-key shapes, and JSON V3 keystore structures;
 - customer `act_` credentials and URLs containing embedded username/password material;
-- all historical filenames resembling `.env`, keystores, private keys, credentials, or seed
-  material;
+- all historical filenames resembling `.env`, keystores, private keys, credentials, mnemonics,
+  or seed phrases, including paths introduced only by merge resolution;
 - all tracked logs and media, including deleted paths still reachable from Git history;
 - runtime secret ingress and logging call sites in the daemon, dashboard, and sidecar.
 
@@ -42,8 +52,7 @@ ephemeral keys. Public contract addresses, transaction hashes, event topics, ABI
 Go/npm integrity hashes are not secrets. Runtime credentials continue to enter through
 environment variables or encrypted Foundry keystores; the code does not log their values.
 
-GitGuardian also passed on the audited A13 head before it merged into this baseline. That
-external result is supporting evidence, not a substitute for the history scan above.
+GitGuardian remains supporting evidence, not a substitute for the fail-closed history scan.
 
 ## Recording-integrity review
 
@@ -73,13 +82,15 @@ This proves the deployment only. It does not prove that the complete demo spine 
   but `sidecar/README.md` correctly states that settlement is not broadcast.
 - `sidecar/fixtures/v1-circle-payment.json`, the declared real Circle V1 payment fixture, is
   not present. Therefore AT-18's endpoint-contract test is green, but no real Circle settlement
-  fixture is currently available as recording evidence.
+  fixture is currently available as recording evidence. The human-gated path to that proof is
+  maintained in `docs/V3-CIRCLE-SETUP.md`.
 - No screenshots or video fixtures are committed. This audit cannot certify footage that does
   not yet exist.
 
 ### Gate before recording or publishing
 
-For every on-chain beat in PRD Appendix A.1, capture the Arc explorer transaction hash and
+Follow `docs/SPINE-RUNS.md` for the executable run and evidence format. For every on-chain beat
+in PRD Appendix A.1, capture the Arc explorer transaction hash and
 confirm its receipt status, contract address, emitted events, amounts, and ordering against the
 daemon's indexed row. The opening zero-balance view and explicitly off-chain rejection/QA
 beats must be labeled as such. The final edit must disclose that it is a replay of real runs,

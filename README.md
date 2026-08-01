@@ -4,93 +4,104 @@
 
 > "We gave our AI business zero dollars and one customer. Watch it finance itself."
 
-Arc "Programmable Money" Hackathon (Encode x Circle) · Tracks: Agentic Economy + DeFi · Final submission: Aug 8, 2026 (buffer Aug 9 AoE)
+Snapfall is an autonomous AI workforce that starts with an empty treasury. When a customer
+commissions a job, the business borrows working capital against the receivable it is owed
+(the **snap**), buys the data and does the work, then repays the lender out of the
+customer's settlement (the **fall** — a single-transaction waterfall). Every dollar — the
+advance, the expenses, the repayment, the operator's take — moves on Arc and is verifiable
+on the explorer without trusting the operator.
 
-## Source of truth
-- [`docs/PRD.md`](docs/PRD.md) — Snapfall PRD/SRS v4.1 FINAL. Read §14 (Delivery Plan) first.
+Arc Programmable Money Hackathon (Encode × Circle) · Agentic Economy + DeFi · CP3 submission
+Aug 9, 2026.
+
+- [`docs/PRD.md`](docs/PRD.md) — the product/spec definition.
+- [`docs/CP2-SUBMISSION.md`](docs/CP2-SUBMISSION.md) — the CP2 progress submission.
+
+## Live on Arc testnet
+
+Three contracts are deployed on Arc testnet (chain `5042002`), and two jobs have run the
+full spine end to end — funded, advanced, delivered, settled.
+
+| Contract | Address |
+| --- | --- |
+| JobVault | [`0xF3830D7C3B8ca873bB0b277c0e179999e3d52681`](https://testnet.arcscan.app/address/0xF3830D7C3B8ca873bB0b277c0e179999e3d52681) |
+| FloatPool | [`0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5`](https://testnet.arcscan.app/address/0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5) |
+| AuditAnchor | [`0x7CDBF8a6D33d4c4C55fb94447E7E90905b3672c6`](https://testnet.arcscan.app/address/0x7CDBF8a6D33d4c4C55fb94447E7E90905b3672c6) |
+
+**The settlement that proves the model** —
+[`0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b`](https://testnet.arcscan.app/tx/0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b).
+In that one transaction the capital pool is repaid at **log index 12** and the operator is
+paid at **log index 15**. Pool first, operator second — and that ordering is the contract's
+control flow, not a convention or an off-chain promise: `acceptDelivery` calls
+`repayAdvance` before it transfers the operator's net. A lender can confirm they are made
+whole before the operator takes a cent by reading the transaction, trusting no one.
+
+## The advance rate is credit, not a number
+
+What a business can borrow against its receivables is set by its on-chain track record, and
+the dashboard reads it live from `FloatPool.advanceRate(org)`:
+
+**50%** → **55%** (block 53290364) → **60%** (block 53613272)
+
+Each accepted job raises the rate **+5%** (`GROWTH_BPS`); each write-off lowers it **−15%**
+(`PENALTY_BPS`), floored at **30%** and capped at **85%**. The penalty is three times the
+reward — a rate that could only rise would not be credit. The `RateChanged` events carrying
+those ticks are on chain; the dashboard reconstructs the curve from them.
+
+## Layout
+
+```
+contracts/   Foundry: JobVault, FloatPool, AuditAnchor          — Anandan
+daemon/      Go runtime: Brain, agents, policy, chain writer     — Gnanam
+             chain indexer, reconciliation, integration          — Anandan
+sidecar/     TypeScript x402 / Circle-facilitator payment rails  — Vasanth
+dashboard/   Next.js dashboard (Overview, Float, approvals, …)   — Vasanth
+             live activity feed, Float page, hire cards          — Anandan
+docs/        PRD, ADRs, threat model, submissions
+deployments/ committed chain config + the Arc EVM notes to read before a deploy
+scripts/     demo seed / reset
+```
 
 ## CI
 
-Pull requests and pushes to `main` run the complete Foundry contract suite, the Go daemon
-integration suite, and the TypeScript sidecar checks. Worker isolation, duplicate-advance
-protection, and Circle facilitator validation appear as named gates so failures are visible
-without reading the full suite output.
+Pushes and PRs to `main` run the full Foundry contract suite, the Go daemon integration
+suite (worker-isolation and duplicate-advance gates surfaced by name), the TypeScript
+sidecar checks, and the dashboard typecheck / tests / build. `main` is kept green.
 
-## Layout
+## Running it locally
+
+Requires Go 1.26+, Node 20+, and Foundry.
+
 ```
-contracts/   Foundry project: JobVault, FloatPool, AuditAnchor (owner: A)
-daemon/      Local runtime: supervisor/agents (owner: B) + chain indexer/integration (Anandan)
-sidecar/     TypeScript x402/Gateway payment sidecar (owner: C)
-dashboard/   Next.js dashboard (owner: C)
-docs/        PRD, ADRs, threat model
-scripts/     demo seed/reset scripts
+# contracts
+cd contracts && forge test
+
+# daemon (unit + integration; serve mode needs --deployment + signer keys, see deployments/README.md)
+cd daemon && go test ./... && go run ./cmd/snapfall --help
+
+# dashboard — reads the live testnet
+cd dashboard && npm ci && npm run dev        # http://localhost:3000
 ```
 
-## Day-0 checklist (tonight)
-- [x] Runtime language call (Go vs Node) — **Go, LOCKED 19 Jul** per ADR-001 / PRD §6.2
-- [ ] Standup time fixed (15 min daily)
-- [ ] Everyone: `bun add -g @circle-fin/cli && circle skill install --tool claude-code` + Arc MCP (docs.arc.io/ai/mcp)
-- [ ] A: `cd contracts && forge install OpenZeppelin/openzeppelin-contracts && forge build`
-- [ ] A: read docs.arc.io/arc/references/evm-differences BEFORE first deploy; note quirks below
-- [ ] C: Circle dev account + Gateway testnet; clone circlefin/arc-nanopayments + circlefin/agent-stack-starter-kits
-- [ ] Verify + record here: faucet limits, USYC-on-testnet availability, Paymaster vs Gas Station status
+**Point `ARC_TESTNET_RPC` at a private RPC** (e.g. Alchemy) for the dashboard. The Float
+page reconstructs the advance-rate and fee history by scanning `eth_getLogs` from the
+deployment block (~1.45M blocks); the public Arc node's per-request range limit means that
+scan never completes against it and the history stays "pending." A private RPC that allows a
+≥10k-block `eth_getLogs` range completes the scan in ~150 requests. See
+[`deployments/README.md`](deployments/README.md) for chain config and the Arc EVM
+differences worth knowing before a deploy.
 
-### Testnet notes
+## Honest limits
 
-Verified 19 Jul 2026 against docs.arc.io. Items marked _unverified_ still need a human with
-a funded wallet — do not treat them as done.
-
-**Before debugging a "broken" testnet, check [status.arc.io](https://status.arc.io).** A
-degraded RPC looks exactly like a bad config from inside a failing script; the status page
-settles it in seconds. Resolve token/system addresses from the docs.arc.io contract-addresses
-reference page rather than pasting values between environments — testnet and mainnet differ.
-
-| Item | Value | Source |
-| --- | --- | --- |
-| Arc testnet RPC | `https://rpc.testnet.arc.network` | docs.arc.io/arc/references/connect-to-arc |
-| Chain ID | `5042002` | same |
-| Explorer | `https://testnet.arcscan.app` | same |
-| Faucet | `https://faucet.circle.com` | same |
-| **Network status** | `https://status.arc.io` | **check here BEFORE assuming testnet is broken** |
-| Contract addresses | docs.arc.io — contract-addresses reference page | canonical USDC/system addresses per network |
-| Native gas token | USDC, **18 decimals** | same |
-| Faucet rate limits | _unverified_ — needs a real claim | — |
-| USYC on testnet | Official contracts and live code verified 23 July 2026; access requires Circle allowlisting (typically 24–48h), so A8 ships the disclosed mock fallback | [`docs/USYC-SWEEP.md`](docs/USYC-SWEEP.md) |
-| Paymaster vs Gas Station | _unverified_ — C picks one per PRD §4.1 P1 | — |
-
-#### EVM differences that will bite us
-From docs.arc.io/arc/references/evm-differences, read before the first Foundry deploy per PRD §14.2.
-
-- **USDC has two decimal surfaces on one balance: 18dp for native/gas, 6dp for ERC-20.**
-  The single biggest footgun in this repo. Our contracts do all accounting through the ERC-20
-  surface (6dp), so `25.00 USDC == 25_000_000`. Never mix a gas-denominated figure into vault
-  math. `MockUSDC` in the tests is deliberately 6dp to match.
-- **Transfers to the zero address revert** ("Zero address not allowed"). Validate addresses
-  before they can reach a transfer — `JobVault.createJob` rejects zero customer/operator.
-- **Finality is deterministic and instant** — transactions finalize on inclusion. This is what
-  makes the sub-second "snap" and the one-beat waterfall real rather than marketing.
-- **`PREVRANDAO` always returns 0.** No on-chain randomness. We don't use it; keep it that way.
-- **Blob transactions (EIP-4844) are rejected by the mempool**; `BLOBHASH` → 0, `BLOBBASEFEE` → 1.
-  Irrelevant to us, but Foundry tooling that assumes type-3 support will fail.
-- **Base fee goes to the block beneficiary, not burned** (no EIP-1559 burn).
-- **Block timestamps are non-decreasing, not strictly increasing** (1-second granularity).
-  Deadline logic must use `>=`/`<=`, never assume a strict increase between blocks.
-- **`SELFDESTRUCT`**: a non-zero-value `CALL` to a self-destructed account reverts on Arc where
-  it succeeds on Ethereum — the docs call this "the largest semantic departure."
-- Known limitation: a transfer that fully drains a brand-new account (zero nonce, no code)
-  currently reverts. Worth remembering given the demo opens with a **zero-balance treasury**.
-- Supported and identical to Ethereum: CREATE2, EIP-7702 set-code txs, EIP-2935 historical blockhash.
-
-### Open spec questions
-[`docs/OPEN-SPEC-QUESTIONS.md`](docs/OPEN-SPEC-QUESTIONS.md) — **SPEC-01 is a blocker**: the demo's
-12.50 USDC advance contradicts SC-FP-002's formula given a 6.00 max operating budget. Resolve at
-standup; it blocks `requestAdvance` and fails AT-11 as written.
-
-## Operating rules (from PRD §14.4)
-1. Daily 15-min standup; blocked >4h → escalate immediately
-2. ABI + API schemas FREEZE Fri Jul 24
-3. Demo spine runs daily from Jul 29; red spine outranks features
-4. Scope-cut order (PRD §14.5) is law
-5. `main` is always demoable
-6. No secrets in repo/logs/screenshots
-7. **Submit Aug 8. The 9th does not exist.**
+- **The local agent activity feed is not demonstrable from a clean checkout.** The
+  daemon-side records for both settled jobs were lost, and Snapfall does not fabricate local
+  state to stand in for them. What *is* verifiable is the **money spine** — the advance, the
+  waterfall, and the rate curve — all on Arc and readable from the explorer. That is what the
+  demo proves; the conversational feed is not reproducible here.
+- **The USYC idle-capital sweep is a disclosed mock** (`MockUSYCStrategy`) — Circle's
+  permissioned USYC requires allowlisting. The mock moves real ERC-20 assets and never claims
+  to be the real product.
+- **The customer wallet is daemon-custodial for the demo**, stated openly — it stands in for a
+  real customer self-custodying and clicking Accept.
+- **Scoping and quotes above the money path use a deterministic stub, not a live LLM**, so demo
+  runs are reproducible; the chain is authoritative for every figure that moves money.
