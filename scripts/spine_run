@@ -54,9 +54,28 @@ case "$sidecar_store" in
 esac
 
 # The demo figures, from PRD §5.1. Micros, never floats: 40000 = 0.04 USDC.
+#
+# These three are the x402 spends, and they are NOT scaled by --price. They are graded against
+# daemon-side policy constants that are absolute, not proportional: policy.DemoPolicy() sets
+# ApprovalAboveMicros 0.10, PerTxLimitMicros 5.00 and JobBudgetMicros 6.00
+# (daemon/internal/policy/demo.go:26-30). Dividing these by the same factor as the job price
+# would push the bait under the 0.10 threshold, and beat 4 would auto-approve instead of
+# escalating -- the run would still print PASS while proving the opposite of the beat it names.
+# check_figures() below enforces the relationships instead of trusting them.
 profile_micros=40000    # step 7, the auto-approved source
 premium_micros=4000000  # step 9, the escalation bait
 bench_micros=60000      # step 9, the cheaper alternative
+
+# The on-chain scale. Empty means "seed_demo's own defaults" (price 25.00, pool-seed 150), which
+# is the PRD figure set and needs a pool of 125.00 USDC to clear the 10% org exposure cap.
+#
+# A smaller --price is what makes a run possible without the faucet. The cap floor is
+# 10 x advance (FloatPool.sol:220, ORG_EXPOSURE_CAP_BPS 1000), so price 1.00 at a 50% rate needs
+# only 5.00 USDC of pool depth against the 125.00 the PRD price demands. seed_demo deposits
+# max(0, target - current), so when the pool already clears the floor it submits nothing.
+price_usdc_arg=""
+pool_seed_arg=""
+scale_label="full"
 
 # Bounded waits, seconds. Every poll has a deadline: a spine run must end, red or green.
 wait_health=90
@@ -80,6 +99,18 @@ usage: ./scripts/spine_run [options]
   --dry-run              print the preflight and the beat plan; submit nothing, write nothing
   --no-seed              skip beat 1's seed and attach to the job in .demo/current.json
   --skip-wallet-check    skip the read-only wallet balance preflight (saves ~1 RPC round)
+  --price USDC           job price to seed (default: seed_demo's own 25.00, the PRD figure).
+                         The advance, and therefore the pool depth the run needs, scale with
+                         this: the cap floor is 10x the advance. --price 1.00 needs 5.00 USDC
+                         of pool where 25.00 needs 125.00, which is the difference between a
+                         run you can do now and one that waits ~12 hours on the faucet.
+  --pool-seed USDC       desired pool TVL (default: seed_demo's own 150). The exposure-cap
+                         floor wins if it is higher, so 0 means "deposit nothing beyond the
+                         floor". Use 0 with --price to run against the pool you already have.
+  --scaled               shorthand for --price 1.00 --pool-seed 0. Every beat still runs and
+                         is still read back from chain; only the amounts are smaller. The run
+                         is logged in a scale column (price=1.00,pool=0) so a reduced run is
+                         never counted as evidence for a done-when clause naming PRD figures.
   --job-label NAME       daemon-side job id (default: job_spine_<utc timestamp>)
   --log PATH             pass/fail log to append to (default docs/spine-runs/spine-runs.tsv)
   --timeout SECONDS      how long to wait for the DD task to reach its terminal stage
@@ -94,6 +125,9 @@ while (($#)); do
 		--dry-run) dry_run=1 ;;
 		--no-seed) do_seed=0 ;;
 		--skip-wallet-check) check_wallets=0 ;;
+		--price) shift; price_usdc_arg="${1:-}" ;;
+		--pool-seed) shift; pool_seed_arg="${1:-}" ;;
+		--scaled) price_usdc_arg="1.00"; pool_seed_arg="0" ;;
 		--job-label) shift; job_label="${1:-}" ;;
 		--log) shift; log_file="${1:-}" ;;
 		--timeout) shift; wait_terminal="${1:-}" ;;
@@ -102,6 +136,13 @@ while (($#)); do
 	esac
 	shift
 done
+
+# scale_label goes in the run log so a small run can never be read as a PRD-figure run. It is
+# derived from the flags rather than set by --scaled, so --price 1.00 typed out longhand is
+# labelled the same as the shorthand.
+if [[ -n "$price_usdc_arg" || -n "$pool_seed_arg" ]]; then
+	scale_label="price=${price_usdc_arg:-default},pool=${pool_seed_arg:-default}"
+fi
 
 run_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -193,6 +234,61 @@ usdc_short() {
 	frac="${v#*.}"
 	while ((${#frac} > 2)) && [[ "$frac" == *0 ]]; do frac="${frac%0}"; done
 	printf '%s.%s' "$whole" "$frac"
+}
+
+# ── the policy figures this run is graded against ─────────────────────────────
+# MIRRORED from daemon/internal/policy/demo.go DemoPolicy(). A mirror can drift, so
+# daemon/internal/policy/spine_figures_test.go parses THIS file and fails when these four lines
+# stop matching DemoPolicy() -- a failing test instead of a failing take, the same guard the
+# merchant allowlist already uses.
+policy_approval_above=100000   # ApprovalAboveMicros: above this an intent escalates to the owner
+policy_per_tx_limit=5000000    # PerTxLimitMicros:    above this an intent is DENIED outright
+policy_job_budget=6000000      # JobBudgetMicros:     the operating budget the spends draw on
+
+# check_figures refuses any figure set that would let a beat pass while proving something other
+# than what the beat claims.
+#
+# This exists because --price makes the on-chain figures adjustable while the policy thresholds
+# above stay absolute. The dangerous case is quiet: if the bait ever fell to or below the 0.10
+# approval threshold it would AUTO-APPROVE, beat 4 would observe a completed purchase instead of
+# an escalation, and the run would print PASS for a spine that never tested the rejection path.
+# The reverse is just as quiet -- a bait above the per-tx limit is DENIED by an earlier rule
+# (daemon/internal/policy/policy.go:17, "a deniable intent is denied, never escalated") and the
+# owner is never asked. Neither shows up as an error anywhere, so it is asserted here.
+check_figures() {
+	fig_bad() { printf '   MISSING  %s\n' "$*"; preflight_missing=1; }
+
+	(( profile_micros < policy_approval_above )) \
+		|| fig_bad "beat 3 buys $(usdc_short $profile_micros) but the approval threshold is $(usdc_short $policy_approval_above): it would escalate instead of auto-approving"
+	(( bench_micros < policy_approval_above )) \
+		|| fig_bad "beat 5 buys $(usdc_short $bench_micros) but the approval threshold is $(usdc_short $policy_approval_above): the adaptation would need a second prompt"
+	(( premium_micros > policy_approval_above )) \
+		|| fig_bad "beat 4's bait is $(usdc_short $premium_micros), at or under the $(usdc_short $policy_approval_above) approval threshold: it would AUTO-APPROVE and there would be no escalation to reject"
+	(( premium_micros <= policy_per_tx_limit )) \
+		|| fig_bad "beat 4's bait is $(usdc_short $premium_micros), over the $(usdc_short $policy_per_tx_limit) per-tx limit: it would be DENIED by an earlier rule and the owner would never be asked"
+	(( premium_micros <= policy_job_budget )) \
+		|| fig_bad "beat 4's bait is $(usdc_short $premium_micros), over the $(usdc_short $policy_job_budget) job budget: it would be denied on budget rather than escalated"
+	(( profile_micros + bench_micros <= policy_job_budget )) \
+		|| fig_bad "beats 3 and 5 spend $(usdc_short $((profile_micros + bench_micros))) together, over the $(usdc_short $policy_job_budget) job budget"
+
+	if (( preflight_missing == 0 )); then
+		printf '   ok       demo figures: %s and %s auto-approve, %s escalates, all inside the %s budget\n' \
+			"$(usdc_short $profile_micros)" "$(usdc_short $bench_micros)" \
+			"$(usdc_short $premium_micros)" "$(usdc_short $policy_job_budget)"
+	fi
+}
+
+# check_advance_covers_spends runs AFTER beat 1, because the advance is only known once seed_demo
+# has read the live rate. At the PRD price the policy budget (6.00) is smaller than the advance
+# (12.50), so the budget is what binds; below a price of about 12.00 that inverts and the real
+# money becomes the binding constraint. The demo only ever pays profile + bench, so this is the
+# line that has to hold for a scaled run to mean anything.
+check_advance_covers_spends() {
+	local need=$(( profile_micros + bench_micros ))
+	if (( advance_micros < need )); then
+		die "the advance is $(micros_to_usdc $advance_micros) USDC but beats 3 and 5 spend $(micros_to_usdc $need) together; raise --price (the advance is the rate applied to it) or this run cannot complete honestly"
+	fi
+	info "advance $(usdc_short $advance_micros) covers the $(usdc_short $need) beats 3 and 5 spend"
 }
 
 # jsonq evaluates a JavaScript expression over the parsed document in `d` and prints the
@@ -287,10 +383,13 @@ write_log_line() {
 	mkdir -p "$(dirname "$log_file")"
 	if [[ ! -s "$log_file" ]]; then
 		printf '# Snapfall spine runs. One line per run, appended by scripts/spine_run.\n' >>"$log_file"
-		printf '# started_utc\tgit_sha\tverdict\tfirst_bad_beat\tvault_job_id\tnote\n' >>"$log_file"
+		printf '# started_utc\tgit_sha\tverdict\tscale\tfirst_bad_beat\tvault_job_id\tnote\n' >>"$log_file"
 	fi
-	printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-		"$run_started" "$git_sha$git_dirty" "$verdict" "$first_bad" "${vault_job:--}" "$note" >>"$log_file"
+	# scale is its own column, not a note: a PASS at reduced figures is a real PASS of every
+	# beat, but it is NOT evidence for a done-when clause that names the PRD figures, and a
+	# reader scanning verdicts must not have to parse prose to tell them apart.
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+		"$run_started" "$git_sha$git_dirty" "$verdict" "$scale_label" "$first_bad" "${vault_job:--}" "$note" >>"$log_file"
 	say ""
 	say "logged to $log_file:"
 	tail -n 1 "$log_file" | sed 's/^/   /'
@@ -341,6 +440,18 @@ Human-observed, never asserted here: V7 (job detail renders every transition), V
 graph animates with zero manual triggers), V11 (the ring moves on screen). Watch
 $dashboard_base during the run; the checklist prints at the end.
 EOF
+
+	# A reduced run is a real run of every beat, but it is NOT evidence for a done-when clause
+	# that names the PRD figures. Say so on screen, next to the plan, rather than only in the
+	# log column: the person deciding whether a clause is closed is reading this output.
+	if [[ "$scale_label" != "full" ]]; then
+		cat <<EOF
+REDUCED SCALE ($scale_label). Every beat above still runs and is still read back from chain;
+only the on-chain amounts are smaller. The x402 spends are unchanged, because they are graded
+against absolute policy thresholds (see --help). This run is logged with a scale column and
+does NOT close a done-when clause that names the PRD figures.
+EOF
+	fi
 }
 
 # ── preflight ─────────────────────────────────────────────────────────────────
@@ -378,6 +489,11 @@ preflight() {
 	# Keys and addresses. Three parties, because the contracts treat them as distinct
 	# (see scripts/README.md): the operator draws the advance, only the designated customer
 	# may fund its own escrow (SC-JV-001), and the LP supplies pool liquidity.
+	# The figures are checked before the keys, because a bad figure set is a bug in the
+	# invocation and no amount of correct credentials fixes it. Like every other preflight
+	# check it records and continues, so one run lists everything that is wrong.
+	check_figures
+
 	need_env TREASURY_PRIVATE_KEY          "operator: signs requestAdvance and createJob"
 	need_env SNAPFALL_CUSTOMER_PRIVATE_KEY "customer: funds its own escrow (SC-JV-001) and signs acceptDelivery"
 	need_env SNAPFALL_LP_PRIVATE_KEY       "pool LP: must NOT be the operator, or the 0.00 start is a lie"
@@ -524,7 +640,11 @@ print_plan
 log_armed=1
 beat 1 FUND "external customer pays, escrow holds it, treasury still at 0.00"
 if (( do_seed == 1 )); then
-	if ! "$repo_root/scripts/seed_demo"; then
+	seed_args=()
+	[[ -n "$price_usdc_arg" ]] && seed_args+=(--price "$price_usdc_arg")
+	[[ -n "$pool_seed_arg" ]] && seed_args+=(--pool-seed "$pool_seed_arg")
+	if ((${#seed_args[@]})); then info "seed_demo ${seed_args[*]}"; fi
+	if ! "$repo_root/scripts/seed_demo" "${seed_args[@]+"${seed_args[@]}"}"; then
 		die "seed_demo failed; nothing was escrowed, so no later beat can mean anything"
 	fi
 else
@@ -540,6 +660,7 @@ rate_before="$(jsonq 'd.advanceRateBps' "$state_file")"
 [[ -n "$vault_job" && -n "$advance_usdc" && -n "$rate_before" ]] || die "$state_file is missing jobId/expectedAdvanceUsdc/advanceRateBps"
 advance_micros="$(usdc_to_micros "$advance_usdc")"
 price_micros="$(usdc_to_micros "$price_usdc")"
+check_advance_covers_spends
 
 info "vault job    $vault_job"
 info "escrowed     $price_usdc USDC, rate $rate_before bps, the snap should draw $advance_usdc USDC"

@@ -49,6 +49,60 @@ cd dashboard && npm run dev
 readiness check. Other flags: `--no-seed` (attach to the job already in `.demo/current.json`),
 `--skip-wallet-check`, `--job-label NAME`, `--log PATH`, `--timeout SECONDS`.
 
+### Running without waiting on the faucet
+
+At the PRD price the run needs a deep pool, and that depth is the whole faucet dependency.
+`FloatPool` caps one org's outstanding at 10% of TVL (`FloatPool.sol:220`,
+`ORG_EXPOSURE_CAP_BPS`), so a 25.00 job at a 50% rate draws a 12.50 advance and needs
+**125.00 USDC** of pool before it will clear. The Circle faucet pays 20 USDC per claim on a
+~2 hour cooldown behind a reCAPTCHA (`docs/RUNBOOK.md`), so filling that gap from a near-empty
+pool is upwards of twelve hours of human hands.
+
+`--price` moves that floor, because `seed_demo` deposits `max(0, target - current)` and the
+floor is ten times the advance:
+
+```bash
+./scripts/spine_run --scaled          # == --price 1.00 --pool-seed 0
+```
+
+Measured against the live pool on 1 Aug 2026, holding 20.0168 USDC:
+
+| | cap floor | deposit `seed_demo` would submit |
+|---|---|---|
+| `--price 25.00` (PRD) | 125.00 USDC | **104.9832 USDC** — roughly six faucet claims |
+| `--price 1.00` | 5.00 USDC | **none — the pool is already deep enough** |
+
+Every beat still runs and is still read back from chain. Nothing is faked or skipped: the
+escrow, the advance, the two purchases, the escalation, the settlement and the rate change all
+happen, just at smaller amounts.
+
+**What does NOT scale, and why the harness enforces it.** The three x402 spends stay at 0.04,
+4.00 and 0.06. They are graded against `policy.DemoPolicy()`, whose thresholds are absolute
+rather than proportional (`daemon/internal/policy/demo.go`): `ApprovalAboveMicros` 0.10 is
+exactly what makes the two small spends auto-approve and the bait escalate. Divide the bait by
+the same factor as the price and it drops under 0.10, beat 4 auto-approves, and the run reports
+PASS for a spine that never exercised the rejection path at all. Push it the other way, past
+the 5.00 per-tx limit, and it is **denied** by an earlier rule instead of escalated
+(`policy.go:17`, "a deniable intent is denied, never escalated") so the owner is never asked.
+Both failures are silent.
+
+So the preflight asserts the relationships instead of trusting them, and refuses before beat 1
+with the beat named:
+
+```
+MISSING  beat 4's bait is 0.05, at or under the 0.10 approval threshold: it would
+         AUTO-APPROVE and there would be no escalation to reject
+```
+
+`spine_run` mirrors three of those thresholds as shell variables, since bash cannot import the
+Go package. `daemon/internal/policy/spine_figures_test.go` parses the script and fails when the
+mirror drifts, and drives the real `Evaluate` at each of the three shipped amounts to confirm
+they still land on AUTO_APPROVE / HUMAN_APPROVAL_REQUIRED / AUTO_APPROVE.
+
+**A reduced run is not evidence for a done-when clause that names PRD figures.** It proves the
+machinery; it does not prove the 25.00 story. The `scale` column in the log is there so the two
+can never be confused, and the submission-day claim should rest on full-scale runs.
+
 ### What the preflight demands, and why
 
 It refuses **before** beat 1 and names every gap. A run that dies at beat 6 on an unset key has
@@ -152,10 +206,16 @@ what you saw in the log line by hand.
 `docs/spine-runs/spine-runs.tsv`, one tab-separated line appended per run, header written once:
 
 ```
-# started_utc	git_sha	verdict	first_bad_beat	vault_job_id	note
-2026-07-29T09:12:03Z	4e552b2	PASS	-	0x8f3a…	all beats observed
-2026-07-30T08:55:11Z	9c11d02	UNVERIFIED	3-SPEND	0x2b71…	the purchase stopped at purchase.pending_settlement
+# started_utc	git_sha	verdict	scale	first_bad_beat	vault_job_id	note
+2026-07-29T09:12:03Z	4e552b2	PASS	full	-	0x8f3a…	all beats observed
+2026-07-30T08:55:11Z	9c11d02	UNVERIFIED	full	3-SPEND	0x2b71…	the purchase stopped at purchase.pending_settlement
+2026-07-31T07:40:55Z	e59e72a	PASS	price=1.00,pool=0	-	0x51c9…	all beats observed
 ```
+
+`scale` is `full` for a run at the PRD figures, or the flags that changed them. It is a column
+rather than a note because a reader scanning verdicts must not have to parse prose to tell a
+25.00 run from a 1.00 one: both are honest PASSes of every beat, but only the first is evidence
+for a done-when clause that names the PRD amounts.
 
 `git_sha` carries a `+dirty` suffix when the worktree was not clean, because a run only proves
 the code that ran. The beat blamed is the **first** non-PASS: that is the one to debug in the
