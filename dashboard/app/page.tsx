@@ -22,9 +22,11 @@ export default function OverviewPage() {
   const [pool, setPool] = useState<PoolStats | null>(null);
   const [advances, setAdvances] = useState<OpenAdvance[] | null>(null);
   const [activity, setActivity] = useState<ActivityMessage[]>([]);
+  const [demo, setDemo] = useState(false);
 
   const onMessage = useCallback((msg: StreamMessage) => {
     if (msg.kind === 'snapshot') {
+      setDemo(msg.demo === true);
       setSnap(msg.snapshot);
       setTreasury(msg.snapshot.treasuryUsdc);
       setPool(msg.snapshot.pool);
@@ -122,7 +124,7 @@ export default function OverviewPage() {
           <p className="page-sub">One founder, a workforce that finances itself.</p>
         </div>
         {status === 'live' ? (
-          <span className="badge-live">demo replay · updates in &lt;2s</span>
+          <span className="badge-live">{demo ? 'demo replay' : 'live'} · updates in &lt;2s</span>
         ) : (
           <span className="badge-live badge-reconnecting">reconnecting…</span>
         )}
