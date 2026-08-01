@@ -373,6 +373,20 @@ func verify(ctx context.Context, c *chain.Client, jv, fp, org common.Address, jo
 	}
 	fmt.Printf("  %-16s ok    no advance drawn yet\n", "verify advance")
 
+	// Ownership is re-read here for the same reason the position is: the opening check was a
+	// claim about a block that is now in the past. A deposit naming the operator as receiver
+	// between the two would leave "ready" printed over a pool the operator owns, which is the
+	// one thing the opening check exists to prevent.
+	shares, err := readUintAt(ctx, c, fp, chain.CalldataSharesOf(org), at)
+	if err != nil {
+		return nil, fmt.Errorf("verify sharesOf(operator): %w", err)
+	}
+	if shares.Sign() != 0 {
+		return nil, fmt.Errorf("verify: the operator %s holds %s pool shares at block %s, so the float it would borrow is its own capital",
+			org.Hex(), shares, at)
+	}
+	fmt.Printf("  %-16s ok    operator holds no pool shares, so the float is someone else's\n", "verify float")
+
 	// Re-read the whole position, not just TVL. The floor depends on exposure, and between the
 	// plan and now another org could have drawn against the same pool, so recomputing from fresh
 	// reads is what makes "ready" a claim about the chain rather than about the plan.

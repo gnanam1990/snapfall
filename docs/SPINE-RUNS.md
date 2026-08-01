@@ -67,10 +67,15 @@ floor is ten times the advance:
 
 Measured against the live pool on 1 Aug 2026, holding 20.0168 USDC:
 
-| | cap floor | deposit `seed_demo` would submit |
-|---|---|---|
-| `--price 25.00` (PRD) | 125.00 USDC | **104.9832 USDC** — roughly six faucet claims |
-| `--price 1.00` | 5.00 USDC | **none — the pool is already deep enough** |
+| | cap floor | target | deposit `seed_demo` would submit |
+|---|---|---|---|
+| PRD defaults (`--price 25.00`) | 125.00 | 150.00 | **129.9832 USDC** — about seven faucet claims |
+| `--price 25.00 --pool-seed 0` | 125.00 | 125.00 | **104.9832 USDC** — about six |
+| `--price 1.00 --pool-seed 0` | 5.00 | 5.00 | **none — the pool is already deep enough** |
+
+The first two differ because `--pool-seed` is a *desired* TVL and the target is
+`max(floor, desired)`: left alone, `seed_demo` aims at its own 150.00 cushion rather than at the
+125.00 the caps actually require.
 
 Every beat still runs and is still read back from chain. Nothing is faked or skipped: the
 escrow, the advance, the two purchases, the escalation, the settlement and the rate change all
@@ -113,8 +118,15 @@ alone it refuses a scaled run at beat 0b for not holding 25x what that run will 
 `FloatPool` truncates toward zero, and the waterfall's smallest leg is `fee/5` where `fee` is
 `principal/50`. Below a principal of 250 micros the first-loss reserve cut rounds to **zero**, and
 beat 6 would still read Accepted and still print PASS for a settlement with a stage that never
-happened. The preflight refuses below that floor; at `--price 1.00` the principal is 500,000
-micros, four orders of magnitude clear of it.
+happened.
+
+The principal depends on the live rate, which the preflight does not read: the public Arc node
+rate-limits, and a preflight that fell over on a 429 would be a worse failure than the one it
+guards. So both bounds come from the contract clamp `[3000, 8500]` instead. A price is **refused**
+when it cannot work at the 8500 cap, and when it clears the 250 floor only above some rate the
+preflight says which rate that is rather than guessing. `--price 1.00` draws at least 300,000
+micros even at the 3000 floor, 1,200x the truncation floor and comfortably over the 100,000 the
+two purchases need. The exact check still runs after the seed, against the real rate.
 
 `--pool-seed 0` means `seed_demo` deposits nothing, and its LP-is-not-the-operator check used to
 live inside the deposit branch, so skipping the deposit skipped the one assertion behind the
