@@ -97,12 +97,13 @@ export function beatFor(msg: ActivityMessage): Beat | null {
     case 'advance.executed':
       return 'snap';
 
-    // `purchase.delivered` is the daemon's completed purchase. `payment.delivered` was mapped
-    // and is not a kind the daemon emits at all.
+    // `purchase.delivered` is deliberately NOT here. Its amount is `amount_micros`, which
+    // eventAmount does not read, so mapping it would be a claim with no effect -- and making
+    // eventAmount read it would then count the SAME purchase twice on the daemon side, against
+    // approval.requested(approved) which already represents it. One purchase, one count.
     case 'ExpenseRecorded':
     case 'payment.executed':
     case 'payment.delivered':
-    case 'purchase.delivered':
     case 'approval.alternative_found':
       return 'spend';
     // An approval request is only money leaving the treasury once it is APPROVED. The demo's
@@ -120,12 +121,18 @@ export function beatFor(msg: ActivityMessage): Beat | null {
     case 'AdvanceRepaid':
       return 'repay';
 
-    // `settlement.executed` is the daemon's waterfall. `job.accepted` was mapped, but that is
-    // the customer's click; the money moves on settlement, and on a live run the fall beat was
-    // therefore driven by the wrong moment or, when only the daemon was connected, by nothing.
+    // `settlement.executed` is deliberately NOT here, though it is the daemon's settlement.
+    // Its payload is only {tx_hash, block, gas_used}: no legs, no amount. The 'fall' handler
+    // falls back to DERIVING the operator's share when the legs are absent, so a legless event
+    // would publish a guessed figure as fact and then let the real JobSettled animate the
+    // waterfall a second time -- precisely the defect the comment above records from PR #40.
+    // Only JobSettled reports both legs, so only JobSettled drains the escrow.
+    // `job.accepted` was here and is gone for the same reason as settlement.executed: it carries
+    // no legs either, so it would take the deriving branch too. It was safe only by accident --
+    // nothing in production emits it, and demoStream REWRITES it to JobSettled (with both legs)
+    // before it ever reaches this function. Keeping a mapping that is dead AND contradicts the
+    // rule stated above is how the rule stops being believed.
     case 'JobSettled':
-    case 'job.accepted':
-    case 'settlement.executed':
       return 'fall';
     case 'RateChanged':
     case 'rate.updated':
