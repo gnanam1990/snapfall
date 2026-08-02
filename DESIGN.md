@@ -370,20 +370,30 @@ Findings of the finish review, unsoftened. These are divergences from the shippe
 (`app/layout.tsx:30-58`) that the build carries. None of them is a design rule; nothing here should
 be inherited by a new surface.
 
-1. **The stat-tile grid is still on Overview.** `app/page.tsx:94` renders
-   `<div className="grid cols-4 mt">` of four `StatCard`s directly beneath the pool vessel. The
-   THESIS names "the stat-tile grid and the hero-metric template" as exactly what this world refuses.
-   The stylesheet restyled the container into a gauge band — inside `.cols-4` the card loses its box
-   and the grid gains a drawn frame (`globals.css:314-341`) — but restyling is not what the contract
-   asked for. This is the largest open divergence, it is awaiting an owner decision, and the
-   resolution is **deletion, not restyling**: three of the four tiles restate figures the vessel
-   already draws.
-2. **Three FIRST VIEWPORT clauses are not true on Overview today.** The contract specifies that
-   figures sit on callout leaders naming their source, that the waterfall leaves the vessel in
-   stages, and that pending approvals are the one place colour appears and carry the primary action.
-   The vessel draws its two outlet stubs and its labels, but the drawn waterfall exists only on job
-   detail (`components/SettlementWaterfall.tsx`); the StatCards' figures carry `sub` captions, not
-   leaders; and there is no pending-approval block with the primary action on the first viewport.
+1. **RESOLVED (commit `d707536`).** The stat-tile grid is deleted. `app/page.tsx` no longer renders
+   `<div className="grid cols-4">`; there is no `.stat-value` on the surface. Pool TVL and
+   Utilization were pure duplication of `.vessel-figure` and the "lent out" fact, and fees accrued
+   and the first-loss reserve moved onto the drawing as vessel facts. It was deleted rather than
+   restyled, because the `.cols-4` gauge-band restyle in `globals.css` laundered the refusal instead
+   of honouring it. That restyle is now dead code and should be removed when someone next touches
+   that block.
+2. **PARTLY RESOLVED (commit `d707536`).** Of the three FIRST VIEWPORT clauses:
+   - *Figures on callout leaders naming their source* — **met, in the caption rather than the
+     drawing.** Each of the four `.vessel-facts` rows now carries a `.vessel-src` line stating where
+     the figure comes from (`totalOutstanding ÷ totalAssets · cap 80%`, `FloatPool.feesAccrued · 2%
+     of each principal`, and so on), and the dimension line under the tank is labelled `total pool
+     capital` rather than measuring nothing. What is still *not* built is a drawn leader tying an
+     SVG point to an HTML figure; the provenance is honest, the geometry is not literal.
+   - *Pending approvals as the one coloured region, carrying the primary action* — **met.**
+     `PendingApprovals` in `app/page.tsx` renders `--warn` only when a count is actually waiting, and
+     carries `.pending-action` to `/approvals`. The action is a link, not an inline approve/refuse
+     pair, deliberately: the decision path binds to the shown `intentHash` and handles `STALE_VIEW`,
+     expiry and double-submit, and a second implementation of an irreversible money action is how
+     two implementations drift.
+   - *The waterfall leaving the vessel in stages* — **still open.** `PoolVessel.tsx` draws two
+     40px outlet stubs labelled `pool repaid first` / `operator, second`. Nothing stages and nothing
+     falls. The real drawn waterfall exists and works, but only on job detail
+     (`components/SettlementWaterfall.tsx`); its idiom should be extracted and brought to the vessel.
 3. **The OWN-WORLD claim of content-free recognisability is not met.** There is no drawing frame, no
    title block, no registration marks and no instrument tag bubbles anywhere in the artifact. With
    content removed, the surfaces read as hairline-ruled panels, not as a drawing.
