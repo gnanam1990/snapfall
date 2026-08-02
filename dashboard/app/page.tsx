@@ -99,8 +99,8 @@ export default function OverviewPage() {
         />
         <StatCard
           label="Utilization"
-          value={float ? formatBps(float.utilizationBps) : '—'}
-          sub="drawn / TVL · cap 80%"
+          value={float && float.utilizationBps != null ? formatBps(float.utilizationBps) : '—'}
+          sub={float ? 'drawn / TVL · cap 80%' : 'reading Arc testnet'}
         />
         <StatCard
           label="Fees accrued"

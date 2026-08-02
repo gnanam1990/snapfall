@@ -1818,10 +1818,17 @@ table.t { width: 100%; border-collapse: collapse; }
 .v-wall { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
 .v-fill { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1; }
 .v-unknown line { stroke: var(--border-2); stroke-width: 1; stroke-dasharray: 3 5; }
-.v-threshold line { stroke: var(--neg); stroke-width: 1; stroke-dasharray: 6 4; }
-.v-threshold text { fill: var(--neg); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
-.v-threshold-soft line { stroke: var(--warn); }
-.v-threshold-soft text { fill: var(--warn); }
+/* A cap is a threshold, not an alarm. Drawn as an ordinary annotation until the level actually
+   approaches it -- permanent red at 0% utilisation would make the colour decorative, which is the
+   one thing the semantic-colour rule forbids. */
+.v-threshold line { stroke: var(--border-2); stroke-width: 1; stroke-dasharray: 6 4; }
+.v-threshold text { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+.v-threshold.near line { stroke: var(--warn); }
+.v-threshold.near text { fill: var(--warn); }
+.v-threshold.at line { stroke: var(--neg); }
+.v-threshold.at text { fill: var(--neg); }
+.v-empty { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+.v-unknown text { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
 .v-pipe path { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
 .v-pipe text { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
 .v-pipe-dim path { stroke: var(--border-2); }

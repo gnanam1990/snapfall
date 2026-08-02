@@ -11,8 +11,10 @@
  * reader sees the headroom before the cap without doing arithmetic, which is the whole reason
  * engineers draw tanks instead of tabulating them.
  *
- * Honest about absence: with no indexer running, utilisation is genuinely unknown rather than
- * zero, so the vessel says so instead of drawing an empty tank that would read as a fact.
+ * Utilisation is a chain read, not an indexer figure: FloatPool exposes totalOutstanding and
+ * totalAssets, so 0% means nothing is drawn right now and is as verifiable as TVL. The only
+ * genuine unknown is the window before the fetch returns, which reads as "reading chain" --
+ * a different statement from "nothing is drawn", and the vessel keeps them apart.
  */
 
 interface Props {
@@ -30,7 +32,7 @@ const ORG_CAP = 0.1; // ORG_EXPOSURE_CAP_BPS 1000, per org
 
 const W = 560;
 const H = 250;
-const TANK_X = 34;
+const TANK_X = 200;
 const TANK_W = 148;
 const TANK_TOP = 30;
 const TANK_BOT = 206;
@@ -39,12 +41,19 @@ const TANK_H = TANK_BOT - TANK_TOP;
 /** y for a fraction of capacity, measured up from the base of the vessel. */
 const levelY = (frac: number) => TANK_BOT - Math.max(0, Math.min(1, frac)) * TANK_H;
 
+/* Threshold lettering is right-aligned into this column, with the leader running from LEAD_X to
+   the tank wall. Both are left of TANK_X so cap annotations and the outlet labels can never
+   collide the way they did when everything hung off the right edge. */
+const LABEL_R = 162;
+const LEAD_X = 168;
+
 export default function PoolVessel({ tvlUsdc, utilizationBps, orgRateBps }: Props) {
-  const known = utilizationBps !== null;
-  const used = known ? utilizationBps / 10_000 : 0;
+  const loaded = utilizationBps !== null;
+  const used = loaded ? utilizationBps / 10_000 : 0;
   const capY = levelY(UTILISATION_CAP);
   const orgY = levelY(ORG_CAP);
   const usedY = levelY(used);
+  const capState = used >= UTILISATION_CAP ? 'at' : used >= UTILISATION_CAP - 0.1 ? 'near' : '';
 
   return (
     <figure className="vessel">
@@ -54,17 +63,18 @@ export default function PoolVessel({ tvlUsdc, utilizationBps, orgRateBps }: Prop
         role="img"
         aria-label={
           `Capital pool holding ${tvlUsdc ?? 'an unread amount of'} USDC. ` +
-          (known
+          (loaded
             ? `${(used * 100).toFixed(1)} percent is currently lent out. `
-            : 'Current lending is unknown until the chain indexer reports. ') +
+            : 'The current lending figure is still being read from the chain. ') +
           'Lending is capped at 80 percent of the pool overall, and 10 percent for any one operator.'
         }
       >
         <rect x={TANK_X} y={TANK_TOP} width={TANK_W} height={TANK_H} className="v-wall" />
 
-        {/* Held capital, drawn only when the level is actually known: an empty tank is a claim,
-            and "nothing is lent" is a different statement from "nobody has told us yet". */}
-        {known ? (
+        {/* Held capital. A drawn level of zero is a real, checkable statement, so it is labelled
+            rather than left as an empty box that reads like a failed render. The hatched state
+            below is the narrower case: the chain read has not come back yet. */}
+        {loaded ? (
           <rect
             x={TANK_X + 1}
             y={usedY}
@@ -72,22 +82,40 @@ export default function PoolVessel({ tvlUsdc, utilizationBps, orgRateBps }: Prop
             height={TANK_BOT - usedY}
             className="v-fill"
           />
-        ) : (
+        ) : null}
+        {loaded && used === 0 ? (
+          <text
+            className="v-empty"
+            x={TANK_X + TANK_W / 2}
+            y={TANK_BOT - 14}
+            textAnchor="middle"
+          >
+            nothing drawn
+          </text>
+        ) : null}
+        {!loaded ? (
           <g className="v-unknown">
             {[0.18, 0.34, 0.5].map((f) => (
               <line key={f} x1={TANK_X + 1} y1={levelY(f)} x2={TANK_X + TANK_W - 1} y2={levelY(f)} />
             ))}
+            <text x={TANK_X + TANK_W / 2} y={levelY(0.34) - 10} textAnchor="middle">
+              reading chain
+            </text>
           </g>
-        )}
+        ) : null}
 
         {/* Threshold lines: the caps, drawn where they actually sit on the tank. */}
-        <g className="v-threshold">
-          <line x1={TANK_X - 9} y1={capY} x2={TANK_X + TANK_W + 74} y2={capY} />
-          <text x={TANK_X + TANK_W + 80} y={capY + 3.5}>80% utilisation cap</text>
+        <g className={`v-threshold ${capState}`}>
+          <line x1={LEAD_X} y1={capY} x2={TANK_X + 4} y2={capY} />
+          <text x={LABEL_R} y={capY + 3.5} textAnchor="end">
+            80% utilisation cap
+          </text>
         </g>
-        <g className="v-threshold v-threshold-soft">
-          <line x1={TANK_X - 9} y1={orgY} x2={TANK_X + TANK_W + 74} y2={orgY} />
-          <text x={TANK_X + TANK_W + 80} y={orgY + 3.5}>10% per-operator cap</text>
+        <g className="v-threshold">
+          <line x1={LEAD_X} y1={orgY} x2={TANK_X + 4} y2={orgY} />
+          <text x={LABEL_R} y={orgY + 3.5} textAnchor="end">
+            10% per-operator cap
+          </text>
         </g>
 
         {/* Inlet: the escrowed receivable the advance is drawn against. */}
@@ -127,7 +155,7 @@ export default function PoolVessel({ tvlUsdc, utilizationBps, orgRateBps }: Prop
         <dl className="vessel-facts">
           <div>
             <dt>lent out</dt>
-            <dd>{known ? `${(used * 100).toFixed(1)}%` : 'awaiting indexer'}</dd>
+            <dd>{loaded ? `${(used * 100).toFixed(1)}%` : 'reading chain'}</dd>
           </div>
           <div>
             <dt>advance rate</dt>
