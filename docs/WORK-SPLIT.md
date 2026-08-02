@@ -21,7 +21,7 @@ After Friday: schema changes need all-three agreement + version bump. This is wh
 ## 2. VASANTH — Money Rails & Product Face (~12.5 build-days)
 
 ### Phase 1 · Tue 21 – Sun 26 Jul
-- **V1. 🚨 x402 buyer loop — TONIGHT.** `@circle-fin/x402-batching` via **Circle's facilitator**: 402 → sign → retry → 200 against our own paid API. *Done when:* a real four-cent purchase completes on testnet and the raw request/response pair is committed as a fixture. Screen-record the first success. **Red by Wed morning → all three swarm.** *(1.5–2d)*
+- **V1. 🚨 x402 buyer loop — TONIGHT.** Circle's Gateway x402 facilitator (`verify`/`settle` over HTTP; the `@circle-fin/x402-batching` package is not used): 402 → sign → retry → 200 against our own paid API. *Done when:* a real four-cent purchase completes on testnet and the raw request/response pair is committed as a fixture. Screen-record the first success. **Red by Wed morning → all three swarm.** *(1.5–2d)*
 - **V2. Paid demo API (seller).** Three endpoints: `$0.04` company profile, `$0.06` benchmark, `$4.00` premium (the rejection-beat bait). Returns 402 payment-required correctly, serves JSON after payment. *Done when:* V1's client buys all three end-to-end. *(0.5d)*
 - **V3. Circle stack setup.** Gateway testnet deposit, Agent Wallet with spend-policy configured (outer guard), Circle CLI installed and hitting our wallet. *Done when:* CLI lists the agent wallet and a policy rule demonstrably blocks an over-limit test payment at the wallet layer. *(0.5d)*
 - **V4. Sidecar service.** Wrap V1 behind the H3 API with auth; idempotent `pay` via nonce. *Done when:* Gnanam's Funding stub completes a purchase through it. *(0.5d)*

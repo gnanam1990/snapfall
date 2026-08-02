@@ -17,12 +17,65 @@
 | Source of truth | The ratified v7-line Constitution remains canonical. This PRD reorganizes the same locked content into standard PRD form; **in any conflict, the Constitution wins.** |
 | Change control | **Rule #9 (binding):** no new PRDs. Any change is a small PR against the canonical file, reviewed at standup. **Rule #8:** disagree and commit — vote once, then all three row the same direction. |
 | Contracts status | **DONE.** JobVault, FloatPool, AuditAnchor — **full suite green. FROZEN** (ADR-014). |
+| Implementation status | See **§0.1**, updated 2 Aug 2026. Rule #9 still holds: §0.1 records what is BUILT versus what is PROVEN and introduces no decisions. |
 | Submission | Saturday 8 August 2026 (buffer Sunday 9 August, AoE — contingency only) · Demo Day Thursday 20 August 2026 |
 | Tracks | Agentic Economy (primary) **+ DeFi (primary — ADR-015)** |
 | Team | A: Contracts & Chain → indexer + integration · B: Runtime & Brain · C: Payments, Frontend & Story |
 
+### 0.1 Implementation status — built vs. proven (2 Aug 2026)
+
+This section exists because "merged" and "done" drifted apart, and the difference is the whole
+risk this close to submission. Nothing here changes a requirement; it records state.
+
+The distinction that matters: most V-task done-when clauses (WORK-SPLIT §2) name a **live run** or
+a **committed artifact**. Code cannot satisfy those. A green CI run is not evidence of a payment.
+
+**Built and exercised in CI**
+
+| | |
+|---|---|
+| Contracts | Full suite green, frozen (ADR-014). |
+| x402 loop | 402 → sign → retry → 200 against our own paid API, EIP-3009 signed by a real key and verified by the seller. Policy gates (AT-02/03/04/05) hold. |
+| H3 sidecar | quote/pay/status with auth, deterministic `paymentId`/`authNonce`, cross-language golden vectors pinned against the Go side (AT-18 adjacent). |
+| Policy + approvals | AT-15 gated both sides; the approval lifecycle, escalation and rejection beat run headless. |
+| H2 stream | **Both** sources now: daemon events, and chain events relayed from the indexer's `chain_events` (implemented 2 Aug — before that no chain event ever reached a browser). Optional `aggregates` block now sent. |
+| Dashboard | Overview, Jobs, job detail (timeline + per-expense rows + explorer links), Approvals, Float, Portal, Audit, Workforce. |
+| Spine harness | `scripts/spine_run`, seven beats, each read back from chain; `--scaled` removes the faucet from the critical path. |
+
+**Written but never run against the real thing**
+
+| | |
+|---|---|
+| Circle facilitator broadcast | `sidecar/src/facilitator.ts` (2 Aug). Dormant without `CIRCLE_API_KEY`. The wire contract is written from Circle's documented x402 interface and is an **assumption** until the first live call. Treat that call as the test. |
+
+**Not proven, and not provable by code**
+
+| | Blocked on |
+|---|---|
+| V3 Circle stack | A human: account, terms acceptance, funded Agent Wallet, spend policy. The key has exactly one code consumer since 2 Aug (`sidecar/src/facilitator.ts` reads it at construction); with no key that client stays dormant, attempts no broadcast, and settlement reads `NOT_BROADCAST`. *(An earlier draft of this row said nothing in the repo reads the key. That stopped being true the moment the facilitator landed.)* |
+| V1 real four-cent purchase + committed fixture | V3, then a live capture. `capture-v1-fixture.ts` refuses to write a fixture without a real transaction hash from Circle's endpoints (refusals 5–7). |
+| V7 / V10 / V11 "renders live" | One green spine run with a human watching. |
+| V12 reset → spine → reset → spine | Two consecutive green runs. |
+| Daily spine runs (schedule, §16) | **Zero runs have been logged.** `docs/spine-runs/` holds only `.gitkeep`. The Wed 29 Jul gate was missed. |
+
+**Known gaps carried deliberately**
+
+- Expense receipt hashes are not yet joined to the daemon's purchase provenance (issue #49), so a
+  job's budget bar reads 0% used until `recordExpense` has a daemon caller.
+- Discovery is a local TF-IDF ranker behind the `Catalog` seam, not the Circle Agent Marketplace
+  (§6.6, unchanged).
+- USYC is a mock strategy behind a real interface (§6.7, unchanged).
+- **The compliance screen is a labelled stub**, not the Circle Compliance Engine.
+  `worker.StubCompliance` returns decision `not-screened`, provider `stub`, `stub: true`, and QA
+  surfaces that as a visible note rather than a pass. It is the only implementation of the
+  `Compliance` seam in the tree. Unlike the facilitator this is **not** credential-blocked: no
+  client has been written, so V3 does not unblock it.
+
+---
+
 ### Contents
 
+0.1. Implementation status — built vs. proven *(updated 2 Aug 2026)*
 1. Executive Summary
 2. Background & Problem Statement
 3. Product Overview
@@ -252,7 +305,7 @@ It touches nothing in JobVault, FloatPool, or the waterfall, so it does not viol
 
 ### 6.6 Service discovery & the authorization boundary
 
-Worker need = a fuzzy description, embedded and similarity-matched against Circle Agent Marketplace; highest similarity wins. **The embedding only ever decides WHICH service — never WHETHER to pay.** Payment authorization is always the deterministic policy engine (allowlist, blocked categories, per-transaction limit, budget), regardless of how the service was found. Everywhere pattern-matching appears in this system: **suggest, never authorize** (FR-DSC-001).
+Worker need = a fuzzy description, vectorised and similarity-matched against a service catalog; the highest similarity above a floor wins, or nothing does. *(Shipped: a **deterministic TF-IDF lexical matcher**, not a learned model — `daemon/internal/discovery/discovery.go` labels itself as such — over a committed local stand-in catalog of our own V2 paid API, behind the `Catalog` seam. The Circle Agent Marketplace slots into that seam and is roadmap, per §6.7. This line previously read as though the Marketplace were the live source.)* **The match only ever decides WHICH service — never WHETHER to pay.** Payment authorization is always the deterministic policy engine (allowlist, blocked categories, per-transaction limit, budget), regardless of how the service was found. Everywhere pattern-matching appears in this system: **suggest, never authorize** (FR-DSC-001).
 
 ### 6.7 Circle / Arc adoption map (judge-facing)
 
@@ -260,8 +313,8 @@ Worker need = a fuzzy description, embedded and similarity-matched against Circl
 |---|---|
 | Brain (control plane) | Circle CLI + Circle Skills |
 | Funding agent | Circle Agent Wallet spend-policy (outer guard) + deterministic policy engine (inner) |
-| DD-worker discovery + purchases | Circle Agent Marketplace *(discovery: **roadmap** — the shipped code embedding-matches against a local stand-in catalog, our own V2 paid API, behind a `Catalog` seam built for the marketplace; no marketplace API is integrated today)* + **Circle's Gateway Nanopayments SDK/facilitator** (`@circle-fin/x402-batching`, agents.circle.com) — **never** the generic x402.org facilitator or another vendor's (Coinbase/Stripe/Cloudflare also implement x402; judges score *Circle's* tools) |
-| Compliance step | Circle Compliance Engine, direct |
+| DD-worker discovery + purchases | Circle Agent Marketplace *(discovery: **roadmap** — the shipped code embedding-matches against a local stand-in catalog, our own V2 paid API, behind a `Catalog` seam built for the marketplace; no marketplace API is integrated today)* + **Circle's Gateway x402 facilitator** — **never** the generic x402.org facilitator or another vendor's (Coinbase/Stripe/Cloudflare also implement x402; judges score *Circle's* tools). *Integration detail, stated precisely because it is judge-facing: we call Circle's documented Gateway x402 `verify` and `settle` endpoints directly over HTTP (`sidecar/src/facilitator.ts`, endpoints pinned in `circle-facilitator-fixture.ts` and asserted by AT-18). We do **not** depend on the `@circle-fin/x402-batching` package, which earlier drafts of this table named. As of 2 Aug 2026 that client is written but has never run against the live service — it is dormant without `CIRCLE_API_KEY`, and no payment has settled.* |
+| Compliance step | Circle Compliance Engine *(**seam only — not integrated**. The shipped screen is `worker.StubCompliance` (`daemon/internal/worker/worker.go:178`), wired at `daemon/cmd/snapfall/main.go:759`, which fabricates nothing: decision `not-screened`, provider `stub`, `stub: true`. No Compliance Engine client or endpoint exists in the tree. What IS real: the screen runs as a task step, the report carries "evidence, not a guarantee", and QA reads the stub flag and attaches a disclosure note rather than passing it silently. Unlike the facilitator this is not credential-blocked — no client has been written.)* |
 | Billing agent | Arc Explorer + Gateway settlement records |
 | JobVault / FloatPool / Waterfall | **Ours** — Arc supplies sub-second finality + USDC-native gas; the primitive is our own engineering |
 | Idle pool capital | USYC sweep (mock behind interface if testnet-absent) |
@@ -481,8 +534,8 @@ Canonical IDs only; the invented AT-20/AT-21 from the source material are delibe
 | Circle CLI + Circle Skills | Brain control plane | Agent-native command interface for the dispatch role. |
 | Circle Agent Wallet | Funding agent outer guard | Spend-policy (allowlists, time-bound limits) enforced at the wallet layer. |
 | Circle Agent Marketplace | Worker service discovery | Embedding similarity match against the catalog. **Status: roadmap** — shipped discovery matches a local stand-in catalog (our own V2 paid API) behind a `Catalog` seam; the marketplace slots into that seam, it is not integrated today. |
-| Circle Gateway Nanopayments SDK / facilitator (`@circle-fin/x402-batching`, agents.circle.com) | DD-worker purchases (x402) | **Circle's facilitator only** — never generic x402.org, never another vendor's implementation (AT-18). |
-| Circle Compliance Engine | DD-worker compliance step | Direct integration; folded into the DD-worker as one task step. |
+| Circle Gateway x402 facilitator (`gateway-api-testnet.circle.com/gateway/v1/x402/{verify,settle}`) | DD-worker purchases (x402) | **Circle's facilitator only** — never generic x402.org, never another vendor's implementation (AT-18). Called directly over HTTP; the `@circle-fin/x402-batching` package is **not** a dependency. |
+| Circle Compliance Engine | DD-worker compliance step | Folded into the DD-worker as one task step; the shipped screen is a **labelled stub** (`not-screened` / `provider: stub`) behind the `Compliance` seam. No Compliance Engine client exists today. |
 | Arc Explorer + Gateway settlement records | Billing agent; audit story | Invoice source data; WorkforceRegistry (roadmap) leans on Explorer the same way. |
 | USYC | Idle pool capital sweep | Mock behind interface if the testnet integration is unavailable in time (stays mock per cut order). |
 | Circle Session Keys | Roadmap: in-contract staged release | Post-GA; removes the fresh-job-per-milestone workaround. |
@@ -566,7 +619,7 @@ Open *(added by the Kimi-formalization mining pass — each needs a standup ruli
 | 0:00–0:15 | Thesis | Treasury 0.00. "Zero dollars, one customer. Watch it finance itself." |
 | 0:15–0:30 | Brain scopes | Owner asks; Brain proposes scope + 25 USDC quote; owner confirms; customer funds vault (explorer flash). |
 | 0:30–0:45 | **The snap** | 12.50 lands sub-second; Money Graph animating. "Capital in a snap." |
-| 0:45–1:10 | Autonomous work | Brain → DD-worker; Marketplace discovery; $0.04 x402 buy auto-approved (Circle facilitator visible); Compliance screen passes — "evidence, not a guarantee." |
+| 0:45–1:10 | Autonomous work | Brain → DD-worker; catalog discovery (local stand-in, §6.6); $0.04 x402 buy auto-approved; Compliance screen **runs and discloses itself as a stub** — "evidence, not a guarantee." *(Say `not-screened`, not "passes": the stub returns exactly that, and QA attaches a disclosure note. Claiming a pass on camera is the kind of thing a judge checks.)* |
 | 1:10–1:30 | Human control | $4.00 escalates → owner REJECTS in the feed → worker adapts, $0.06 alternative. "The workforce can't embezzle itself." |
 | 1:30–1:50 | QA + delivery | QA-worker bounces one unsupported claim → Delivery revises → hash → customer opens magic link → **Accept**. |
 | 1:50–2:10 | **The fall** | "Watch the Snapfall" — one tx, pool 12.75 first, operator remainder; explorer proof. |

@@ -29,10 +29,16 @@ sequence with assertions. No Circle account, no funded wallet, no network requir
 | | |
 | --- | --- |
 | Real | HTTP 402 challenge on both x402 transports; EIP-3009 `transferWithAuthorization` signed by a real key; signature verified by the seller via `verifyTypedData`; nonce replay rejected; policy gates enforced before signing |
-| **Not real yet** | **Settlement is never broadcast.** The seller verifies the authorization but does not submit it on-chain. That needs a funded Arc testnet wallet + a facilitator. |
+| Written, never run | **The facilitator broadcast** (`src/facilitator.ts`). The seller calls Circle's x402 `verify` then `settle` and records the transaction hash. It is dormant without `CIRCLE_API_KEY`, and it has never been exercised against the live service — the wire contract is written from Circle's documented interface and is an assumption until V3. |
+| **Not real yet** | **No payment has settled.** With no key the seller reports `settlement: NOT_BROADCAST` exactly as before, no V1 fixture exists, and `capture:v1-fixture` refuses to write one. |
 
-So the loop is cryptographically end-to-end and financially a dry run. Closing that gap is
-the next task and it needs a human — see Blockers.
+So the loop is cryptographically end-to-end, and financially it is still a dry run until a Circle
+key exists. What changed is that the gap is now a credential rather than missing code. See
+Blockers, and `docs/V3-CIRCLE-SETUP.md` for the ordering.
+
+**Do not read a green `npm run demo:loop` as evidence the broadcast works.** It exercises the
+unconfigured path, which is unchanged. The first live capture is the real test of the settlement
+code, and it should be treated as one.
 
 ## Layout
 
@@ -87,7 +93,9 @@ deterministic systems authorize" boundary expressed as a type.
    interactively. Accepting a vendor ToS is not something an agent should do for you.
 2. **Circle dev account + Gateway testnet setup** (account creation is a human step).
 3. **Funded Arc testnet wallet** — [faucet.circle.com](https://faucet.circle.com). Needed
-   before settlement can be broadcast.
+   before settlement can be broadcast. (For the SPINE harness the faucet is no longer on the
+   critical path: `./scripts/spine_run --scaled` sizes the run to the pool you already hold.
+   This wallet is still needed for a real x402 purchase.)
 4. **USDC token address on Arc testnet** — `seller.ts` currently uses a placeholder
    (`ARC_USDC_ADDRESS` env). The EIP-712 domain's `verifyingContract` must be the real
    token or signatures will not verify against the real USDC.
