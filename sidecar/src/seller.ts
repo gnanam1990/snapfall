@@ -101,7 +101,27 @@ const RESOURCES: Record<string, Resource> = {
  * an authorization is a bearer instrument until it is consumed.
  * In-memory is fine for a demo; production needs shared storage.
  */
-const spentNonces = new Set<string>();
+/**
+ * Nonces this process has accepted, and what became of them.
+ *
+ * A plain Set was enough while every purchase resolved in one request. It stopped being enough
+ * the moment an UNKNOWN settlement could withhold the goods: the nonce was already consumed, so
+ * the buyer's retry came back "nonce already spent (replay)" and the paid resource became
+ * permanently unreachable. Withholding delivery is right; making the payment unrecoverable is
+ * not, and telling the buyer to retry when retry cannot work is worse than either.
+ *
+ * A REPLAY is a different request reusing a nonce. The SAME authorization re-presenting itself
+ * for the same resource is a retry, and it is answered from this record.
+ */
+interface NonceRecord {
+  path: string;
+  amount: string;
+  /** 'delivered' once the goods went out; 'pending' while a settlement is unconfirmed. */
+  state: 'delivered' | 'pending';
+  settlement: string;
+  at: string;
+}
+const spentNonces = new Map<string, NonceRecord>();
 
 function challengeFor(path: string, resource: Resource): PaymentChallenge {
   const accept: AcceptOption = {
@@ -164,7 +184,7 @@ function authorizationShape(a: unknown): { ok: true } | { ok: false; reason: str
   return { ok: true };
 }
 
-async function verifyPayment(payment: PaymentPayload, resource: Resource): Promise<Verdict> {
+async function verifyPayment(payment: PaymentPayload, resource: Resource, path: string): Promise<Verdict> {
   const { signature, authorization: a } = payment.payload;
 
   if (payment.scheme !== 'exact') return { ok: false, reason: `unsupported scheme ${payment.scheme}` };
@@ -183,7 +203,11 @@ async function verifyPayment(payment: PaymentPayload, resource: Resource): Promi
   if (now < BigInt(a.validAfter)) return { ok: false, reason: 'authorization not yet valid' };
   if (now >= BigInt(a.validBefore)) return { ok: false, reason: 'authorization expired' };
 
-  if (spentNonces.has(a.nonce)) return { ok: false, reason: 'nonce already spent (replay)' };
+  const seen = spentNonces.get(a.nonce);
+  if (seen && !(seen.state === 'pending' && seen.path === path && seen.amount === a.value)) {
+    // Reused for anything other than re-presenting the identical unresolved purchase.
+    return { ok: false, reason: 'nonce already spent (replay)' };
+  }
 
   // The actual cryptography: does this signature bind THIS authorization to `from`?
   // verifyTypedData does not merely return false on a malformed signature -- it THROWS
@@ -321,7 +345,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return sendChallenge(res, challenge, `malformed authorization: ${shape.reason}`);
   }
 
-  const verdict = await verifyPayment(payment, resource);
+  const verdict = await verifyPayment(payment, resource, path);
   if (!verdict.ok) {
     console.log(`[seller] 402 ${path} — rejected: ${verdict.reason}`);
     return sendChallenge(res, challenge, verdict.reason);
@@ -329,7 +353,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   // Consume the nonce BEFORE handing over the goods, so a concurrent replay
   // of the same authorization cannot also be served.
-  spentNonces.add(payment.payload.authorization.nonce);
+  const nonce = payment.payload.authorization.nonce;
 
   // ── the broadcast ───────────────────────────────────────────────────────────────────────
   //
@@ -355,10 +379,28 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // payment; it is a refusal to deliver before the payment is confirmed. The nonce stays spent
   // either way, so a settle that does land cannot be replayed for a second copy.
   if (outcome.state !== 'settled' && facilitator.isConfigured()) {
+    if (outcome.state === 'rejected') {
+      // Nothing moved, so the nonce is genuinely unused and must NOT be recorded as spent --
+      // recording it would burn an authorization the buyer never got value for.
+      const why = `facilitator declined: ${outcome.reason}`;
+      console.log(`[seller] 402 ${path} — ${why}`);
+      return sendChallenge(res, challenge, why);
+    }
+
+    // UNKNOWN. The authorization may still land, so the nonce is held against THIS purchase:
+    // nobody else can spend it, and this buyer can re-present the identical request. The goods
+    // stay withheld until the settlement is confirmed.
+    //
+    // Honest limitation: confirming it needs a settlement-status read this client does not have,
+    // because the shape of that call is one of the things V3 has to establish. Until then the
+    // reference below is what an operator reconciles by hand against the payee balance.
+    spentNonces.set(nonce, {
+      path, amount: payment.payload.authorization.value,
+      state: 'pending', settlement: settlementFor(outcome), at: new Date().toISOString(),
+    });
     const why =
-      outcome.state === 'rejected'
-        ? `facilitator declined: ${outcome.reason}`
-        : `settlement unconfirmed (${settlementFor(outcome)}); retry once it is reconciled`;
+      `settlement unconfirmed (${settlementFor(outcome)}); this authorization is held for you, ` +
+      `reference ${nonce}. Reconcile against the payee balance before re-presenting it.`;
     console.log(`[seller] 402 ${path} — ${why}`);
     return sendChallenge(res, challenge, why);
   }
@@ -382,6 +424,13 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     settlement: settlementFor(outcome),
     facilitator: facilitator.isConfigured() ? facilitator.endpoints() : undefined,
   };
+
+  // Recorded as delivered only now that the goods are actually going out, so a crash between
+  // settle and send leaves the nonce held rather than burned.
+  spentNonces.set(nonce, {
+    path, amount: payment.payload.authorization.value,
+    state: 'delivered', settlement: receipt.settlement, at: new Date().toISOString(),
+  });
 
   return send(res, 200, { data: resource.data, receipt }, {
     'x-payment-response': encodeBase64Json(receipt),

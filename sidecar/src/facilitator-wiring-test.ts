@@ -105,7 +105,7 @@ after(async () => {
  * Drives a real signed purchase through the buyer, which is the only way to get past the seller's
  * signature check. Returns the receipt the buyer recorded.
  */
-async function buyOnce(): Promise<{ settlement: string; facilitator?: { verify: string; settle: string } }> {
+async function buyOnce(authNonce?: string): Promise<{ settlement: string; facilitator?: { verify: string; settle: string } }> {
   const { purchase } = await import('./buyer.js');
   const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
   const account = privateKeyToAccount(generatePrivateKey());
@@ -121,9 +121,45 @@ async function buyOnce(): Promise<{ settlement: string; facilitator?: { verify: 
       maxAmount: 40_000n,
     },
     account,
-    { chainId: Number(process.env.ARC_CHAIN_ID ?? 5042002) },
+    { chainId: Number(process.env.ARC_CHAIN_ID ?? 5042002), ...(authNonce ? { authNonce: authNonce as `0x${string}` } : {}) },
   );
   return result.receipt as { settlement: string; facilitator?: { verify: string; settle: string } };
+}
+
+
+/**
+ * Re-presents a previously signed authorization by replaying the buyer's own X-PAYMENT header.
+ *
+ * Straight HTTP rather than the buyer, because the buyer mints a fresh nonce per purchase and the
+ * whole point here is to send the SAME one twice.
+ */
+async function postPayment(nonce: string, path: string): Promise<{ status: number; body: string }> {
+  const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
+  const { purchase } = await import('./buyer.js');
+  const account = privateKeyToAccount(generatePrivateKey());
+  let header = '';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const h = new Headers(init?.headers);
+    const p = h.get('x-payment');
+    if (p) header = p;
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  try {
+    await purchase(
+      {
+        intentId: 'pi_retry', jobId: 'job_wiring', taskId: 'task_wiring', agentId: 'wiring-test',
+        decision: 'AUTO_APPROVE', policyVersion: 'pol_1',
+        resource: `${SELLER}${path}`, maxAmount: path.includes('benchmark') ? 60_000n : 40_000n,
+      },
+      account,
+      { chainId: Number(process.env.ARC_CHAIN_ID ?? 5042002), authNonce: nonce as `0x${string}` },
+    ).catch(() => undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const res = await fetch(`${SELLER}${path}`, { headers: header ? { 'X-PAYMENT': header } : {} });
+  return { status: res.status, body: await res.text() };
 }
 
 test('a stub facilitator returning a perfect hash still cannot buy the goods', async () => {
@@ -181,6 +217,36 @@ test('a timeout after submitting withholds the goods rather than delivering on h
   stub.settle = { status: 503, body: { message: 'gateway busy' } };
 
   await assert.rejects(buyOnce(), 'an unconfirmed settlement released the paid resource');
+
+  stub.settle = { status: 200, body: { success: true, transaction: TX } };
+});
+
+test('an unconfirmed settlement HOLDS the authorization instead of burning it', async () => {
+  // The trap I walked into fixing the previous finding. Withholding goods on an unknown
+  // settlement is right; consuming the nonce while doing it made the payment unrecoverable --
+  // the buyer's retry came back "nonce already spent (replay)" and the paid resource could never
+  // be obtained. Telling them to retry when retry cannot work is worse than either failure.
+  stub.seen.length = 0;
+  stub.settle = { status: 503, body: { message: 'gateway busy' } };
+
+  const nonce = `0x${'7e'.repeat(32)}`;
+  await assert.rejects(buyOnce(nonce), 'an unconfirmed settlement released the resource');
+
+  // Re-presenting the SAME authorization for the SAME resource is a retry, not a replay, so it
+  // must not be refused as one. It is still withheld, because the settlement is still unknown.
+  const retry = await postPayment(nonce, '/v1/company-profile');
+  assert.equal(retry.status, 402);
+  assert.doesNotMatch(
+    retry.body,
+    /already spent|replay/i,
+    'the held authorization was rejected as a replay; the buyer can never obtain what they paid for',
+  );
+  assert.match(retry.body, /held for you|unconfirmed/i, 'the refusal does not say the payment is held');
+
+  // A DIFFERENT resource on the same nonce is a genuine replay and must still be refused.
+  const abuse = await postPayment(nonce, '/v1/benchmark-summary');
+  assert.equal(abuse.status, 402);
+  assert.match(abuse.body, /already spent|replay/i, 'a nonce was reused across resources');
 
   stub.settle = { status: 200, body: { success: true, transaction: TX } };
 });
