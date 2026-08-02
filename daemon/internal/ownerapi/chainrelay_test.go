@@ -185,8 +185,19 @@ func TestAggregatesReadTheIndexerProjections(t *testing.T) {
 	if agg.Pool == nil || agg.Pool.OrgRateBps != 5500 {
 		t.Errorf("pool = %+v, want orgRateBps 5500: this is what V11's ring reads", agg.Pool)
 	}
-	if len(agg.OpenAdvances) != 1 || agg.OpenAdvances[0].PrincipalAtomic != "12500000" {
-		t.Errorf("openAdvances = %+v, want one at 12500000", agg.OpenAdvances)
+	if len(agg.OpenAdvances) != 1 || agg.OpenAdvances[0].PrincipalUsdc != "12500000" {
+		t.Errorf("openAdvances = %+v, want one at 12500000 under principalUsdc", agg.OpenAdvances)
+	}
+	// The wire keys must match what the dashboard's OpenAdvance/JobSummary read, or the
+	// column renders blank (the defect this change fixes): principalUsdc/feeUsdc/org, priceUsdc.
+	if agg.OpenAdvances[0].FeeUsdc != "250000" {
+		t.Errorf("openAdvance feeUsdc = %q, want 250000", agg.OpenAdvances[0].FeeUsdc)
+	}
+	if agg.OpenAdvances[0].Org == "" {
+		t.Error("openAdvance org is empty; the dashboard OpenAdvance.org would be blank")
+	}
+	if len(agg.ActiveJobs) != 1 || agg.ActiveJobs[0].PriceUsdc != "25000000" {
+		t.Errorf("activeJobs = %+v, want one with priceUsdc 25000000 (the funded escrow)", agg.ActiveJobs)
 	}
 	if agg.PendingApprovals != 2 {
 		t.Errorf("pendingApprovals = %d, want 2", agg.PendingApprovals)
@@ -206,8 +217,8 @@ func TestAggregatesReadTheIndexerProjections(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	adv := back["openAdvances"].([]any)[0].(map[string]any)
-	if _, ok := adv["principalAtomic"].(string); !ok {
-		t.Errorf("principalAtomic serialized as %T, want string (H1 §2)", adv["principalAtomic"])
+	if _, ok := adv["principalUsdc"].(string); !ok {
+		t.Errorf("principalUsdc serialized as %T, want string (H1 §2)", adv["principalUsdc"])
 	}
 }
 
