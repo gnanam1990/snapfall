@@ -67,7 +67,9 @@
   --text: #e9e7e2;      /* 12.4:1 */
   --text-2: #bab6ae;    /*  8.0:1 */
   --muted: #a09c94;     /*  5.7:1 */
-  --muted-2: #8d8981;   /*  4.5:1 — at the floor, and the reason the ramp stops here */
+  /* Measured, not asserted. #8d8981 claimed 4.5 and delivered 4.41 on --panel-3, the lightest
+     surface it can land on in dark, so it cleared AA nowhere that mattered. */
+  --muted-2: #918d85;   /*  4.64 --panel-3 · 4.93 --panel-2 · 5.16 --panel · 5.42 --bg */
   --color-muted: var(--muted);
   --n: var(--text);
 
@@ -170,11 +172,15 @@
   --text: #1c1b18;      /* 15.6:1 */
   --text-2: #45423a;    /*  9.1:1 */
   --muted: #6a665c;     /*  5.4:1 */
-  --muted-2: #7c776a;   /*  4.5:1 — the floor, mirrored */
+  /* Measured, not mirrored by eye. #7c776a claimed 4.5 and delivered 4.21 on --panel, 3.96 on
+     --panel-2 and 3.78 on --bg -- it cleared AA on nothing. These are the real ratios for the
+     surfaces this token actually lands on. It still does not clear 4.5 on --well-2 (4.00), so
+     --muted-2 must not be used on that surface; --muted is the token there. */
+  --muted-2: #6e695d;   /*  5.15 --panel · 4.85 --panel-2 · 4.63 --bg */
   --color-muted: var(--muted);
   --n: var(--text);
 
-  --pos: #3f7a4e;
+  --pos: #3a7048;      /* 4.97 on --pos-bg, 5.51 on --panel, 5.18 on --panel-2 */
   --pos-bg: #e6efe4;
   --pos-bg-strong: #d9e8d8;
   --pos-border: #bcd2ba;
@@ -1696,7 +1702,10 @@ table.t { width: 100%; border-collapse: collapse; }
 .mg-drop-fall-op { fill: var(--pos); }
 
 .mg-box { fill: var(--panel-2); stroke: var(--border-2); stroke-width: 1.5; }
-.mg-node .mg-box[style] { stroke: var(--n); filter: drop-shadow(0 0 8px color-mix(in srgb, var(--n) 32%, transparent)); }
+/* The glow that used to live here rendered an 8px drop-shadow on the largest element below the
+   vessel, in the first viewport, while the file header three hundred lines up asserts that no
+   glow exists anywhere. Ink does not emit. Emphasis is stroke weight. */
+.mg-node .mg-box[style] { stroke: var(--n); }
 .mg-name { fill: var(--muted); font-size: 13px; font-weight: 600; text-anchor: middle; }
 .mg-bal { fill: var(--text); font-size: 14px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
 

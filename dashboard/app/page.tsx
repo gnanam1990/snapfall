@@ -110,7 +110,15 @@ export default function OverviewPage() {
         <StatCard
           label="Pending approvals"
           value={String(snap?.pendingApprovals ?? 0)}
-          sub={snap?.pendingApprovals ? 'action needed' : 'all clear'}
+          // Not "all clear": with no daemon there is nothing to be clear about, and asserting
+          // it is the same false zero app/approvals/page.tsx refuses in its own comment.
+          sub={
+            snap?.pendingApprovals
+              ? 'action needed'
+              : snap?.daemonConnected === false
+                ? 'no daemon connected'
+                : 'none awaiting you'
+          }
         />
       </div>
     </>
