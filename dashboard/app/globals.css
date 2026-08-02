@@ -1471,6 +1471,18 @@ table.t { width: 100%; border-collapse: collapse; }
 .job-event-amount { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
 .job-event-meta { display: flex; gap: 8px; margin-top: 1px; font-size: 11.5px; color: var(--muted-2); }
 
+/* Per-expense rows. Same monochrome register as the timeline directly below them: no accent
+   fills, no card-within-a-card, one hairline per row. The amount is tabular so a column of
+   figures aligns on the decimal, which is the whole reason to list them separately from the
+   total. */
+.job-expense-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.job-expenses { list-style: none; margin: 0; padding: 0; }
+.job-expense { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border-2); }
+.job-expense:last-child { border-bottom: 0; }
+.job-expense-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.job-expense-meta { display: flex; align-items: baseline; gap: 10px; flex: none; font-size: 11.5px; color: var(--muted-2); }
+.job-expense-amount { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+
 @media (max-width: 640px) {
   .job-stages { flex-direction: column; }
   .job-stage::after { display: none; }

@@ -150,6 +150,15 @@ export interface StreamEvent {
   kind: string;
   jobId?: string;
   entityId?: string;
+  /**
+   * Daemon events only: the bytes32 vault job id this event's job corresponds to on chain.
+   *
+   * A daemon event is keyed by the business job id and a chain event by the bytes32 vault id,
+   * and neither is derivable from the other -- the vault id is generated when the job is created
+   * on chain, not hashed from the business id. Only the daemon holds the pair
+   * (jobs.vault_job_id), so it puts it on the wire. Absent when the job has no chain presence yet.
+   */
+  chainRef?: string;
   actor?: string;
   at: string;
   payload?: unknown;

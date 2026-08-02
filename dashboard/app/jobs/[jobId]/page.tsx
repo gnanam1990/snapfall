@@ -22,6 +22,7 @@ import { humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdc, formatBps, relativeTime } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import type { JobSnapshot } from '@/lib/jobChain';
+import { belongsToJob, expenseRows } from '@/lib/jobTimeline';
 
 /** Lifecycle order as JobVault declares it; the alt terminals sit outside the happy path. */
 const HAPPY_PATH = ['Created', 'Funded', 'InProgress', 'Delivered', 'Accepted'] as const;
@@ -41,6 +42,49 @@ function Hash({ value }: { value: string }) {
     <span className="mono" title={value}>
       {value.slice(0, 10)}…{value.slice(-8)}
     </span>
+  );
+}
+
+/**
+ * Per-expense provenance.
+ *
+ * The page previously showed only a SUM read from the contract, so "0.10 spent" had nothing
+ * behind it: no merchant, no time, no transaction to open. These rows come from the
+ * ExpenseRecorded chain events the H2 relay delivers -- before that relay existed they were
+ * indexed and then never reached the browser, so this could not have been built.
+ *
+ * Derived from the SAME filtered timeline rendered below rather than from a second fetch: two
+ * lists built from two sources drift, and a per-row list that disagrees with the total above it
+ * is worse than showing no rows.
+ */
+function ExpenseRows({ timeline, total }: { timeline: ActivityMessage[]; total: string | null }) {
+  const rows = useMemo(() => expenseRows(timeline), [timeline]);
+  if (rows.length === 0) return null;
+  return (
+    <div className="card mt">
+      <div className="job-expense-head">
+        <p className="card-title">Expenses</p>
+        {total ? <span className="stat-sub">{formatUsdc(total)} on chain</span> : null}
+      </div>
+      <ol className="job-expenses">
+        {rows.map((row) => (
+          <li key={row.id} className="job-expense">
+            <span className="job-expense-text">{row.text}</span>
+            <span className="job-expense-meta">
+              {row.amountUsdc ? (
+                <span className="job-expense-amount">{formatUsdc(row.amountUsdc)}</span>
+              ) : null}
+              <span>{relativeTime(row.at)}</span>
+              {row.explorerUrl ? (
+                <a className="feed-link" href={row.explorerUrl} target="_blank" rel="noreferrer noopener">
+                  transaction
+                </a>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
@@ -82,7 +126,11 @@ export default function JobDetailPage() {
     (msg: StreamMessage) => {
       if (msg.kind !== 'event') return;
       const item = humanizeStreamEvent(msg);
-      if (item.jobId && item.jobId !== jobId) return;
+      // Fails CLOSED, and joins both vocabularies. The old inline predicate was wrong in both
+      // directions: `item.jobId && item.jobId !== jobId` ADMITTED events carrying no job id at
+      // all, and DROPPED every daemon event, whose business id never equals the bytes32 route
+      // param. See lib/jobTimeline.ts.
+      if (!belongsToJob(item, { vaultJobId: jobId })) return;
       setTimeline((prev) => [item, ...prev.filter((p) => p.id !== item.id)].slice(0, 40));
       void load();
     },
@@ -287,6 +335,8 @@ export default function JobDetailPage() {
       </div>
 
       {/* timeline */}
+      <ExpenseRows timeline={timeline} total={job?.onchainExpensesUsdc ?? null} />
+
       <div className="card mt">
         <p className="card-title">Timeline</p>
         {timeline.length === 0 ? (
@@ -310,6 +360,19 @@ export default function JobDetailPage() {
                     <span className="mono">{item.kind}</span>
                     <span>·</span>
                     <span>{relativeTime(item.at)}</span>
+                    {item.explorerUrl ? (
+                      <>
+                        <span>·</span>
+                        <a
+                          className="feed-link"
+                          href={item.explorerUrl}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                        >
+                          transaction
+                        </a>
+                      </>
+                    ) : null}
                   </div>
                 </div>
               </li>

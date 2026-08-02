@@ -145,3 +145,34 @@ func chainTime(observedAt int64) string {
 	}
 	return time.UnixMilli(observedAt).UTC().Format(time.RFC3339)
 }
+
+// chainRefFor resolves a daemon job id to its bytes32 vault id, memoised per connection.
+//
+// The pair lives in jobs.vault_job_id and nowhere else: the vault id is generated when the job is
+// created on chain, not derived from the business id, so no consumer can compute one from the
+// other. A job that has not reached the chain yet has no ref, and the empty string is cached for
+// it too -- a job stays un-created for its whole early life and re-querying on every tick would
+// turn one miss into a query per event per connection.
+//
+// The cache is per connection and per job, so a job that gains a vault id after this connection
+// opened keeps reporting none until the client reconnects. That is the right trade for a live
+// stream: the alternative is an unbounded re-query for every job that legitimately has no chain
+// presence, and the chain events themselves are unaffected -- they carry the vault id directly.
+func (s *Server) chainRefFor(ctx context.Context, cache map[string]string, jobID string) string {
+	if jobID == "" {
+		return ""
+	}
+	if ref, ok := cache[jobID]; ok {
+		return ref
+	}
+	var ref sql.NullString
+	if err := s.st.DB().QueryRowContext(ctx,
+		`SELECT vault_job_id FROM jobs WHERE id = ?`, jobID).Scan(&ref); err != nil {
+		// No such job, or no jobs table in this build. Cache the miss: an event whose entity is
+		// not a job at all (an org, a worker) must not re-query on every tick.
+		cache[jobID] = ""
+		return ""
+	}
+	cache[jobID] = ref.String
+	return ref.String
+}

@@ -439,7 +439,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	pending := len(s.life.PendingRequests())
 	snapBody := map[string]any{
 		"pendingApprovals": pending,
-		"pool": nil, "openAdvances": nil, "activeJobs": nil,
+		"pool":             nil, "openAdvances": nil, "activeJobs": nil,
 	}
 	// Treasury is deliberately NOT in this snapshot: the operator balance needs a chain read
 	// (6dp ERC-20 balanceOf), which the dashboard does directly against /api/float — a single,
@@ -467,6 +467,13 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	tick := time.NewTicker(s.pollEvery)
 	defer tick.Stop()
 	chainAt := latestChainCursor(r.Context(), s.st.DB())
+
+	// Correlation cache for this connection. A daemon event is keyed by the business job id and
+	// a chain event by the bytes32 vault id, and the two are NOT derivable from each other --
+	// the vault id is generated, not hashed from the business id. Only the daemon holds the pair
+	// (jobs.vault_job_id), so only the daemon can put it on the wire. Without it a consumer
+	// looking at one job can see its chain movement or its daemon reasoning, never both.
+	chainRefs := map[string]string{}
 	for {
 		select {
 		case <-r.Context().Done():
@@ -521,13 +528,21 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			if x.payload != "" {
 				_ = json.Unmarshal([]byte(x.payload), &payload)
 			}
+			event := map[string]any{
+				"kind": x.kind, "jobId": x.entity, "actor": x.actor,
+				"at":      time.UnixMilli(x.ts).UTC().Format(time.RFC3339),
+				"payload": payload,
+			}
+			// ADDITIVE to the H2 §2.1 envelope: chainRef is the bytes32 this daemon event's job
+			// corresponds to on chain, present only when the job has been created there. Existing
+			// consumers ignore an unknown key; the ones that need to join the two vocabularies
+			// stop having to guess. Nothing is renamed and no vocabulary changes.
+			if ref := s.chainRefFor(r.Context(), chainRefs, x.entity); ref != "" {
+				event["chainRef"] = ref
+			}
 			msg := map[string]any{
 				"kind": "event", "source": "daemon", "seq": x.seq,
-				"event": map[string]any{
-					"kind": x.kind, "jobId": x.entity, "actor": x.actor,
-					"at":      time.UnixMilli(x.ts).UTC().Format(time.RFC3339),
-					"payload": payload,
-				},
+				"event": event,
 			}
 			if err := sseWrite(w, fl, x.seq, msg); err != nil {
 				return
