@@ -71,6 +71,24 @@ const PLACEHOLDER_ADDRESSES = new Set(
 );
 
 /** Receipt values that mean "nothing was broadcast". Refusal 5. */
+/**
+ * The facilitator endpoints this purchase actually settled through.
+ *
+ * seller.ts puts them on the receipt when a broadcast was attempted. An older seller, or one with
+ * no facilitator configured, reports nothing -- and in that case the settlement is a dry-run
+ * marker anyway, so refusal 5 stops the run before refusal 6 can read this.
+ */
+function settledEndpoints(result: { receipt?: { facilitator?: { verify?: string; settle?: string } } }): {
+  verify: string;
+  settle: string;
+} {
+  const f = result?.receipt?.facilitator;
+  return {
+    verify: f?.verify ?? CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.verify,
+    settle: f?.settle ?? CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.settle,
+  };
+}
+
 const DRY_RUN_SETTLEMENTS = new Set([
   'NOT_BROADCAST', // seller.ts's honest marker
   'DRY_RUN',
@@ -289,7 +307,12 @@ function buildFixture(
     // The AT-18 contract fields validateCircleV1Fixture asserts. Everything below them is
     // additional evidence the validator deliberately ignores.
     x402Version: 1,
-    facilitatorEndpoints: CIRCLE_TESTNET_FACILITATOR_ENDPOINTS,
+    // The endpoints the SELLER reports having settled through, falling back to the documented
+    // Circle ones only when the receipt does not say. Hardcoding them here made the fixture
+    // assert something it had not observed: any settlement, from any facilitator, was written
+    // out claiming Circle's URLs, and AT-18 then validated that claim happily. Refusal 6 below
+    // is what turns this from a decorative field into a check.
+    facilitatorEndpoints: settledEndpoints(result),
 
     x402VersionNote:
       '1 is the AT-18 fixture-contract version asserted by validateCircleV1Fixture, not the ' +
@@ -421,6 +444,29 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
+  // ── Refusal 6: settled, but not by Circle. ──
+  //
+  // A transaction hash proves money moved; it does not prove WHO broadcast it. The submission's
+  // claim is specifically that Circle's facilitator settled the payment, and a fixture captured
+  // against a local stub or any other facilitator would otherwise be written out asserting
+  // Circle's endpoints because they used to be hardcoded above.
+  const used = settledEndpoints(result);
+  for (const leg of ['verify', 'settle'] as const) {
+    if (used[leg] !== CIRCLE_TESTNET_FACILITATOR_ENDPOINTS[leg]) {
+      await writeJson(PENDING_PATH, fixture);
+      console.error(
+        `\nSTOPPED, honestly. This payment settled through ${used[leg]} for the ${leg} leg, not ` +
+          `Circle's documented ${CIRCLE_TESTNET_FACILITATOR_ENDPOINTS[leg]}.\n\n` +
+          '  A transaction hash proves money moved. It does not prove Circle moved it, and that ' +
+          'is the specific claim V1 and AT-18 make.\n' +
+          `  raw evidence parked at: ${PENDING_PATH}\n\n` +
+          'If you were pointing at a local facilitator stub, unset CIRCLE_X402_VERIFY_URL and ' +
+          'CIRCLE_X402_SETTLE_URL and capture again against the real service.\n',
+      );
+      process.exit(1);
+    }
+  }
+
   if (!/^0x[0-9a-fA-F]{64}$/.test(settlement)) {
     console.log(
       `  note: settlement reference "${settlement}" is not a 32-byte tx hash. Confirm it ` +

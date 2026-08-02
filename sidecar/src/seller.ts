@@ -19,6 +19,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { verifyTypedData, type Address, type Hex } from 'viem';
 import {
+  CircleFacilitator,
+  settlementFor,
+  type PaymentRequirements,
+  type SettleOutcome,
+} from './facilitator.js';
+import {
   encodeBase64Json,
   decodeBase64Json,
   formatUsdc,
@@ -29,6 +35,11 @@ import {
 } from './x402.js';
 
 const PORT = Number(process.env.PAID_API_PORT ?? 4021);
+
+// One client for the process. Unconfigured until CIRCLE_API_KEY exists (V3), and while
+// unconfigured the seller does not attempt a broadcast at all -- an attempted-and-failed
+// broadcast is a different, worse claim than an honest "no facilitator configured".
+const facilitator = new CircleFacilitator();
 // Loopback, matching service.ts. Overridable for a container, but never silently 0.0.0.0.
 const HOST = process.env.PAID_API_HOST ?? '127.0.0.1';
 
@@ -214,6 +225,53 @@ async function verifySignature(payment: PaymentPayload, a: PaymentPayload['paylo
   });
 }
 
+/**
+ * The x402 PaymentRequirements the facilitator is asked to enforce, rebuilt from OUR resource
+ * table rather than echoed from the buyer's payload. Echoing the client's own terms back to the
+ * facilitator would let a buyer nominate the amount and payee it settles against.
+ */
+function paymentRequirements(path: string, resource: Resource): PaymentRequirements {
+  return {
+    scheme: 'exact',
+    network: NETWORK,
+    maxAmountRequired: resource.price.toString(),
+    resource: path,
+    payTo: PAY_TO,
+    asset: USDC_ADDRESS,
+    maxTimeoutSeconds: MAX_TIMEOUT_SECONDS,
+    extra: { name: 'USD Coin', version: '2' },
+  };
+}
+
+/**
+ * Verify then settle.
+ *
+ * verify() first because a pre-broadcast refusal is clean: nothing was submitted, so the seller
+ * can decline outright. Once settle() is called the authorization has left this process and a
+ * missing response is an UNKNOWN, not a failure -- settlementFor maps that to a marker the
+ * fixture capture refuses, so an unknown outcome can never become committed evidence.
+ */
+async function settleWithFacilitator(
+  payment: PaymentPayload,
+  requirements: PaymentRequirements,
+  path: string,
+): Promise<SettleOutcome> {
+  const pre = await facilitator.verify(payment, requirements);
+  if (!pre.valid) {
+    return { state: 'rejected', reason: pre.reason ?? 'facilitator verify failed' };
+  }
+  const outcome = await facilitator.settle(payment, requirements);
+  if (outcome.state === 'unknown') {
+    // Loud on purpose: money may have moved and nobody can tell from here. This is the line an
+    // operator needs to find in the log before deciding whether to retry anything.
+    console.error(
+      `[seller] SETTLEMENT UNKNOWN ${path} — ${outcome.reason}. The authorization may still ` +
+        'land on chain; reconcile against the payee balance before retrying.',
+    );
+  }
+  return outcome;
+}
+
 // Nothing reachable from a request may end the process. The shape guard above covers what we
 // know about; this covers what we do not. viem's signature recovery throws on a signature that
 // does not recover ("Invalid yParityOrV value") and that is a WELL-FORMED payment with a bad
@@ -272,8 +330,32 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // Consume the nonce BEFORE handing over the goods, so a concurrent replay
   // of the same authorization cannot also be served.
   spentNonces.add(payment.payload.authorization.nonce);
+
+  // ── the broadcast ───────────────────────────────────────────────────────────────────────
+  //
+  // Everything above proves the authorization is valid; none of it moves money. USDC moves when
+  // somebody submits transferWithAuthorization, and that is the facilitator's job. This is the
+  // step that closes V1, and until CIRCLE_API_KEY exists it does not run at all and the receipt
+  // keeps saying NOT_BROADCAST, exactly as before.
+  //
+  // The order matters: the nonce is already consumed, so a settle that lands cannot be replayed;
+  // and settlement is resolved BEFORE the goods are handed over, so the receipt the buyer
+  // records is the one the chain will agree with.
+  const requirements = paymentRequirements(path, resource);
+  const outcome: SettleOutcome = facilitator.isConfigured()
+    ? await settleWithFacilitator(payment, requirements, path)
+    : { state: 'not-configured' };
+
+  // A pre-broadcast refusal means nothing moved, so the honest answer is 402 and no goods --
+  // handing over the resource for a payment the facilitator declined would be giving it away.
+  if (outcome.state === 'rejected') {
+    console.log(`[seller] 402 ${path} — facilitator declined: ${outcome.reason}`);
+    return sendChallenge(res, challenge, `facilitator declined: ${outcome.reason}`);
+  }
+
   console.log(
-    `[seller] 200 ${path} — paid ${formatUsdc(resource.price)} USDC by ${payment.payload.authorization.from}`,
+    `[seller] 200 ${path} — paid ${formatUsdc(resource.price)} USDC by ${payment.payload.authorization.from}` +
+      (outcome.state === 'settled' ? ` — settled ${outcome.txHash}` : ` — settlement ${settlementFor(outcome)}`),
   );
 
   // FR-X402-004: the receipt the buyer ties to its task + accounting category.
@@ -285,7 +367,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     payer: payment.payload.authorization.from,
     payee: PAY_TO,
     nonce: payment.payload.authorization.nonce,
-    settlement: 'NOT_BROADCAST' as const, // see file header
+    // A real transaction hash when Circle broadcast one, and a marker capture-v1-fixture.ts
+    // already refuses otherwise. No path here invents a settlement string.
+    settlement: settlementFor(outcome),
+    facilitator: facilitator.isConfigured() ? facilitator.endpoints() : undefined,
   };
 
   return send(res, 200, { data: resource.data, receipt }, {

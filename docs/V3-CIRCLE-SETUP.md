@@ -211,10 +211,22 @@ crossed the wire. It refuses to write anything if:
 
 ### The one thing that will stop you, and it is supposed to
 
-`sidecar/src/seller.ts` hardcodes `settlement: 'NOT_BROADCAST'` and says why in its header: it
-verifies the buyer's authorization but does not submit `transferWithAuthorization` on chain,
-because that is the facilitator's job. Until a real Circle Gateway facilitator broadcast is
-wired, `capture:v1-fixture` will park the raw evidence at
+**Updated 2 Aug 2026: the broadcast is now wired** (`sidecar/src/facilitator.ts`). The seller
+calls Circle's `verify` then `settle` and records the returned transaction hash on the receipt.
+It stays dormant until `CIRCLE_API_KEY` is set, so with no key the behaviour below is unchanged
+and `capture:v1-fixture` still refuses. **The client has never run against the live service** --
+its wire contract is written from Circle's documented x402 facilitator interface and is an
+assumption until Step 8. Treat the first live capture as the test of it.
+
+Two refusals now guard the fixture, not one. Refusal 5 rejects a settlement that is not a real
+transaction hash; refusal 6 rejects one that came from a facilitator other than Circle's
+documented endpoints. The second exists because the fixture used to hardcode Circle's URLs and
+therefore asserted a claim it had never observed.
+
+Until a key exists, `sidecar/src/seller.ts` reports `settlement: 'NOT_BROADCAST'` and says why in
+its header: it verifies the buyer's authorization but does not submit `transferWithAuthorization`
+on chain, because that is the facilitator's job. In that state `capture:v1-fixture` parks the raw
+evidence at
 `sidecar/fixtures/v1-circle-payment.json.pending_chain`, print a stop message, and exit 1. **No
 fixture is written and V1 stays open.**
 
