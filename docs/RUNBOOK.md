@@ -38,6 +38,20 @@ The scaled lifecycle (pool 20 / job 1.00 / advance 0.50) fits inside one claim w
 demo figures (150/25) need ~9 claims over ~18 hours — schedule them across the
 recording week, not the recording day.
 
+**The harness can now run at the scaled figures** (2 Aug 2026). `./scripts/spine_run --scaled`
+is `--price 1.00 --pool-seed 0`: the cap floor drops from 125.00 to 5.00, and since `seed_demo`
+deposits `max(0, target - current)` it submits **no deposit at all** against a pool that already
+clears the floor. Measured against the live pool holding 20.0168 USDC:
+
+| | cap floor | deposit `seed_demo` would submit |
+|---|---|---|
+| PRD defaults (`--price 25.00`) | 125.00 | 129.9832 USDC (~7 claims) |
+| `--scaled` | 5.00 | none |
+
+Beat 0b's customer-wallet minimum scales with `--price` too, so a scaled run is no longer refused
+for holding less than the PRD's 25.10. A reduced run PASSES every beat but is logged in a `scale`
+column and is **not** evidence for a done-when clause that names the PRD figures.
+
 ## Deploy gas reality
 
 Forge's estimate ran ~2.3x above actual on both Arc deploys observed (0.1856 estimated

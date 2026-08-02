@@ -29,7 +29,9 @@ document is the missing half of the done-criterion ("schema committed").
 `GET /api/v1/events/stream` (SSE, `text/event-stream`). Message = one JSON `StreamMessage`.
 
 **Decision: the daemon RELAYS Anandan's indexed chain events; the dashboard subscribes to
-one stream.** Verified basis: the A2 indexer and this daemon open the **same SQLite store**
+one stream.** **Implemented 2 Aug 2026** in `daemon/internal/ownerapi/chainrelay.go`. Until then
+only the daemon half existed: the indexer wrote `chain_events` and the stream read `events`, two
+different tables, so no chain event ever reached a browser and nothing went red about it. Verified basis: the A2 indexer and this daemon open the **same SQLite store**
 (the indexer's own flag: "shared SQLite database"; one `store/schema.sql` holds both the
 daemon's `events` table and the `chain_*` tables). Relaying is a read of `chain_events`
 in the shared store — no second subscription, no cross-process protocol, one reconnect
@@ -58,11 +60,25 @@ StreamMessage =
         "kind":  "policy.evaluated" | "RateChanged" | ...,   // per the source's vocabulary
         "jobId": "job_demo_1",          // daemon events; chain job events carry entityId
         "entityId": "0x…",              // chain only (bytes32 jobId, or org address for RateChanged)
+        "chainRef": "0x…",              // daemon events only, OPTIONAL, added 2 Aug 2026: the
+                                        //   bytes32 vault job id this event's job maps to on
+                                        //   chain. Daemon events are keyed by the business job
+                                        //   id and chain events by the bytes32, and neither is
+                                        //   derivable from the other (the vault id is generated
+                                        //   at createJob, not hashed from the business id), so
+                                        //   only the daemon can join the two vocabularies.
+                                        //   Absent when the job has no chain presence yet.
         "actor": "approval" | "worker:due-diligence" | ...,
         "at":    "2026-07-24T10:00:00Z",
         "payload": { ... }              // the recorded payload, verbatim — amounts are
       },                                //   ALWAYS base-10 atomic-USDC strings (H1 §2 rule)
       "aggregates": {                   // OPTIONAL — present only when computable from the
+                                        //   IMPLEMENTED 2 Aug 2026 (ownerapi/aggregates.go).
+                                        //   Previously never sent at all: OPTIONAL had been read
+                                        //   as "absent always" rather than "absent until the
+                                        //   indexer has run", so the treasury hero and the V11
+                                        //   ring rendered an em dash against a real daemon while
+                                        //   looking correct against the V5 mock.
         "treasuryUsdc": "12500000",     //   shared store's chain projections; the dashboard
         "pool": { ... },                //   keeps last-known when absent (mock parity: the
         "openAdvances": [ ... ],        //   V5 mock always sends these; the real feed sends

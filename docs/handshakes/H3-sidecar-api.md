@@ -151,7 +151,11 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
     "amount": "40000", "asset": "0x…", "network": "eip155:5042002",
     "payer": "0x…", "payee": "0x…",           // payee == intent.merchant, verified in step 8
     "authNonce": "0x…",                        // the EIP-3009 authorization nonce (renamed from receipt.nonce)
-    "settlement": "NOT_BROADCAST"              // dry run: "NOT_BROADCAST" | "SETTLED" | "FAILED"
+    "settlement": "NOT_BROADCAST"              // a 0x-prefixed 32-byte tx hash once settled;
+                                               // "NOT_BROADCAST" when no facilitator is
+                                               // configured or it declined pre-broadcast;
+                                               // "PENDING" when submitted with an unconfirmed
+                                               // outcome (goods are WITHHELD in that case)
   },
   "authorizationSignature": "0x…",             // EIP-712 signature, audit evidence (FR-X402-004), NOT a key
   "data": { },                                 // resource payload (opaque to Funding)
@@ -185,7 +189,10 @@ The table lists codes in evaluation order (matching the step order above), so th
 
 > **Open for the H3 session (cubic finding):** `token.decision`/`token.expiresAt` divergence currently returns `APPROVAL_TOKEN_INVALID` (the token authorizes a different deal). If the team wants granularity, add `DECISION_MISMATCH` / `EXPIRES_AT_MISMATCH` to the §2.4 enum — the sibling `APPROVED_AMOUNT_MISMATCH` already exists. Decision is deliberately outside the intentHash (§3.3), so `INTENT_HASH_MISMATCH` will not catch it; the code above is the current contract.
 
-**Release safety (see §7).** *Pre-sign* codes (everything from `UNAUTHENTICATED` through `PRICE_EXCEEDS_RESERVED`) mean nothing was signed — Funding releases the full reservation immediately. *Post-sign* codes — `PAYMENT_REJECTED` **and** `FACILITATOR_ERROR` — mean the signed authorization was submitted and, once a real facilitator is wired, may still settle: the record goes to `RECONCILING`/terminal and Funding MUST reconcile via `status` before releasing. (In the current dry run there is no broadcast, so `PAYMENT_REJECTED` is effectively terminal — but consumers must code to the post-sign contract so the distinction holds when settlement lands.)
+**Release safety (see §7).** *Pre-sign* codes (everything from `UNAUTHENTICATED` through `PRICE_EXCEEDS_RESERVED`) mean nothing was signed — Funding releases the full reservation immediately. *Post-sign* codes — `PAYMENT_REJECTED` **and** `FACILITATOR_ERROR` — mean the signed authorization was submitted and, once a real facilitator is wired, may still settle: the record goes to `RECONCILING`/terminal and Funding MUST reconcile via `status` before releasing. (With no `CIRCLE_API_KEY` there is still no broadcast, so `PAYMENT_REJECTED` remains effectively
+terminal in practice — but the sidecar now implements the post-sign contract rather than only
+documenting it: `buyer.ts` exports `POST_SIGN_CODES`/`isPostSign` and `service.ts` routes both
+codes to `RECONCILING`, so the distinction holds the moment a key exists.)
 
 ### 2.3 `status` — read a payment's state
 - **`GET /v1/status/{paymentId}`**
@@ -211,7 +218,12 @@ The table lists codes in evaluation order (matching the step order above), so th
 | 401 | `UNAUTHENTICATED` | bad bearer token |
 | 404 | `PAYMENT_NOT_FOUND` | no record for `paymentId` |
 
-`status` is safe to poll. **Dry-run reality:** with the current `settlement: "NOT_BROADCAST"` seller, `DELIVERED` is the committed-final success state (§5, §7). `SETTLED` and any `DELIVERED → SETTLED` / `RECONCILING → SETTLED|FAILED` facilitator reconciliation are **UNIMPLEMENTED** until a real Circle facilitator broadcast is wired. Consumers MUST NOT treat `SETTLED` as reachable in the dry run.
+`status` is safe to poll. **Reality as of 2 Aug 2026:** the facilitator broadcast is wired but
+dormant without `CIRCLE_API_KEY`, and no payment has settled yet. With no key, `DELIVERED` is the
+committed-final success state (§5, §7) and consumers MUST NOT treat `SETTLED` as reachable.
+With a key, `SETTLED` becomes reachable — but the reconciliation transitions
+(`RECONCILING → SETTLED|FAILED`) still need a settlement-status read the client does not have, so
+an unconfirmed settlement is reconciled by an operator rather than automatically.
 
 ### 2.4 Stable error-code enum (frozen)
 `UNAUTHENTICATED`, `BAD_REQUEST`, `RESOURCE_NOT_FOUND`, `NO_MATCHING_NETWORK`, `CHALLENGE_UNAVAILABLE`, `UPSTREAM_UNREACHABLE`, `PAYMENT_IN_PROGRESS`, `APPROVAL_TOKEN_INVALID`, `INTENT_HASH_MISMATCH`, `INTENT_NOT_APPROVED`, `APPROVAL_EXPIRED`, `APPROVED_AMOUNT_MISMATCH`, `MERCHANT_CHANGED`, `ASSET_CHANGED`, `PRICE_CHANGED`, `PRICE_EXCEEDS_RESERVED`, `PAYMENT_REJECTED`, `FACILITATOR_ERROR`, `PAYMENT_NOT_FOUND`, `INTERNAL`.
@@ -340,7 +352,10 @@ So even if the durable record were lost and execution somehow repeated, the **sa
                                 │           │            │
                                 └── FAILED  └── FAILED   └── RECONCILING* ─▶ SETTLED* | FAILED*
 ```
-`*` = requires a real facilitator; UNIMPLEMENTED in the dry run.
+`*` = requires a real facilitator. **The facilitator broadcast is now WIRED**
+(`sidecar/src/facilitator.ts`, 2 Aug 2026) but has never run against the live service, and it is
+dormant without `CIRCLE_API_KEY`. So these states are reachable in principle and unexercised in
+fact: with no key the sidecar behaves exactly as the dry run described below.
 
 ### 5.1 Meanings
 > **Reconciled (review):** `RECEIVED`/`APPROVED` are **conceptual only — never persisted**. Validation happens in memory and persists nothing (pre-sign failures leave no record, §2.2). The **first persisted state is `SIGNED`**, write-ahead immediately before signing. `(parenthesized)` states above are logical stages, not stored values.
@@ -348,9 +363,18 @@ So even if the durable record were lost and execution somehow repeated, the **sa
 - **SIGNED** — EIP-3009 authorization signed once (deterministic `authNonce`). A key has been used exactly once. **First persisted state.**
 - **SIGNED** — EIP-3009 authorization signed once (deterministic `authNonce`). A key has been used exactly once.
 - **SUBMITTED** — `X-PAYMENT` sent; awaiting seller/facilitator response.
-- **DELIVERED** — seller returned `200` with `{data, receipt}`; goods in hand; `settlement == "NOT_BROADCAST"`. **In the dry run this is the committed-final success state** (see §7).
-- **RECONCILING** — a transport failure occurred **after** submit; the authorization may or may not have settled. Non-terminal; requires facilitator reconciliation before any budget release. (Unreachable until a real facilitator is wired; in the pure dry run a post-submit failure is impossible because the seller call is local.)
-- **SETTLED** — facilitator confirms on-chain settlement. Terminal success. Unimplemented in the dry run.
+- **DELIVERED** — seller returned `200` with `{data, receipt}`; goods in hand. Without a Circle
+  key `settlement == "NOT_BROADCAST"` and **this is the committed-final success state** (see §7).
+  With a key the seller only returns `200` once the facilitator has confirmed settlement, so
+  `settlement` carries the transaction hash.
+- **RECONCILING** — a transport failure occurred **after** submit; the authorization may or may
+  not have settled. Non-terminal; requires facilitator reconciliation before any budget release.
+  Reachable once a key is configured. **Both** `FACILITATOR_ERROR` and `PAYMENT_REJECTED` route
+  here (fixed 2 Aug: `service.ts` previously special-cased only the first, so `PAYMENT_REJECTED`
+  became `FAILED` and the daemon released budget behind a signed authorization).
+- **SETTLED** — facilitator confirms on-chain settlement. Terminal success. The seller-side path
+  that produces it exists but has never run against Circle; treat the first live purchase as the
+  test of it.
 - **FAILED** — pre-sign/pre-submit failure, or a reconciled post-submit failure. Terminal. `reason` set.
 - **EXPIRED** — approval window elapsed before completion. Terminal. `reason` set.
 

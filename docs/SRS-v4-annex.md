@@ -416,7 +416,7 @@ Agent reasoning is isolated from permissions and financial authorization. The Fl
 | --- | --- | --- |
 | Contracts + chain indexer | Solidity + Foundry + OpenZeppelin; indexer in **Go** (shares types with the daemon; no third language) | Member A |
 | Local runtime + agents | **Go daemon** (or Node — decided once on Day 1, then locked) · SQLite (WAL) · typed event bus + transactional outbox · Ollama/llama.cpp local models via OpenAI-compatible abstraction | Member B |
-| Payments + frontend | TypeScript sidecar (`@circle-fin/x402-batching`, viem) · Next.js dashboard · Telegram Bot API | Member C |
+| Payments + frontend | TypeScript sidecar (Circle Gateway x402 `verify`/`settle` over HTTP, viem) · Next.js dashboard · Telegram Bot API | Member C |
 | Chain | Arc Testnet (USDC-native gas, deterministic sub-second finality, EVM) | Member A |
 
 **AI-assisted workflow:** feed Claude Code / ChatGPT the Circle LLM-optimized docs (`developers.circle.com/llms.txt`, `docs.arc.io/llms.txt`) plus this PRD §6–§8 as standing context. Fork `circlefin/arc-nanopayments` as the payments reference — study it; the final demo must not resemble it.

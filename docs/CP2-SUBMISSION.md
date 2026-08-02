@@ -110,7 +110,9 @@ movement and the hashes that anchor it.
 - **USDC** — escrow, advances, waterfall settlement, agent purchases
 - **x402 nanopayments** — agents pay per-call for data through the sidecar, under
   deterministic per-category spending caps with human approval escalation
-- **Circle facilitator** — validated in the sidecar payment path
+- **Circle facilitator** — the sidecar calls Circle's Gateway x402 `verify` and `settle`
+  endpoints, and the endpoints themselves are contract-asserted in CI (AT-18). **No x402 payment
+  has settled on chain yet**; see gaps.
 - **USYC** — idle-float yield strategy (currently a mock strategy; see gaps)
 
 ### Both tracks, one system
@@ -147,6 +149,17 @@ We would rather state these than have them found.
   expense, but it is not yet joined to the daemon's own purchase provenance — so an
   expense recorded via CLI surfaces correctly as outside-policy in the invoice. Settlement
   ordering is enforced; expense origination is not yet fully attested.
+- **No x402 purchase has settled.** This is the honest state of the agent-payment leg. The full
+  402 → sign → retry → 200 loop is real and runs end to end, with the EIP-3009 authorization
+  signed by a real key and verified by the seller. What has never happened is the broadcast: the
+  Circle facilitator client was written on 2 Aug 2026 (`sidecar/src/facilitator.ts`) and has
+  never run against the live service, because that needs a Circle account and API key we do not
+  have yet. Without a key the seller reports `settlement: NOT_BROADCAST` and the fixture capture
+  refuses to write evidence. So the loop is cryptographically end-to-end and financially a dry
+  run, and the settlement code is unproven rather than proven.
+- **No end-to-end spine run has been logged.** `docs/spine-runs/` is empty. The harness exists
+  (`scripts/spine_run`) and can now run against the pool we already hold (`--scaled`), but the
+  claim "green on N consecutive days" is not one we can make.
 - **The local agent activity feed is not part of this checkpoint's evidence.** The money
   spine is what we can prove to someone who does not trust us, and that is what we have
   put on chain.
