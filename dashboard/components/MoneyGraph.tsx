@@ -82,17 +82,27 @@ type Beat = 'fund' | 'snap' | 'spend' | 'reject' | 'repay' | 'fall' | 'flywheel'
  * Takes the whole message, not just the kind, because the kind is not sufficient: the stream
  * normalizes a pending approval and an executed purchase to the same `approval.requested`.
  */
-function beatFor(msg: ActivityMessage): Beat | null {
+export function beatFor(msg: ActivityMessage): Beat | null {
   switch (msg.kind) {
     case 'JobFunded':
     case 'job.funded':
       return 'fund';
+
+    // `advance.executed` is the kind the daemon ACTUALLY writes when the snap lands
+    // (internal/advancing). `advance.issued` was mapped and `advance.executed` was not, so the
+    // snap beat could only ever fire from the chain event or the scripted mock -- against a live
+    // daemon the graph sat still through the single most important moment of the demo.
     case 'AdvanceIssued':
     case 'advance.issued':
+    case 'advance.executed':
       return 'snap';
+
+    // `purchase.delivered` is the daemon's completed purchase. `payment.delivered` was mapped
+    // and is not a kind the daemon emits at all.
     case 'ExpenseRecorded':
     case 'payment.executed':
     case 'payment.delivered':
+    case 'purchase.delivered':
     case 'approval.alternative_found':
       return 'spend';
     // An approval request is only money leaving the treasury once it is APPROVED. The demo's
@@ -109,8 +119,13 @@ function beatFor(msg: ActivityMessage): Beat | null {
       return 'reject';
     case 'AdvanceRepaid':
       return 'repay';
+
+    // `settlement.executed` is the daemon's waterfall. `job.accepted` was mapped, but that is
+    // the customer's click; the money moves on settlement, and on a live run the fall beat was
+    // therefore driven by the wrong moment or, when only the daemon was connected, by nothing.
     case 'JobSettled':
     case 'job.accepted':
+    case 'settlement.executed':
       return 'fall';
     case 'RateChanged':
     case 'rate.updated':

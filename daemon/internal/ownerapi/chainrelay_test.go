@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
@@ -247,5 +248,60 @@ func TestOnlyIssuedAdvancesCountAsOpen(t *testing.T) {
 	}
 	if len(agg.ActiveJobs) != 3 {
 		t.Errorf("activeJobs = %d, want all 3 funded jobs", len(agg.ActiveJobs))
+	}
+}
+
+// chainRefFor is what lets a daemon event reach a job page keyed by the bytes32 vault id. The
+// two ids are not derivable from each other, so if this returns the wrong thing the page silently
+// shows chain movement with no reasoning beside it -- which is what it did before.
+func TestChainRefResolvesTheVaultIDAndCachesMisses(t *testing.T) {
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "refs.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	db := st.DB()
+
+	if _, err := db.Exec(
+		`INSERT INTO organizations (id, owner, name, status, created_at)
+		 VALUES ('org', '0xowner', 'Org', 'active', 0)`); err != nil {
+		t.Fatalf("organizations insert: %v", err)
+	}
+	vault := "0x" + strings.Repeat("ab", 32)
+	if _, err := db.Exec(
+		`INSERT INTO jobs (id, org_id, status, vault_job_id, created_at)
+		 VALUES ('job_spine_1', 'org', 'Funded', ?, 0)`, vault); err != nil {
+		t.Fatalf("jobs insert: %v", err)
+	}
+	// A job that exists but has NOT reached the chain yet: the ref must be empty, not the
+	// zero bytes32, or a page would match every un-created job to one nonexistent chain job.
+	if _, err := db.Exec(
+		`INSERT INTO jobs (id, org_id, status, created_at) VALUES ('job_draft', 'org', 'Draft', 0)`); err != nil {
+		t.Fatalf("draft insert: %v", err)
+	}
+
+	s := &Server{st: st}
+	cache := map[string]string{}
+	ctx := context.Background()
+
+	if got := s.chainRefFor(ctx, cache, "job_spine_1"); got != vault {
+		t.Errorf("chainRefFor = %q, want %q", got, vault)
+	}
+	if got := s.chainRefFor(ctx, cache, "job_draft"); got != "" {
+		t.Errorf("a job with no chain presence returned %q, want empty", got)
+	}
+	if got := s.chainRefFor(ctx, cache, "not_a_job_at_all"); got != "" {
+		t.Errorf("unknown entity returned %q, want empty", got)
+	}
+	if got := s.chainRefFor(ctx, cache, ""); got != "" {
+		t.Errorf("empty entity returned %q, want empty", got)
+	}
+
+	// Misses must be cached, or an event whose entity is not a job at all (an org, a worker)
+	// re-queries on every poll tick for the life of the connection.
+	for _, k := range []string{"job_draft", "not_a_job_at_all"} {
+		if _, ok := cache[k]; !ok {
+			t.Errorf("miss for %q was not cached; it re-queries every tick", k)
+		}
 	}
 }

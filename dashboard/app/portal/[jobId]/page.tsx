@@ -34,7 +34,12 @@ function PortalInner() {
   const [stage, setStage] = useState<string | null>(null);
   const [accepted, setAccepted] = useState(false);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
+  // A note is either the new state after a successful accept, or a failure. They must not look
+  // alike: .portal-note is success-green, so a 503 rendered as reassuring green text under the
+  // heading "Your deliverable is ready", telling a customer their settlement worked when it had
+  // not. The tone travels with the note so the two cannot be confused again.
   const [note, setNote] = useState<string | null>(null);
+  const [noteTone, setNoteTone] = useState<'ok' | 'error'>('ok');
   const [busy, setBusy] = useState(false);
   const [authError, setAuthError] = useState(false);
 
@@ -74,6 +79,7 @@ function PortalInner() {
   const accept = useCallback(async () => {
     setBusy(true);
     setNote(null);
+    setNoteTone('ok');
     try {
       const res = await fetch(`/api/customer/${encodeURIComponent(jobId)}/accept`, {
         method: 'POST',
@@ -83,10 +89,12 @@ function PortalInner() {
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         setNote(body.state ?? 'accepted');
+        setNoteTone('ok');
         await loadStatus();
         await loadReceipt();
       } else {
         setNote(body?.error?.message ?? `error ${res.status}`);
+        setNoteTone('error');
       }
     } finally {
       setBusy(false);
@@ -123,7 +131,11 @@ function PortalInner() {
         <p className="portal-body portal-accepted">Thank you — this delivery is accepted and settled.</p>
       )}
 
-      {note ? <p className="portal-note">{note.replace(/-/g, ' ')}</p> : null}
+      {note ? (
+        <p className={`portal-note${noteTone === 'error' ? ' is-error' : ''}`}>
+          {noteTone === 'error' ? note : note.replace(/-/g, ' ')}
+        </p>
+      ) : null}
 
       {invoice ? (
         <div className="portal-receipt">

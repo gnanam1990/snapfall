@@ -27,6 +27,8 @@ export interface ActivityMessage {
   at: string;
   kind: string;
   jobId?: string;
+  /** Daemon events: the bytes32 vault job id this event's job maps to on chain, when it has one. */
+  chainRef?: string;
   amountUsdc?: string;
   explorerUrl?: string;
   filter: Exclude<ActivityFilter, 'all'>;
@@ -328,6 +330,9 @@ export function humanizeStreamEvent(message: Extract<StreamMessage, { kind: 'eve
     at: event.at,
     kind: event.kind,
     jobId: event.jobId || (event.kind === 'RateChanged' ? undefined : event.entityId),
+    // Carried through so a consumer can join a daemon event to its on-chain job without
+    // having to know the business id. Only the daemon holds that pair.
+    chainRef: event.chainRef,
     explorerUrl: pickString(event.payload, 'explorerUrl', 'explorer_url'),
     settlement: settlementSplit(event.payload),
     placeholder: message.demo === true,

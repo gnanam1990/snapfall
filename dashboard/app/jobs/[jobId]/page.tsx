@@ -22,6 +22,7 @@ import { humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdc, formatBps, relativeTime } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import type { JobSnapshot } from '@/lib/jobChain';
+import { belongsToJob, expenseRows } from '@/lib/jobTimeline';
 
 /** Lifecycle order as JobVault declares it; the alt terminals sit outside the happy path. */
 const HAPPY_PATH = ['Created', 'Funded', 'InProgress', 'Delivered', 'Accepted'] as const;
@@ -41,6 +42,119 @@ function Hash({ value }: { value: string }) {
     <span className="mono" title={value}>
       {value.slice(0, 10)}…{value.slice(-8)}
     </span>
+  );
+}
+
+/**
+ * Per-expense provenance.
+ *
+ * The page previously showed only a SUM read from the contract, so "0.10 spent" had nothing
+ * behind it: no merchant, no time, no transaction to open. These rows come from the
+ * ExpenseRecorded chain events the H2 relay delivers -- before that relay existed they were
+ * indexed and then never reached the browser, so this could not have been built.
+ *
+ * Derived from the SAME filtered timeline rendered below rather than from a second fetch: two
+ * lists built from two sources drift, and a per-row list that disagrees with the total above it
+ * is worse than showing no rows.
+ */
+function ExpenseRows({ timeline, total }: { timeline: ActivityMessage[]; total: string | null }) {
+  const rows = useMemo(() => expenseRows(timeline), [timeline]);
+  if (rows.length === 0) return null;
+  return (
+    <div className="card mt">
+      <div className="job-expense-head">
+        <p className="card-title">Expenses</p>
+        {total ? <span className="stat-sub">{formatUsdc(total)} on chain</span> : null}
+      </div>
+      <ol className="job-expenses">
+        {rows.map((row) => (
+          <li key={row.id} className="job-expense">
+            <span className="job-expense-text">{row.text}</span>
+            <span className="job-expense-meta">
+              {row.amountUsdc ? (
+                <span className="job-expense-amount">{formatUsdc(row.amountUsdc)}</span>
+              ) : null}
+              <span>{relativeTime(row.at)}</span>
+              {row.explorerUrl ? (
+                <a className="feed-link" href={row.explorerUrl} target="_blank" rel="noreferrer noopener">
+                  transaction
+                </a>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/**
+ * Mints the customer's magic link and puts it on the clipboard.
+ *
+ * V9's portal worked and nothing in the product could produce a link to it: the mint endpoint had
+ * no proxy and no UI, so the only route to the customer surface was to assemble the URL by hand
+ * from a curl response. This is the owner's side of the handover, on the page where the owner is
+ * already looking at the job.
+ *
+ * The token is shown ONCE and rotates any prior credential (the daemon says so in its response),
+ * so this deliberately renders the full link for copying rather than storing it anywhere.
+ */
+function AcceptLink({ jobId }: { jobId: string }) {
+  const [link, setLink] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const mint = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setCopied(false);
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/accept-link`, { method: 'POST' });
+      const body = (await res.json()) as { acceptToken?: string; error?: { message?: string } };
+      if (!res.ok || !body.acceptToken) {
+        // Surface the daemon's own reason. A nil MintAccept seam answers 503 NOT_WIRED, which is
+        // a different problem from "no such job", and flattening them wastes the operator's time.
+        setError(body?.error?.message ?? `mint failed (${res.status})`);
+        return;
+      }
+      const url = `${window.location.origin}/portal/${encodeURIComponent(jobId)}?token=${encodeURIComponent(body.acceptToken)}`;
+      setLink(url);
+      try {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+      } catch {
+        // Clipboard access is denied outside a secure context or without permission. The link is
+        // rendered regardless, so the operator can still select it by hand rather than being told
+        // nothing happened.
+        setCopied(false);
+      }
+    } catch {
+      setError('the dashboard could not reach its API');
+    } finally {
+      setBusy(false);
+    }
+  }, [jobId]);
+
+  return (
+    <div className="card mt">
+      <div className="job-expense-head">
+        <p className="card-title">Customer link</p>
+        <button type="button" className="activity-action" onClick={() => void mint()} disabled={busy}>
+          {busy ? 'Minting…' : link ? 'Mint a new link' : 'Mint customer link'}
+        </button>
+      </div>
+      <p className="stat-sub" style={{ margin: '6px 0 0' }}>
+        Shown once, and minting again rotates any link already issued for this job.
+      </p>
+      {error ? <p className="job-link-error">{error}</p> : null}
+      {link ? (
+        <p className="job-link mono">
+          {link}
+          {copied ? <span className="job-link-copied">copied</span> : null}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -82,7 +196,11 @@ export default function JobDetailPage() {
     (msg: StreamMessage) => {
       if (msg.kind !== 'event') return;
       const item = humanizeStreamEvent(msg);
-      if (item.jobId && item.jobId !== jobId) return;
+      // Fails CLOSED, and joins both vocabularies. The old inline predicate was wrong in both
+      // directions: `item.jobId && item.jobId !== jobId` ADMITTED events carrying no job id at
+      // all, and DROPPED every daemon event, whose business id never equals the bytes32 route
+      // param. See lib/jobTimeline.ts.
+      if (!belongsToJob(item, { vaultJobId: jobId })) return;
       setTimeline((prev) => [item, ...prev.filter((p) => p.id !== item.id)].slice(0, 40));
       void load();
     },
@@ -287,6 +405,10 @@ export default function JobDetailPage() {
       </div>
 
       {/* timeline */}
+      <ExpenseRows timeline={timeline} total={job?.onchainExpensesUsdc ?? null} />
+
+      <AcceptLink jobId={jobId} />
+
       <div className="card mt">
         <p className="card-title">Timeline</p>
         {timeline.length === 0 ? (
@@ -310,6 +432,19 @@ export default function JobDetailPage() {
                     <span className="mono">{item.kind}</span>
                     <span>·</span>
                     <span>{relativeTime(item.at)}</span>
+                    {item.explorerUrl ? (
+                      <>
+                        <span>·</span>
+                        <a
+                          className="feed-link"
+                          href={item.explorerUrl}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                        >
+                          transaction
+                        </a>
+                      </>
+                    ) : null}
                   </div>
                 </div>
               </li>
