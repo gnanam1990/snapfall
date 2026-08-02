@@ -27,10 +27,12 @@ history, missing objects, or Git command errors, and prints its revision/path co
 denominator. High-confidence matches fail the command; tracked recording artifacts are
 inventoried for the mandatory manual visual review below.
 
-The automated preflight does not claim to scan unreachable objects, force-pushed GitHub
-objects absent from local refs, commit/tag messages, untracked files, arbitrary bearer tokens,
-or BIP-39 word sequences. A confirmed credential leak requires rotation even if a later local
-checkout cannot reach the leaked object.
+The automated preflight scans the tracked tree and every ref-reachable commit tree. It does
+not scan unreachable or force-pushed objects absent from local refs, commit/tag messages, or
+untracked files, and it matches only a fixed set of high-confidence credential formats. The
+categories it deliberately does not catch are listed in **What this gate does not catch**
+below; read it before treating a green result as "no secret ever existed". A confirmed
+credential leak requires rotation even if a later local checkout cannot reach the leaked object.
 
 ## Secret review
 
@@ -55,6 +57,35 @@ Go/npm integrity hashes are not secrets. Runtime credentials continue to enter t
 environment variables or encrypted Foundry keystores; the code does not log their values.
 
 GitGuardian remains supporting evidence, not a substitute for the fail-closed history scan.
+
+## What this gate does not catch
+
+This preflight is a narrow, high-confidence scanner over the **tracked Git repository only**.
+A green result means no known-format credential was found in the working tree or any reachable
+commit tree; it is not a proof that no secret ever existed. By design it does not catch:
+
+- **Anything outside the Git repository.** The scan reads the tracked tree and reachable commit
+  history — nothing else. It never sees chat transcripts, CI or runtime logs, terminal
+  scrollback, editor buffers, uncommitted or untracked working files, or screenshots and
+  recordings that were not committed. A credential that only ever appeared in one of those
+  channels — for example a `CIRCLE_API_KEY` or an Alchemy RPC key pasted into a chat — was never
+  in scope, and this audit says nothing about it. Rotate such a key on its own evidence; a green
+  scan is not reassurance about it.
+- **API keys embedded in a URL path.** The embedded-credential rule only matches a `user:pass@`
+  style credential in a URL's authority. A key carried in the *path* of a URL — such as an
+  Alchemy endpoint of the form `.../v2/<key>` — is not matched, and no rule is keyed on
+  `ARC_TESTNET_RPC` or similar RPC-URL variables.
+- **BIP-39 word mnemonics.** The mnemonic/seed rules match a 64-hex value assigned to a
+  mnemonic- or seed-phrase-named variable (and filenames that resemble one). A real word-list
+  mnemonic (`abandon abandon … about`) is words, not 64 hex, and is not matched.
+- **Bearer / JWT tokens.** There is no `Bearer <token>` or `eyJ…` (JWT) rule.
+- **Arbitrary-string secrets under other names or in other forms.** The repo's own credentials
+  (`SIDECAR_AUTH_TOKEN`, `H2_APPROVAL_SECRET`, `CIRCLE_API_KEY`, and the treasury/customer/LP/owner
+  keys) are caught **only** as a committed `NAME=value` or `"NAME": "value"` assignment to that
+  exact name. The same secret value under a different variable name, in a non-assignment
+  position, or split across lines is not matched.
+- **Reachability limits.** Unreachable or force-pushed objects absent from local refs, and
+  commit/tag messages, are outside the scan (see the Result note above).
 
 ## Recording-integrity review
 
