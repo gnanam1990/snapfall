@@ -129,6 +129,39 @@ interface NonceRecord {
 }
 const spentNonces = new Map<string, NonceRecord>();
 
+type NonceClaim =
+  | { kind: 'claimed' }
+  | { kind: 'in-flight' }
+  | { kind: 'replay' }
+  | { kind: 'held'; record: NonceRecord };
+
+/**
+ * Decides what this nonce means and claims it, in ONE synchronous block.
+ *
+ * Atomicity here IS the double-broadcast guard. Node interleaves requests only at an await, so a
+ * check and a claim with nothing awaited between them cannot be raced; separate them by even one
+ * await and two requests both pass the check before either claims. My previous attempt checked
+ * inside verifyPayment and claimed after it resolved, with a signature verification awaited in
+ * between, so it never closed the race it described.
+ */
+function claimNonce(nonce: string, path: string, amount: string, payer: string): NonceClaim {
+  const seen = spentNonces.get(nonce);
+  if (seen) {
+    if (seen.state === 'in-flight') return { kind: 'in-flight' };
+    // A hold belongs to the buyer who paid. Without the payer check any signer presenting that
+    // nonce inherits it, which is the difference between "your payment is safe" and "claimable".
+    const sameBuyer = seen.payer.toLowerCase() === payer.toLowerCase();
+    if (seen.state === 'pending' && seen.path === path && seen.amount === amount && sameBuyer) {
+      return { kind: 'held', record: seen };
+    }
+    return { kind: 'replay' };
+  }
+  spentNonces.set(nonce, {
+    path, amount, payer, state: 'in-flight', settlement: '', at: new Date().toISOString(),
+  });
+  return { kind: 'claimed' };
+}
+
 function challengeFor(path: string, resource: Resource): PaymentChallenge {
   const accept: AcceptOption = {
     scheme: 'exact',
@@ -209,22 +242,10 @@ async function verifyPayment(payment: PaymentPayload, resource: Resource, path: 
   if (now < BigInt(a.validAfter)) return { ok: false, reason: 'authorization not yet valid' };
   if (now >= BigInt(a.validBefore)) return { ok: false, reason: 'authorization expired' };
 
-  const seen = spentNonces.get(a.nonce);
-  if (seen) {
-    if (seen.state === 'in-flight') {
-      // Another request is mid-broadcast with this same authorization. Reserving only AFTER the
-      // facilitator call -- which is what I did first -- let two concurrent requests each verify
-      // and each submit the same bearer instrument.
-      return { ok: false, reason: 'this authorization is already being settled; wait for it' };
-    }
-    const sameBuyer = seen.payer.toLowerCase() === a.from.toLowerCase();
-    if (!(seen.state === 'pending' && seen.path === path && seen.amount === a.value && sameBuyer)) {
-      // Anything other than the SAME buyer re-presenting the SAME unresolved purchase. The payer
-      // check matters: a hold exists so the buyer who paid can recover their resource, and
-      // without it any signer presenting that nonce inherits the hold.
-      return { ok: false, reason: 'nonce already spent (replay)' };
-    }
-  }
+  // The nonce is claimed in handle(), synchronously, before anything is awaited. Checking it
+  // HERE would be a check followed by `await verifySignature(...)`, and two requests arriving
+  // together would both pass it before either claimed anything -- which is exactly what my
+  // previous "reserve before the await" did while its comment claimed otherwise.
 
   // The actual cryptography: does this signature bind THIS authorization to `from`?
   // verifyTypedData does not merely return false on a malformed signature -- it THROWS
@@ -362,36 +383,47 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return sendChallenge(res, challenge, `malformed authorization: ${shape.reason}`);
   }
 
+  // ── claim the nonce ─────────────────────────────────────────────────────────────────────
+  //
+  // Node runs one request at a time between awaits, so a check and a claim in the SAME
+  // synchronous block is atomic against concurrent requests. Split them with any await and it is
+  // not, however early the check looks. This is the whole of the double-broadcast guard.
+  const auth = payment.payload.authorization;
+  const claim = claimNonce(auth.nonce, path, auth.value, auth.from);
+
+  if (claim.kind === 'in-flight') {
+    console.log(`[seller] 402 ${path} — already settling: ${auth.nonce}`);
+    return sendChallenge(res, challenge, 'this authorization is already being settled; wait for it');
+  }
+  if (claim.kind === 'replay') {
+    console.log(`[seller] 402 ${path} — replay: ${auth.nonce}`);
+    return sendChallenge(res, challenge, 'nonce already spent (replay)');
+  }
+  if (claim.kind === 'held') {
+    // Answered from the record. Resubmitting a held authorization is worse than useless: if the
+    // timed-out first attempt actually landed, a gateway that rejects the second as already-used
+    // leaves a buyer who HAS paid stuck at a 402 forever, and every retry throws somebody's live
+    // bearer instrument at the network again.
+    const why =
+      `settlement still unconfirmed (${claim.record.settlement}); this authorization is held for ` +
+      `you, reference ${auth.nonce}, since ${claim.record.at}. It has NOT been resubmitted. ` +
+      'Reconcile against the payee balance; the operator releases the resource once the transfer ' +
+      'is confirmed.';
+    console.log(`[seller] 402 ${path} — held, not resubmitted: ${auth.nonce}`);
+    return sendChallenge(res, challenge, why);
+  }
+
   const verdict = await verifyPayment(payment, resource, path);
   if (!verdict.ok) {
+    // Release it. Claiming before verifying is what makes the guard atomic, but holding a nonce
+    // on a request that never verified would let anyone lock a buyer's authorization by sending
+    // a bad signature alongside it.
+    spentNonces.delete(auth.nonce);
     console.log(`[seller] 402 ${path} — rejected: ${verdict.reason}`);
     return sendChallenge(res, challenge, verdict.reason);
   }
 
-  // Consume the nonce BEFORE handing over the goods, so a concurrent replay
-  // of the same authorization cannot also be served.
-  const nonce = payment.payload.authorization.nonce;
-  const held = spentNonces.get(nonce);
-
-  // Re-presenting a held authorization answers from what we recorded. Submitting it again is
-  // worse than useless: if the timed-out first attempt actually landed, a gateway that rejects
-  // the second as already-used leaves a buyer who HAS paid stuck at a 402 forever, and every
-  // retry makes another broadcast attempt with somebody's live bearer instrument.
-  if (held?.state === 'pending') {
-    const why =
-      `settlement still unconfirmed (${held.settlement}); this authorization is held for you, ` +
-      `reference ${nonce}, since ${held.at}. It has NOT been resubmitted. Reconcile against the ` +
-      'payee balance; the operator releases the resource once the transfer is confirmed.';
-    console.log(`[seller] 402 ${path} \u2014 held, not resubmitted: ${nonce}`);
-    return sendChallenge(res, challenge, why);
-  }
-
-  // Reserved BEFORE any await, so a concurrent request carrying the same authorization is
-  // refused rather than broadcasting it twice.
-  spentNonces.set(nonce, {
-    path, amount: payment.payload.authorization.value, payer: payment.payload.authorization.from,
-    state: 'in-flight', settlement: '', at: new Date().toISOString(),
-  });
+  const nonce = auth.nonce;
 
   // ── the broadcast ───────────────────────────────────────────────────────────────────────
   //
@@ -404,9 +436,17 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // and settlement is resolved BEFORE the goods are handed over, so the receipt the buyer
   // records is the one the chain will agree with.
   const requirements = paymentRequirements(path, resource);
-  const outcome: SettleOutcome = facilitator.isConfigured()
-    ? await settleWithFacilitator(payment, requirements, path)
-    : { state: 'not-configured' };
+  // A throw between the claim and the outcome would otherwise leave this authorization in-flight
+  // for the life of the process: no retry, no hold, no route back to the resource. An exception
+  // after submitting is the same thing as a timeout -- unknown, not failed.
+  let outcome: SettleOutcome;
+  try {
+    outcome = facilitator.isConfigured()
+      ? await settleWithFacilitator(payment, requirements, path)
+      : { state: 'not-configured' };
+  } catch (e) {
+    outcome = { state: 'unknown', reason: `settle threw: ${(e as Error).message}` };
+  }
 
   // Goods are released on CONFIRMED payment only.
   //

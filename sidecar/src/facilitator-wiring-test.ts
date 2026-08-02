@@ -301,3 +301,32 @@ test('a different payer cannot claim somebody else\'s held authorization', async
 
   stub.settle = { status: 200, body: { success: true, transaction: TX } };
 });
+
+test('two concurrent requests with one authorization broadcast it once', async () => {
+  // The race my previous fix described but did not close. It checked the nonce inside
+  // verifyPayment and claimed it back in handle() after that resolved -- with an awaited
+  // signature verification in between, so both requests passed the check before either claimed.
+  // A bearer authorization broadcast twice is the worst outcome this file can produce.
+  stub.seen.length = 0;
+  stub.settle = { status: 200, body: { success: true, transaction: TX } };
+
+  // One signed authorization, presented twice at the same moment.
+  await assert.rejects(buyOnce(`0x${'3c'.repeat(32)}`));
+  const header = lastPaymentHeader;
+  assert.ok(header, 'no authorization captured');
+
+  stub.seen.length = 0;
+  const [a, b] = await Promise.all([
+    fetch(`${SELLER}/v1/company-profile`, { headers: { 'X-PAYMENT': header } }),
+    fetch(`${SELLER}/v1/company-profile`, { headers: { 'X-PAYMENT': header } }),
+  ]);
+
+  const settles = stub.seen.filter((x) => x.path === 'settle').length;
+  assert.ok(
+    settles <= 1,
+    `the same authorization was submitted ${settles} times; concurrent requests both broadcast it`,
+  );
+  // Neither may serve the goods here: this authorization is already held from the first attempt.
+  assert.equal(a.status, 402);
+  assert.equal(b.status, 402);
+});
