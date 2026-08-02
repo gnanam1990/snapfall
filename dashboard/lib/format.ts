@@ -55,6 +55,47 @@ export function formatBps(bps: number | null | undefined): string {
   return `${(bps / 100).toFixed(bps % 100 === 0 ? 0 : 1)}%`;
 }
 
+/** A deadline, decomposed so the caller can style urgency without re-deriving it. */
+export type Countdown = {
+  /** Human text: "4m left", "expired", or "" when the timestamp is unreadable. */
+  text: string;
+  /** True once the window has closed. The daemon rejects a decision at this point. */
+  expired: boolean;
+  /** Whole seconds remaining; 0 once expired, NaN when the timestamp is unreadable. */
+  secondsLeft: number;
+};
+
+/**
+ * Time remaining until a future instant.
+ *
+ * relativeTime cannot express this: it clamps with `Math.max(0, now - t)`, so every future
+ * timestamp collapses to "just now". The approvals inbox printed "Expires just now" on every
+ * unexpired request because of that -- the only pressure signal on a server-enforced window,
+ * carrying no information at all.
+ *
+ * Seconds are kept below a minute because the last minute of an approval window is exactly when
+ * the owner needs to know whether it is worth typing a reason.
+ */
+export function timeUntil(iso: string, now: number = Date.now()): Countdown {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return { text: '', expired: false, secondsLeft: Number.NaN };
+
+  const secondsLeft = Math.floor((t - now) / 1000);
+  if (secondsLeft <= 0) return { text: 'expired', expired: true, secondsLeft: 0 };
+  if (secondsLeft < 60) return { text: `${secondsLeft}s left`, expired: false, secondsLeft };
+
+  const minutes = Math.floor(secondsLeft / 60);
+  if (minutes < 60) return { text: `${minutes}m left`, expired: false, secondsLeft };
+
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return {
+    text: rest === 0 ? `${hours}h left` : `${hours}h ${rest}m left`,
+    expired: false,
+    secondsLeft,
+  };
+}
+
 export function relativeTime(iso: string, now: number = Date.now()): string {
   const t = new Date(iso).getTime();
   if (!Number.isFinite(t)) return '';
