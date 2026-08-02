@@ -134,7 +134,7 @@ export default function ScoreRing({
             'earned from delivery history'
           )
         ) : (
-          'awaiting chain indexer'
+          'not reported by the daemon'
         )}
       </div>
     </div>

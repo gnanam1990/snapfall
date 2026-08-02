@@ -754,13 +754,22 @@ table.t { width: 100%; border-collapse: collapse; }
   display: inline-flex;
   padding: 7px 10px;
   border: 1px solid var(--accent-border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--accent-bg);
   color: var(--pos);
   font-size: 11.5px;
   font-weight: 650;
 }
 .rate-delta.is-negative { border-color: var(--neg-border); background: var(--neg-bg); color: var(--neg); }
+/* An absent rate must not wear the accent field and the --pos lettering the delta pill uses for
+   a live, better-than-base figure. Green means settled and flowing here; nothing is flowing when
+   there is no organisation to read. Muted, unfilled, and no longer shouting a value it lacks. */
+.rate-delta.is-absent {
+  border-color: var(--border); background: none; color: var(--muted-2); font-weight: 500;
+}
+.rate-scale-note { margin: 14px 0 0; font-size: 11px; color: var(--muted-2); }
+/* No check mark in this state, so the note carries no badge and drops to the muted floor. */
+.rate-proof-note.is-absent { color: var(--muted-2); font-size: 12px; }
 .rate-derivation {
   min-width: 0;
   padding: 24px 26px;
@@ -834,7 +843,7 @@ table.t { width: 100%; border-collapse: collapse; }
 }
 .rate-proof-note > span {
   width: 26px; height: 26px; display: grid; place-items: center;
-  border: 1px solid var(--accent); border-radius: 8px; color: var(--accent); font-weight: 800;
+  border: 1px solid var(--accent); border-radius: var(--radius); color: var(--accent); font-weight: 800;
 }
 .float-advances { margin-top: 12px; padding: 26px 28px 28px; }
 .float-advance-summary { margin: 4px 0 0; color: var(--muted); font-variant-numeric: tabular-nums; }
