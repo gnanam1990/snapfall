@@ -116,8 +116,14 @@ const RESOURCES: Record<string, Resource> = {
 interface NonceRecord {
   path: string;
   amount: string;
-  /** 'delivered' once the goods went out; 'pending' while a settlement is unconfirmed. */
-  state: 'delivered' | 'pending';
+  /** The authorization's signer. A hold belongs to the buyer who paid, nobody else. */
+  payer: string;
+  /**
+   * 'in-flight' from the moment this process starts talking to the facilitator, so a concurrent
+   * request carrying the same authorization cannot broadcast it a second time; 'pending' when the
+   * settlement is unconfirmed; 'delivered' once the goods went out.
+   */
+  state: 'in-flight' | 'delivered' | 'pending';
   settlement: string;
   at: string;
 }
@@ -204,9 +210,20 @@ async function verifyPayment(payment: PaymentPayload, resource: Resource, path: 
   if (now >= BigInt(a.validBefore)) return { ok: false, reason: 'authorization expired' };
 
   const seen = spentNonces.get(a.nonce);
-  if (seen && !(seen.state === 'pending' && seen.path === path && seen.amount === a.value)) {
-    // Reused for anything other than re-presenting the identical unresolved purchase.
-    return { ok: false, reason: 'nonce already spent (replay)' };
+  if (seen) {
+    if (seen.state === 'in-flight') {
+      // Another request is mid-broadcast with this same authorization. Reserving only AFTER the
+      // facilitator call -- which is what I did first -- let two concurrent requests each verify
+      // and each submit the same bearer instrument.
+      return { ok: false, reason: 'this authorization is already being settled; wait for it' };
+    }
+    const sameBuyer = seen.payer.toLowerCase() === a.from.toLowerCase();
+    if (!(seen.state === 'pending' && seen.path === path && seen.amount === a.value && sameBuyer)) {
+      // Anything other than the SAME buyer re-presenting the SAME unresolved purchase. The payer
+      // check matters: a hold exists so the buyer who paid can recover their resource, and
+      // without it any signer presenting that nonce inherits the hold.
+      return { ok: false, reason: 'nonce already spent (replay)' };
+    }
   }
 
   // The actual cryptography: does this signature bind THIS authorization to `from`?
@@ -354,6 +371,27 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // Consume the nonce BEFORE handing over the goods, so a concurrent replay
   // of the same authorization cannot also be served.
   const nonce = payment.payload.authorization.nonce;
+  const held = spentNonces.get(nonce);
+
+  // Re-presenting a held authorization answers from what we recorded. Submitting it again is
+  // worse than useless: if the timed-out first attempt actually landed, a gateway that rejects
+  // the second as already-used leaves a buyer who HAS paid stuck at a 402 forever, and every
+  // retry makes another broadcast attempt with somebody's live bearer instrument.
+  if (held?.state === 'pending') {
+    const why =
+      `settlement still unconfirmed (${held.settlement}); this authorization is held for you, ` +
+      `reference ${nonce}, since ${held.at}. It has NOT been resubmitted. Reconcile against the ` +
+      'payee balance; the operator releases the resource once the transfer is confirmed.';
+    console.log(`[seller] 402 ${path} \u2014 held, not resubmitted: ${nonce}`);
+    return sendChallenge(res, challenge, why);
+  }
+
+  // Reserved BEFORE any await, so a concurrent request carrying the same authorization is
+  // refused rather than broadcasting it twice.
+  spentNonces.set(nonce, {
+    path, amount: payment.payload.authorization.value, payer: payment.payload.authorization.from,
+    state: 'in-flight', settlement: '', at: new Date().toISOString(),
+  });
 
   // ── the broadcast ───────────────────────────────────────────────────────────────────────
   //
@@ -380,8 +418,9 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // either way, so a settle that does land cannot be replayed for a second copy.
   if (outcome.state !== 'settled' && facilitator.isConfigured()) {
     if (outcome.state === 'rejected') {
-      // Nothing moved, so the nonce is genuinely unused and must NOT be recorded as spent --
-      // recording it would burn an authorization the buyer never got value for.
+      // Nothing moved, so the nonce is genuinely unused and the reservation is released --
+      // keeping it would burn an authorization the buyer never got value for.
+      spentNonces.delete(nonce);
       const why = `facilitator declined: ${outcome.reason}`;
       console.log(`[seller] 402 ${path} — ${why}`);
       return sendChallenge(res, challenge, why);
@@ -395,7 +434,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     // because the shape of that call is one of the things V3 has to establish. Until then the
     // reference below is what an operator reconciles by hand against the payee balance.
     spentNonces.set(nonce, {
-      path, amount: payment.payload.authorization.value,
+      path, amount: payment.payload.authorization.value, payer: payment.payload.authorization.from,
       state: 'pending', settlement: settlementFor(outcome), at: new Date().toISOString(),
     });
     const why =
@@ -428,7 +467,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // Recorded as delivered only now that the goods are actually going out, so a crash between
   // settle and send leaves the nonce held rather than burned.
   spentNonces.set(nonce, {
-    path, amount: payment.payload.authorization.value,
+    path, amount: payment.payload.authorization.value, payer: payment.payload.authorization.from,
     state: 'delivered', settlement: receipt.settlement, at: new Date().toISOString(),
   });
 

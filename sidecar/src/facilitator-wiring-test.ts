@@ -109,7 +109,14 @@ async function buyOnce(authNonce?: string): Promise<{ settlement: string; facili
   const { purchase } = await import('./buyer.js');
   const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
   const account = privateKeyToAccount(generatePrivateKey());
-  const result = await purchase(
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const p = new Headers(init?.headers).get('x-payment');
+    if (p) lastPaymentHeader = p;
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  try {
+    const result = await purchase(
     {
       intentId: `pi_wiring_${stub.seen.length}`,
       jobId: 'job_wiring',
@@ -123,42 +130,27 @@ async function buyOnce(authNonce?: string): Promise<{ settlement: string; facili
     account,
     { chainId: Number(process.env.ARC_CHAIN_ID ?? 5042002), ...(authNonce ? { authNonce: authNonce as `0x${string}` } : {}) },
   );
-  return result.receipt as { settlement: string; facilitator?: { verify: string; settle: string } };
-}
-
-
-/**
- * Re-presents a previously signed authorization by replaying the buyer's own X-PAYMENT header.
- *
- * Straight HTTP rather than the buyer, because the buyer mints a fresh nonce per purchase and the
- * whole point here is to send the SAME one twice.
- */
-async function postPayment(nonce: string, path: string): Promise<{ status: number; body: string }> {
-  const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
-  const { purchase } = await import('./buyer.js');
-  const account = privateKeyToAccount(generatePrivateKey());
-  let header = '';
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    const h = new Headers(init?.headers);
-    const p = h.get('x-payment');
-    if (p) header = p;
-    return originalFetch(input, init);
-  }) as typeof fetch;
-  try {
-    await purchase(
-      {
-        intentId: 'pi_retry', jobId: 'job_wiring', taskId: 'task_wiring', agentId: 'wiring-test',
-        decision: 'AUTO_APPROVE', policyVersion: 'pol_1',
-        resource: `${SELLER}${path}`, maxAmount: path.includes('benchmark') ? 60_000n : 40_000n,
-      },
-      account,
-      { chainId: Number(process.env.ARC_CHAIN_ID ?? 5042002), authNonce: nonce as `0x${string}` },
-    ).catch(() => undefined);
+    return result.receipt as { settlement: string; facilitator?: { verify: string; settle: string } };
   } finally {
     globalThis.fetch = originalFetch;
   }
-  const res = await fetch(`${SELLER}${path}`, { headers: header ? { 'X-PAYMENT': header } : {} });
+}
+
+
+/** The X-PAYMENT header the buyer last sent, captured so a retry can resend the SAME one. */
+let lastPaymentHeader = '';
+
+/**
+ * Re-presents the authorization the buyer actually signed, byte for byte.
+ *
+ * My first version of this signed a NEW authorization with the reused nonce, from a NEW payer.
+ * That does not test a retry at all -- it tests whether a different signer can claim somebody
+ * else's hold, which is precisely the hole the payer check now closes. A retry is the identical
+ * header arriving twice.
+ */
+async function resendLastPayment(path: string): Promise<{ status: number; body: string }> {
+  assert.ok(lastPaymentHeader, 'no X-PAYMENT was captured to resend');
+  const res = await fetch(`${SELLER}${path}`, { headers: { 'X-PAYMENT': lastPaymentHeader } });
   return { status: res.status, body: await res.text() };
 }
 
@@ -234,7 +226,7 @@ test('an unconfirmed settlement HOLDS the authorization instead of burning it', 
 
   // Re-presenting the SAME authorization for the SAME resource is a retry, not a replay, so it
   // must not be refused as one. It is still withheld, because the settlement is still unknown.
-  const retry = await postPayment(nonce, '/v1/company-profile');
+  const retry = await resendLastPayment('/v1/company-profile');
   assert.equal(retry.status, 402);
   assert.doesNotMatch(
     retry.body,
@@ -243,10 +235,69 @@ test('an unconfirmed settlement HOLDS the authorization instead of burning it', 
   );
   assert.match(retry.body, /held for you|unconfirmed/i, 'the refusal does not say the payment is held');
 
-  // A DIFFERENT resource on the same nonce is a genuine replay and must still be refused.
-  const abuse = await postPayment(nonce, '/v1/benchmark-summary');
+  // The same header against a DIFFERENT resource is a genuine replay and must still be refused.
+  const abuse = await resendLastPayment('/v1/benchmark-summary');
   assert.equal(abuse.status, 402);
-  assert.match(abuse.body, /already spent|replay/i, 'a nonce was reused across resources');
+  assert.match(abuse.body, /already spent|replay|expected/i, 'a nonce was reused across resources');
+
+  // And the held authorization must NOT have been resubmitted: re-presenting answers from the
+  // record. Resubmitting somebody's live bearer instrument on every retry is its own hazard.
+  const settlesAfterRetry = stub.seen.filter((x) => x.path === 'settle').length;
+  assert.equal(settlesAfterRetry, 1, 'the held authorization was submitted to the facilitator again');
+
+  stub.settle = { status: 200, body: { success: true, transaction: TX } };
+});
+
+test('a different payer cannot claim somebody else\'s held authorization', async () => {
+  // A hold exists so the buyer who paid can recover THEIR resource. Matching only on
+  // nonce + path + amount let any signer who presented that nonce inherit the hold, which is
+  // the difference between "your payment is safe" and "your payment is claimable".
+  //
+  // Worth noting how this was found: removing the payer check broke none of my tests. The retry
+  // test resends the same header, so by construction it can never exercise a different signer.
+  stub.seen.length = 0;
+  stub.settle = { status: 503, body: { message: 'gateway busy' } };
+
+  const nonce = `0x${'5a'.repeat(32)}`;
+  await assert.rejects(buyOnce(nonce), 'the unconfirmed settlement released the resource');
+
+  // A SECOND buyer signs a valid authorization reusing that nonce for the same resource and
+  // amount. Everything about it verifies; only the payer differs.
+  const { purchase } = await import('./buyer.js');
+  const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
+  const intruder = privateKeyToAccount(generatePrivateKey());
+
+  let seenHeader = '';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const p = new Headers(init?.headers).get('x-payment');
+    if (p) seenHeader = p;
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  try {
+    await purchase(
+      {
+        intentId: 'pi_intruder', jobId: 'job_wiring', taskId: 'task_wiring', agentId: 'wiring-test',
+        decision: 'AUTO_APPROVE', policyVersion: 'pol_1',
+        resource: `${SELLER}/v1/company-profile`, maxAmount: 40_000n,
+      },
+      intruder,
+      { chainId: Number(process.env.ARC_CHAIN_ID ?? 5042002), authNonce: nonce as `0x${string}` },
+    ).catch(() => undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.ok(seenHeader, 'the intruder never produced a signed authorization to test with');
+  const res = await fetch(`${SELLER}/v1/company-profile`, { headers: { 'X-PAYMENT': seenHeader } });
+  const body = await res.text();
+
+  assert.equal(res.status, 402, 'a different payer obtained the resource held for someone else');
+  assert.match(
+    body,
+    /already spent|replay/i,
+    'a different payer was treated as the original buyer retrying, inheriting their hold',
+  );
 
   stub.settle = { status: 200, body: { success: true, transaction: TX } };
 });
