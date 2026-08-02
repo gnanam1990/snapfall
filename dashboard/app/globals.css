@@ -298,6 +298,41 @@ a { color: inherit; text-decoration: none; }
 /* ── cards & grid ── */
 .grid { display: grid; gap: 16px; }
 .cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+/* The gauge band.
+ *
+ * Four same-size cards in a row is the page structure the craft floor names as a default to
+ * refuse, and it was this page spine. An instrument panel does not read as four cards; it reads
+ * as ONE strip of gauges divided by rules. So inside a .cols-4 the card loses its box entirely
+ * and the grid gains the drawn frame: hairlines between readings, one border around the set.
+ * No JSX changes, because the markup was never the problem -- the container was. */
+.grid.cols-4 {
+  gap: 0;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.grid.cols-4 > .card {
+  border: 0;
+  background: none;
+  border-radius: 0;
+  padding: 14px 16px 15px;
+  border-left: 1px solid var(--border);
+}
+.grid.cols-4 > .card:first-child { border-left: 0; }
+.grid.cols-4 .stat-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+.grid.cols-4 .stat-value { font-size: 23px; margin-top: 10px; letter-spacing: -0.01em; }
+.grid.cols-4 .stat-sub { margin-top: 6px; font-size: 11.5px; }
+
+@media (max-width: 860px) {
+  .grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
+  .grid.cols-4 > .card:nth-child(3) { border-left: 0; }
+  .grid.cols-4 > .card:nth-child(n+3) { border-top: 1px solid var(--border); }
+}
 .cols-2 { grid-template-columns: 1.4fr 1fr; }
 .activity-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.75fr); gap: 16px; align-items: start; }
 @media (max-width: 900px) {
