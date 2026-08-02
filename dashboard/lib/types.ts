@@ -79,6 +79,8 @@ export interface FloatSnapshot {
   utilizationBps: number;
   feesAccruedUsdc: string | null;
   reserveUsdc: string;
+  /** Operator treasury's 6dp ERC-20 USDC balance (chain read), or null when unconfigured. */
+  treasuryUsdc: string | null;
   orgAddress: string | null;
   orgRateBps: number | null;
   acceptedJobs: number | null;

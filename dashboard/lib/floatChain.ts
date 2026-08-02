@@ -15,6 +15,12 @@ const SELECTOR = {
   advanceRate: '0x95790ee5',
   acceptedJobs: '0x9aa60919',
   writtenOffJobs: '0xd30856e5',
+  // ERC-20 balanceOf(address) — read against the USDC contract, NOT the pool. On Arc USDC is
+  // the gas token with two decimal surfaces on one balance: the native/gas balance is 18dp,
+  // the ERC-20 balanceOf view is 6dp (docs/addresses.md). The treasury figure must be the 6dp
+  // ERC-20 surface so it reconciles with every other amount on the page — hence an eth_call to
+  // balanceOf, never eth_getBalance (which returns the 18dp native surface).
+  balanceOf: '0x70a08231',
 } as const;
 
 const TOPIC = {
@@ -46,6 +52,9 @@ export interface FloatChainConfig {
   explorerUrl: string;
   startBlock: number;
   orgAddress?: string;
+  /** USDC (ERC-20) contract address. Set to read the operator treasury's 6dp balanceOf.
+   *  Absent ⇒ treasuryUsdc is null (the field is simply not read). */
+  usdcAddress?: string;
   /** Max blocks per eth_getLogs request — the provider's range cap. Defaults to
    *  DEFAULT_SCAN_CHUNK_BLOCKS (10000, Alchemy PAYG). Set from SNAPFALL_FLOAT_SCAN_CHUNK. */
   scanChunkBlocks?: number;
@@ -285,6 +294,9 @@ export interface FloatViews {
   availableLiquidityUsdc: string;
   utilizationBps: number;
   reserveUsdc: string;
+  /** Operator treasury's 6dp ERC-20 USDC balance, or null when no org/USDC address is
+   *  configured. A chain read like the rest of this snapshot — verifiable, not asserted. */
+  treasuryUsdc: string | null;
   orgAddress: string | null;
   orgRateBps: number | null;
   acceptedJobs: number | null;
@@ -328,6 +340,18 @@ export async function loadFloatViews(config: FloatChainConfig, rpc: RPCTransport
     writtenOffJobs = toSafeNumber(writtenOff, 'written-off jobs');
   }
 
+  // Treasury: the operator's 6dp ERC-20 USDC balance, pinned to the same head as every other
+  // view. eth_call to balanceOf on the USDC contract — NOT eth_getBalance, which would return
+  // the 18dp native gas surface of the same balance and render a number that reconciles with
+  // nothing else on the page. Needs both the org (whose balance) and the USDC address (where to
+  // read); absent either, treasury stays null and the hero renders a dash.
+  let treasuryUsdc: string | null = null;
+  if (explicitOrg && config.usdcAddress) {
+    const usdc = normalizedAddress(config.usdcAddress, 'USDC address');
+    const bal = await ethCall(rpc, usdc, encodeAddressCall(SELECTOR.balanceOf, explicitOrg), 'treasury balanceOf', headHex);
+    treasuryUsdc = bal.toString();
+  }
+
   const available = totalAssets - totalOutstanding;
   const utilizationBps = totalAssets === 0n ? 0 : toSafeNumber((totalOutstanding * 10_000n) / totalAssets, 'utilization');
 
@@ -342,6 +366,7 @@ export async function loadFloatViews(config: FloatChainConfig, rpc: RPCTransport
     availableLiquidityUsdc: available.toString(),
     utilizationBps,
     reserveUsdc: reserve.toString(),
+    treasuryUsdc,
     orgAddress: explicitOrg,
     orgRateBps,
     acceptedJobs,
@@ -603,6 +628,7 @@ export function assembleSnapshot(
     utilizationBps: views.utilizationBps,
     feesAccruedUsdc: history?.feesAccruedUsdc ?? null,
     reserveUsdc: views.reserveUsdc,
+    treasuryUsdc: views.treasuryUsdc,
     orgAddress: views.orgAddress ?? history?.latestObservedOrg ?? null,
     orgRateBps: views.orgRateBps,
     acceptedJobs: views.acceptedJobs,
