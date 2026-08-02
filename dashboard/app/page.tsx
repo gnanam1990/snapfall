@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage, FloatSnapshot } from '@/lib/types';
 import type { ActivityMessage } from '@/lib/activity';
 import { humanizeLegacyEvent, humanizeStreamEvent } from '@/lib/activity';
-import { formatUsdc, formatBps } from '@/lib/format';
+import { formatUsdc, formatUsdcExact, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import PoolVessel from '@/components/PoolVessel';
 import MoneyGraph from '@/components/MoneyGraph';
@@ -105,7 +105,7 @@ export default function OverviewPage() {
         <StatCard
           label="Fees accrued"
           value={float ? <>{formatUsdc(float.feesAccruedUsdc)} <span className="u">USDC</span></> : '—'}
-          sub={float ? `first-loss reserve ${formatUsdc(float.reserveUsdc)}` : '—'}
+          sub={float ? `first-loss reserve ${formatUsdcExact(float.reserveUsdc)}` : '—'}
         />
         <StatCard
           label="Pending approvals"

@@ -20,9 +20,21 @@
 interface Props {
   /** Pool TVL as a 6dp decimal string, read live from FloatPool.totalAssets. */
   tvlUsdc: string | null;
-  /** Drawn principal in basis points of TVL, or null when the indexer has not reported. */
+  /**
+   * Drawn principal in basis points of TVL, computed from FloatPool.totalOutstanding over
+   * totalAssets (floatChain.ts:356). Null only while the fetch is in flight -- no indexer is
+   * involved, so a returned 0 means nothing is drawn and is as verifiable as TVL itself.
+   */
   utilizationBps: number | null;
-  /** The org's current advance rate in bps, from FloatPool.advanceRate. */
+  /**
+   * The org's current advance rate in bps, from FloatPool.advanceRate.
+   *
+   * Null does NOT mean the read failed. loadFloatViews only issues the advanceRate call when an
+   * organisation address is configured (floatChain.ts:312 and :335, fed by
+   * SNAPFALL_TREASURY_ADDRESS in app/api/float/route.ts:24). With that unset the call is never
+   * made, so the honest statement is that nothing was asked for -- not that the chain was asked
+   * and could not answer.
+   */
   orgRateBps: number | null;
 }
 
@@ -66,7 +78,10 @@ export default function PoolVessel({ tvlUsdc, utilizationBps, orgRateBps }: Prop
           (loaded
             ? `${(used * 100).toFixed(1)} percent is currently lent out. `
             : 'The current lending figure is still being read from the chain. ') +
-          'Lending is capped at 80 percent of the pool overall, and 10 percent for any one operator.'
+          'Lending is capped at 80 percent of the pool overall, and 10 percent for any one operator. ' +
+          (orgRateBps === null
+            ? 'No organisation is configured, so no advance rate has been read for one.'
+            : `The advance rate for this organisation is ${(orgRateBps / 100).toFixed(0)} percent.`)
         }
       >
         <rect x={TANK_X} y={TANK_TOP} width={TANK_W} height={TANK_H} className="v-wall" />
@@ -155,13 +170,23 @@ export default function PoolVessel({ tvlUsdc, utilizationBps, orgRateBps }: Prop
         <dl className="vessel-facts">
           <div>
             <dt>lent out</dt>
-            <dd>{loaded ? `${(used * 100).toFixed(1)}%` : 'reading chain'}</dd>
+            <dd className={loaded ? undefined : 'is-absent'}>
+              {loaded ? `${(used * 100).toFixed(1)}%` : 'reading chain'}
+            </dd>
           </div>
           <div>
             <dt>advance rate</dt>
-            <dd>{orgRateBps === null ? 'unavailable' : `${(orgRateBps / 100).toFixed(0)}%`}</dd>
+            <dd className={orgRateBps === null ? 'is-absent' : undefined}>
+              {orgRateBps === null ? 'no organisation set' : `${(orgRateBps / 100).toFixed(0)}%`}
+            </dd>
           </div>
         </dl>
+        {orgRateBps === null ? (
+          <p className="vessel-note">
+            The advance rate is per organisation. Set the treasury address to read this org's rate
+            from FloatPool.
+          </p>
+        ) : null}
       </figcaption>
     </figure>
   );

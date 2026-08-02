@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import ThemeToggle from '@/components/ThemeToggle';
 import Logo from '@/components/Logo';
+import NavIcon from '@/components/NavIcon';
 
 const NAV: { href: string; label: string; pill?: string }[] = [
   { href: '/', label: 'Overview' },
@@ -36,7 +37,10 @@ export default function Sidebar() {
               className={`nav-link${active ? ' active' : ''}`}
               aria-current={active ? 'page' : undefined}
             >
-              <span>{n.label}</span>
+              <span className="nav-label">
+                <NavIcon href={n.href} />
+                {n.label}
+              </span>
               {n.pill ? <span className="pill">{n.pill}</span> : null}
             </Link>
           );
