@@ -1,0 +1,14 @@
+{
+  "$comment": "THE single source of truth for the H2 Overview aggregate money shapes (the nested objects where a field rename silently blanks a column — the principalAtomic-vs-principalUsdc bug this file exists to prevent). The daemon's ownerapi contract_test.go asserts its marshaled output uses EXACTLY the `emits` keys for each object. The dashboard's aggregate-contract.test.ts asserts, per object, that `emits` ∪ `daemonOmits` equals the full key set of the matching lib/types.ts DTO (bound with keyof, so a DTO field added or renamed fails to compile until reflected here). A rename on either side fails one of those tests red. Edit this file only when both sides agree.",
+  "emits": {
+    "pool": ["orgRateBps"],
+    "openAdvance": ["jobId", "org", "principalUsdc", "feeUsdc", "status"],
+    "activeJob": ["jobId", "priceUsdc"]
+  },
+  "daemonOmits": {
+    "$comment": "Fields the dashboard DTO declares but the daemon does not source, so it omits them and the UI renders a dash (pool TVL/fees/utilisation/reserve come from /api/float; customer/title/state are daemon-side only; rateBps has no per-advance value). Listed explicitly so a NEW required field the daemon forgets to emit is caught here rather than silently blanked.",
+    "PoolStats": ["tvlUsdc", "utilizationBps", "feesAccruedUsdc", "reserveUsdc"],
+    "OpenAdvance": ["rateBps"],
+    "JobSummary": ["vaultJobId", "customer", "title", "state"]
+  }
+}
