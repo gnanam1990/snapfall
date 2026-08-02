@@ -9,12 +9,70 @@ import { formatUsdc, formatUsdcExact, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import PoolVessel from '@/components/PoolVessel';
 import MoneyGraph from '@/components/MoneyGraph';
-import StatCard from '@/components/StatCard';
 import Card, { CardHeader, CardBody } from '@/components/Card';
 import TeamActivityFeed from '@/components/TeamActivityFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
 import ActiveJobs from '@/components/ActiveJobs';
+
+/**
+ * Pending approvals, as the first viewport's one coloured region and its primary action.
+ *
+ * The contract asks for two things the stat tile could not do: that this be the single place
+ * colour appears, and that the primary action sit with it. Colour is --warn, because a purchase
+ * held for a decision is caution, not alarm -- and it appears ONLY when something is actually
+ * waiting, so the colour means "you have work" rather than decorating a zero.
+ *
+ * The action is a link to /approvals rather than an inline approve/refuse pair, deliberately.
+ * Deciding binds to the intentHash the owner was shown, needs the reason field the worker adapts
+ * on, and has to handle STALE_VIEW, expiry and double-submit. That path exists once, on the
+ * approvals surface, and is tested there. A second implementation of an irreversible money action
+ * on a different surface is how the two drift apart, and the cost of getting it wrong is a
+ * payment. So the primary action here is to go and decide, and the deciding stays in one place.
+ */
+function PendingApprovals({
+  count,
+  daemonConnected,
+}: {
+  count: number | null;
+  daemonConnected: boolean;
+}) {
+  if (!daemonConnected) {
+    return (
+      <section className="pending is-quiet mt">
+        <p className="pending-body">
+          Purchases an agent may not make alone arrive here. No daemon is connected, so none can:
+          this is not a quiet queue.
+        </p>
+      </section>
+    );
+  }
+  if (!count) {
+    return (
+      <section className="pending is-quiet mt">
+        <p className="pending-body">Nothing is waiting on you. Escalations appear here.</p>
+      </section>
+    );
+  }
+  return (
+    <section className="pending is-waiting mt" aria-labelledby="pending-title">
+      <span className="pending-count" aria-hidden="true">
+        {count}
+      </span>
+      <div className="pending-text">
+        <h2 className="pending-title" id="pending-title">
+          {count === 1 ? 'A purchase is waiting on you' : `${count} purchases are waiting on you`}
+        </h2>
+        <p className="pending-body">
+          An agent has reached a spend it may not make alone. The line is shut until you answer.
+        </p>
+      </div>
+      <Link className="pending-action" href="/approvals">
+        Review and decide <span aria-hidden="true">→</span>
+      </Link>
+    </section>
+  );
+}
 
 export default function OverviewPage() {
   const [snap, setSnap] = useState<OverviewSnapshot | null>(null);
@@ -90,37 +148,31 @@ export default function OverviewPage() {
   // unavailable read shows a dash, never a wrong or fabricated value.
   const treasuryAndPool = (
     <>
-      <PoolVessel tvlUsdc={float ? formatUsdc(float.totalAssetsUsdc) : null} utilizationBps={float?.utilizationBps ?? null} orgRateBps={float?.orgRateBps ?? null} />
-      <div className="grid cols-4 mt">
-        <StatCard
-          label="Pool TVL"
-          value={float ? <>{formatUsdc(float.totalAssetsUsdc)} <span className="u">USDC</span></> : '—'}
-          sub="read live from Arc testnet"
-        />
-        <StatCard
-          label="Utilization"
-          value={float && float.utilizationBps != null ? formatBps(float.utilizationBps) : '—'}
-          sub={float ? 'drawn / TVL · cap 80%' : 'reading Arc testnet'}
-        />
-        <StatCard
-          label="Fees accrued"
-          value={float ? <>{formatUsdc(float.feesAccruedUsdc)} <span className="u">USDC</span></> : '—'}
-          sub={float ? `first-loss reserve ${formatUsdcExact(float.reserveUsdc)}` : '—'}
-        />
-        <StatCard
-          label="Pending approvals"
-          value={String(snap?.pendingApprovals ?? 0)}
-          // Not "all clear": with no daemon there is nothing to be clear about, and asserting
-          // it is the same false zero app/approvals/page.tsx refuses in its own comment.
-          sub={
-            snap?.pendingApprovals
-              ? 'action needed'
-              : snap?.daemonConnected === false
-                ? 'no daemon connected'
-                : 'none awaiting you'
-          }
-        />
-      </div>
+      <PoolVessel
+        tvlUsdc={float ? formatUsdc(float.totalAssetsUsdc) : null}
+        utilizationBps={float?.utilizationBps ?? null}
+        orgRateBps={float?.orgRateBps ?? null}
+        // formatUsdcExact returns the dash glyph for null, not null, so passing it straight
+        // through would render "— USDC" as if it were a value and lose the absent styling.
+        // feesAccruedUsdc IS null on the live endpoint today, so this is the real case.
+        feesAccruedUsdc={float?.feesAccruedUsdc ? formatUsdcExact(float.feesAccruedUsdc) : null}
+        reserveUsdc={float?.reserveUsdc ? formatUsdcExact(float.reserveUsdc) : null}
+      />
+      {/*
+        The stat-tile grid that used to sit here is GONE, not restyled.
+        The direction contract's THESIS names "the stat-tile grid and the hero-metric template"
+        as precisely what this world refuses, and it shipped anyway, directly under the vessel,
+        for the whole redesign. Two of its four tiles (Pool TVL, Utilization) only restated
+        figures the vessel already draws; the other two have moved onto the drawing as facts that
+        name their source. Restyling it would have laundered the refusal rather than honoured it.
+
+        What remains here is the one thing the FIRST VIEWPORT clause asks for and the tiles could
+        not give: pending approvals as the single place colour appears, carrying the action.
+      */}
+      <PendingApprovals
+        count={snap?.pendingApprovals ?? null}
+        daemonConnected={snap?.daemonConnected !== false}
+      />
     </>
   );
 

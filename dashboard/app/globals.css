@@ -2159,3 +2159,37 @@ table.t { width: 100%; border-collapse: collapse; }
   .settings-facts div { flex-direction: column; gap: 2px; }
   .settings-facts dd { text-align: left; }
 }
+
+/* ══ Pending approvals, on the Overview ══
+ *
+ * The first viewport's one coloured region, per the direction contract. --warn because a purchase
+ * held for a decision is caution, not alarm, and the colour appears ONLY when something is
+ * actually waiting -- a coloured zero would make the hue decorative, which is the one thing the
+ * semantic-colour rule forbids.
+ */
+.pending { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2); padding: 16px 20px; }
+.pending.is-quiet { background: none; }
+.pending.is-waiting {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  border-color: var(--warn-border); background: var(--warn-bg);
+}
+.pending-count { flex: none; font-size: 30px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--warn); }
+.pending-text { flex: 1; min-width: 220px; }
+.pending-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.pending-body { margin: 3px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+.pending.is-quiet .pending-body { margin: 0; }
+/* The primary action of the first viewport. Sized as a real control, not a text link. */
+.pending-action {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 36px;
+  padding: 8px 16px; border: 1px solid var(--warn-border); border-radius: var(--radius);
+  color: var(--warn); font-size: 12.5px; font-weight: 600;
+}
+.pending-action:hover { border-color: var(--warn); }
+.pending-action:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
+/* Per-fact provenance on the vessel: the value, then where it came from. */
+.vessel-facts dd { display: grid; gap: 2px; justify-items: end; }
+.vessel-val { font-variant-numeric: tabular-nums; }
+.vessel-facts dd.is-absent .vessel-val { font-variant-numeric: normal; }
+.vessel-src { font-size: 10px; line-height: 1.4; color: var(--muted-2); text-align: right; }
+.v-callout text { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }

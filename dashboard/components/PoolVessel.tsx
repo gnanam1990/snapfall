@@ -36,6 +36,10 @@ interface Props {
    * and could not answer.
    */
   orgRateBps: number | null;
+  /** Fees accrued to the pool, 6dp decimal string, from FloatPool.feesAccrued. */
+  feesAccruedUsdc: string | null;
+  /** The first-loss reserve, 6dp decimal string: 20% of every fee. */
+  reserveUsdc: string | null;
 }
 
 /* FloatPool.sol constants, drawn rather than described. */
@@ -59,7 +63,13 @@ const levelY = (frac: number) => TANK_BOT - Math.max(0, Math.min(1, frac)) * TAN
 const LABEL_R = 162;
 const LEAD_X = 168;
 
-export default function PoolVessel({ tvlUsdc, utilizationBps, orgRateBps }: Props) {
+export default function PoolVessel({
+  tvlUsdc,
+  utilizationBps,
+  orgRateBps,
+  feesAccruedUsdc,
+  reserveUsdc,
+}: Props) {
   const loaded = utilizationBps !== null;
   const used = loaded ? utilizationBps / 10_000 : 0;
   const capY = levelY(UTILISATION_CAP);
@@ -153,11 +163,15 @@ export default function PoolVessel({ tvlUsdc, utilizationBps, orgRateBps }: Prop
           <text x={TANK_X + TANK_W + 46} y={TANK_BOT - 6}>operator, second</text>
         </g>
 
-        {/* Callout leader under the vessel: the dimension the figure below belongs to. */}
+        {/* A dimension line, which on a drawing always says what it dimensions. This one carried
+            no label at all, so it measured nothing and read as decoration under the tank. */}
         <g className="v-callout">
           <line x1={TANK_X} y1={TANK_BOT + 14} x2={TANK_X + TANK_W} y2={TANK_BOT + 14} />
           <line x1={TANK_X} y1={TANK_BOT + 10} x2={TANK_X} y2={TANK_BOT + 18} />
           <line x1={TANK_X + TANK_W} y1={TANK_BOT + 10} x2={TANK_X + TANK_W} y2={TANK_BOT + 18} />
+          <text x={TANK_X + TANK_W / 2} y={TANK_BOT + 30} textAnchor="middle">
+            total pool capital
+          </text>
         </g>
       </svg>
 
@@ -167,17 +181,45 @@ export default function PoolVessel({ tvlUsdc, utilizationBps, orgRateBps }: Prop
           <span className="vessel-unit">USDC</span>
         </div>
         <p className="vessel-source">pool capital · read live from FloatPool on Arc testnet</p>
+        {/* Every figure names its source, per the direction contract's FIRST VIEWPORT clause and
+            PRODUCT principle 1. These four used to live in a separate stat-tile grid below the
+            drawing -- the exact template the contract's THESIS names as refused -- where two of
+            them simply restated the vessel and none of them said where it came from. */}
         <dl className="vessel-facts">
           <div>
             <dt>lent out</dt>
             <dd className={loaded ? undefined : 'is-absent'}>
-              {loaded ? `${(used * 100).toFixed(1)}%` : 'reading chain'}
+              <span className="vessel-val">
+                {loaded ? `${(used * 100).toFixed(1)}%` : 'reading chain'}
+              </span>
+              <span className="vessel-src">totalOutstanding ÷ totalAssets · cap 80%</span>
+            </dd>
+          </div>
+          <div>
+            <dt>fees accrued</dt>
+            <dd className={feesAccruedUsdc === null ? 'is-absent' : undefined}>
+              <span className="vessel-val">
+                {feesAccruedUsdc === null ? 'not reported' : `${feesAccruedUsdc} USDC`}
+              </span>
+              <span className="vessel-src">FloatPool.feesAccrued · 2% of each principal</span>
+            </dd>
+          </div>
+          <div>
+            <dt>first-loss reserve</dt>
+            <dd className={reserveUsdc === null ? 'is-absent' : undefined}>
+              <span className="vessel-val">
+                {reserveUsdc === null ? 'not reported' : `${reserveUsdc} USDC`}
+              </span>
+              <span className="vessel-src">20% of every fee, held against write-offs</span>
             </dd>
           </div>
           <div>
             <dt>advance rate</dt>
             <dd className={orgRateBps === null ? 'is-absent' : undefined}>
-              {orgRateBps === null ? 'no organisation set' : `${(orgRateBps / 100).toFixed(0)}%`}
+              <span className="vessel-val">
+                {orgRateBps === null ? 'no organisation set' : `${(orgRateBps / 100).toFixed(0)}%`}
+              </span>
+              <span className="vessel-src">FloatPool.advanceRate, per organisation</span>
             </dd>
           </div>
         </dl>
