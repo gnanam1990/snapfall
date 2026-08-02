@@ -73,6 +73,16 @@ export interface JobSnapshot {
     /** An advance that closed still happened; absence is a zero principal (see Oracle). */
     drawn: boolean;
   } | null;
+  /**
+   * Whether the pool read actually answered.
+   *
+   * `advance: null` had two meanings that render identically and mean opposite things: the pool
+   * holds no advance for this job, or the eth_call failed and we know nothing. The second was
+   * being drawn as the first, so one timeout produced "no advance drawn", "repaid to the pool
+   * 0.00" and an operator payout of the entire escrow -- three affirmative figures, all false.
+   * Nulls mean "not knowable", never zero, and this is what lets the surface tell them apart.
+   */
+  advanceRead: 'ok' | 'unavailable';
   /** The org's live rate, which is what the next advance would be priced at. */
   orgRateBps: number | null;
   /** What the operator receives on acceptance: payment - repayment. */
@@ -171,6 +181,7 @@ export async function loadJobSnapshot(
       deliveryHash: null,
       deadline: null,
       advance: null,
+      advanceRead: 'ok',
       orgRateBps: null,
       operatorNetUsdc: null,
       explorer,
@@ -190,6 +201,7 @@ export async function loadJobSnapshot(
   // The advance and the rate are independent reads; a failure on either must not blank the
   // whole page, so they degrade to null while the vault facts stay visible.
   let advance: JobSnapshot['advance'] = null;
+  let advanceReadFailed = false;
   try {
     const advRaw = await rpc<string>('eth_call', [
       { to: floatPool, data: encodeWordCall(SELECTOR.openAdvanceOf, jobId) },
@@ -207,6 +219,7 @@ export async function loadJobSnapshot(
     };
   } catch {
     advance = null;
+    advanceReadFailed = true;
   }
 
   let orgRateBps: number | null = null;
@@ -223,8 +236,22 @@ export async function loadJobSnapshot(
 
   const remaining = budget > expenses ? budget - expenses : 0n;
   const usedBps = budget > 0n ? Number((expenses * 10_000n) / budget) : 0;
+  // `drawn`, NOT `open`, and deliberately so. JobVault.sol:216 gates on `open` because it is
+  // deciding what to transfer right now; this figure is a reconstruction of what the waterfall
+  // did or would do, and for an Accepted job the advance has already been repaid, so `open` is
+  // false while the operator's payout was still payment - repayment. Gating on `open` here would
+  // report the operator receiving the entire escrow for every settled job -- the demo's final
+  // beat. jobChain.test.ts pins exactly that case.
+  //
+  // The case this does get wrong is a WRITTEN-OFF advance, where open is false, the principal is
+  // still recorded, and the pool rather than the operator absorbed the loss. openAdvanceOf cannot
+  // distinguish repaid from written off (FloatPool.writeOff only flips the status), so the page
+  // suppresses this projection for the terminal states where that is possible instead of
+  // pretending to know. Reading FloatPool.advances(bytes32) for the real three-state status is
+  // the proper fix and needs a fourth eth_call.
   const repayment = advance?.drawn ? BigInt(advance.repaymentUsdc) : 0n;
-  const operatorNet = payment > repayment ? payment - repayment : 0n;
+  // Unknowable, not zero: if the pool read failed there is no basis for a payout figure.
+  const operatorNet = advanceReadFailed ? null : payment > repayment ? payment - repayment : 0n;
 
   return {
     jobId,
@@ -243,7 +270,8 @@ export async function loadJobSnapshot(
     deadline: deadlineSeconds === 0n ? null : new Date(Number(deadlineSeconds) * 1000).toISOString(),
     advance,
     orgRateBps,
-    operatorNetUsdc: operatorNet.toString(),
+    advanceRead: advanceReadFailed ? 'unavailable' : 'ok',
+    operatorNetUsdc: operatorNet === null ? null : operatorNet.toString(),
     explorer,
     observedAt,
   };
