@@ -185,3 +185,56 @@ test('verify failing unreachable does not read as valid', async () => {
   const out = await new CircleFacilitator({ apiKey: 'k', fetchImpl: boom }).verify({}, REQ);
   assert.equal(out.valid, false, 'an unreachable verify must never let a settle proceed');
 });
+
+// ── the P0: endpoint redirection ────────────────────────────────────────────
+
+test('env endpoint overrides are ignored without the explicit test flag', () => {
+  // The hole: reading CIRCLE_X402_*_URL straight from the environment meant anything able to set
+  // an env var could point this at a host of its choosing -- which would then receive the real
+  // Circle bearer key AND be able to answer with a forged hash that released the paid resource.
+  const prev = {
+    flag: process.env.SNAPFALL_FACILITATOR_TEST_ENDPOINTS,
+    verify: process.env.CIRCLE_X402_VERIFY_URL,
+    settle: process.env.CIRCLE_X402_SETTLE_URL,
+  };
+  try {
+    delete process.env.SNAPFALL_FACILITATOR_TEST_ENDPOINTS;
+    process.env.CIRCLE_X402_VERIFY_URL = 'https://attacker.example/verify';
+    process.env.CIRCLE_X402_SETTLE_URL = 'https://attacker.example/settle';
+
+    const f = new CircleFacilitator({ apiKey: 'k' });
+    assert.deepEqual(
+      f.endpoints(),
+      CIRCLE_TESTNET_FACILITATOR_ENDPOINTS,
+      'an env var alone redirected the facilitator; the Circle key would go to that host',
+    );
+
+    process.env.SNAPFALL_FACILITATOR_TEST_ENDPOINTS = '1';
+    assert.equal(
+      new CircleFacilitator({ apiKey: 'k' }).endpoints().settle,
+      'https://attacker.example/settle',
+      'the explicit test flag must still allow redirection, or the wiring test cannot run',
+    );
+  } finally {
+    process.env.SNAPFALL_FACILITATOR_TEST_ENDPOINTS = prev.flag ?? '';
+    if (!prev.flag) delete process.env.SNAPFALL_FACILITATOR_TEST_ENDPOINTS;
+    if (prev.verify) process.env.CIRCLE_X402_VERIFY_URL = prev.verify;
+    else delete process.env.CIRCLE_X402_VERIFY_URL;
+    if (prev.settle) process.env.CIRCLE_X402_SETTLE_URL = prev.settle;
+    else delete process.env.CIRCLE_X402_SETTLE_URL;
+  }
+});
+
+test('a non-Circle facilitator can never produce a settled outcome', async () => {
+  // Even when redirection is deliberately allowed, a rig returning a flawless hash must not be
+  // treated as payment. This is what stops a forged settlement from releasing the goods.
+  const f = new CircleFacilitator({
+    apiKey: 'k',
+    verifyUrl: 'http://127.0.0.1:9/verify',
+    settleUrl: 'http://127.0.0.1:9/settle',
+    fetchImpl: fakeFetch(200, { success: true, transaction: TX }),
+  });
+  const out = await f.settle({}, REQ);
+  assert.equal(out.state, 'unknown', 'a forged hash from a non-Circle endpoint was accepted as settled');
+  assert.notEqual(settlementFor(out), TX);
+});

@@ -218,10 +218,18 @@ and `capture:v1-fixture` still refuses. **The client has never run against the l
 its wire contract is written from Circle's documented x402 facilitator interface and is an
 assumption until Step 8. Treat the first live capture as the test of it.
 
-Two refusals now guard the fixture, not one. Refusal 5 rejects a settlement that is not a real
-transaction hash; refusal 6 rejects one that came from a facilitator other than Circle's
-documented endpoints. The second exists because the fixture used to hardcode Circle's URLs and
-therefore asserted a claim it had never observed.
+Three refusals now guard the fixture where there was one, and the description below is the
+corrected one -- my first version of this paragraph misdescribed them:
+
+- **Refusal 5** rejects a known dry-run marker (`NOT_BROADCAST`, `PENDING`, `DRY_RUN`, ...).
+- **Refusal 6** rejects a settlement whose provenance is missing, or which came from a
+  facilitator other than Circle's documented endpoints. The fixture used to hardcode those URLs
+  and therefore asserted a claim it had never observed.
+- **Refusal 7** rejects a settlement that is not a 32-byte transaction hash. This was previously
+  only a printed `note` and the fixture was still written, which meant any string outside the
+  dry-run set -- `settled`, `ok`, anything -- became committed proof of a payment. Refusal 5 only
+  covers markers we had already thought of, so without refusal 7 the gate's coverage depended on
+  a fabricator picking a word from our list.
 
 Until a key exists, `sidecar/src/seller.ts` reports `settlement: 'NOT_BROADCAST'` and says why in
 its header: it verifies the buyer's authorization but does not submit `transferWithAuthorization`

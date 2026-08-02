@@ -49,6 +49,7 @@
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { purchase, loadSigner, type ApprovedIntent, type PurchaseResult } from './buyer.js';
+import { DRY_RUN_SETTLEMENTS, isConfirmedSettlement } from './settlement-markers.js';
 import {
   CIRCLE_TESTNET_FACILITATOR_ENDPOINTS,
   validateCircleV1Fixture,
@@ -81,23 +82,16 @@ const PLACEHOLDER_ADDRESSES = new Set(
 function settledEndpoints(result: { receipt?: { facilitator?: { verify?: string; settle?: string } } }): {
   verify: string;
   settle: string;
-} {
+} | null {
   const f = result?.receipt?.facilitator;
-  return {
-    verify: f?.verify ?? CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.verify,
-    settle: f?.settle ?? CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.settle,
-  };
+  // BOTH legs or nothing. Defaulting a missing leg to Circle's URL is how the original version
+  // of this made a claim it had never observed: a receipt with no provenance at all came out
+  // asserting Circle settled it. A settled payment that cannot say who settled it is not
+  // evidence, so the caller parks it instead.
+  if (!f || typeof f.verify !== 'string' || typeof f.settle !== 'string') return null;
+  return { verify: f.verify, settle: f.settle };
 }
 
-const DRY_RUN_SETTLEMENTS = new Set([
-  'NOT_BROADCAST', // seller.ts's honest marker
-  'DRY_RUN',
-  'SIMULATED',
-  'MOCK',
-  'PENDING',
-  'NONE',
-  'UNIMPLEMENTED',
-]);
 
 /** Resolved from the module, not from cwd, so the script works from any directory. */
 const FIXTURE_PATH = fileURLToPath(new URL('../fixtures/v1-circle-payment.json', import.meta.url));
@@ -312,7 +306,8 @@ function buildFixture(
     // assert something it had not observed: any settlement, from any facilitator, was written
     // out claiming Circle's URLs, and AT-18 then validated that claim happily. Refusal 6 below
     // is what turns this from a decorative field into a check.
-    facilitatorEndpoints: settledEndpoints(result),
+    // Refusal 6 runs before this is written, so by here the provenance is present and Circle's.
+    facilitatorEndpoints: settledEndpoints(result) ?? CIRCLE_TESTNET_FACILITATOR_ENDPOINTS,
 
     x402VersionNote:
       '1 is the AT-18 fixture-contract version asserted by validateCircleV1Fixture, not the ' +
@@ -451,6 +446,20 @@ async function main(): Promise<void> {
   // against a local stub or any other facilitator would otherwise be written out asserting
   // Circle's endpoints because they used to be hardcoded above.
   const used = settledEndpoints(result);
+  if (!used) {
+    await writeJson(PENDING_PATH, fixture);
+    console.error(
+      '\nSTOPPED, honestly. The receipt reports a settlement but does not say which facilitator ' +
+        'produced it.\n\n' +
+        '  Evidence has to name its own source. A transaction hash proves money moved; only the ' +
+        'facilitator provenance supports the claim that CIRCLE moved it, which is what V1 and ' +
+        'AT-18 assert.\n' +
+        `  raw evidence parked at: ${PENDING_PATH}\n\n` +
+        'This usually means the seller predates the facilitator wiring. Rebuild it and capture ' +
+        'again.\n',
+    );
+    process.exit(1);
+  }
   for (const leg of ['verify', 'settle'] as const) {
     if (used[leg] !== CIRCLE_TESTNET_FACILITATOR_ENDPOINTS[leg]) {
       await writeJson(PENDING_PATH, fixture);
@@ -467,11 +476,21 @@ async function main(): Promise<void> {
     }
   }
 
-  if (!/^0x[0-9a-fA-F]{64}$/.test(settlement)) {
-    console.log(
-      `  note: settlement reference "${settlement}" is not a 32-byte tx hash. Confirm it ` +
-        'resolves to a real Arc testnet transaction before you commit the fixture.',
+  // ── Refusal 7: a settlement nobody can open is not evidence. ──
+  //
+  // This used to be a `note` that still wrote the fixture, which meant any string outside the
+  // dry-run set -- "settled", "ok", anything -- became committed proof of a payment. Refusal 5
+  // only covers the KNOWN markers, so without this the gate's coverage depended on a fabricator
+  // choosing a word we had already thought of.
+  if (!isConfirmedSettlement(settlement)) {
+    await writeJson(PENDING_PATH, fixture);
+    console.error(
+      `\nSTOPPED, honestly. Settlement "${settlement}" is not a 32-byte transaction hash, so ` +
+        'nothing here can be opened on an explorer and checked.\n\n' +
+        `  raw evidence parked at: ${PENDING_PATH}\n\n` +
+        'A fixture is a claim that a specific transaction settled. It has to name one.\n',
     );
+    process.exit(1);
   }
 
   // Never write something CI would reject: the AT-18 validator runs before the file lands.

@@ -346,11 +346,21 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     ? await settleWithFacilitator(payment, requirements, path)
     : { state: 'not-configured' };
 
-  // A pre-broadcast refusal means nothing moved, so the honest answer is 402 and no goods --
-  // handing over the resource for a payment the facilitator declined would be giving it away.
-  if (outcome.state === 'rejected') {
-    console.log(`[seller] 402 ${path} — facilitator declined: ${outcome.reason}`);
-    return sendChallenge(res, challenge, `facilitator declined: ${outcome.reason}`);
+  // Goods are released on CONFIRMED payment only.
+  //
+  // 'rejected' is easy: nothing moved, so 402 and no data. 'unknown' is the one I got wrong
+  // first time -- a timeout, a 5xx, or a success with no usable hash all left the resource being
+  // handed over with settlement PENDING, which is a paid API giving away its product on the hope
+  // that the money lands. The authorization may still settle, so this is NOT a refusal of the
+  // payment; it is a refusal to deliver before the payment is confirmed. The nonce stays spent
+  // either way, so a settle that does land cannot be replayed for a second copy.
+  if (outcome.state !== 'settled' && facilitator.isConfigured()) {
+    const why =
+      outcome.state === 'rejected'
+        ? `facilitator declined: ${outcome.reason}`
+        : `settlement unconfirmed (${settlementFor(outcome)}); retry once it is reconciled`;
+    console.log(`[seller] 402 ${path} — ${why}`);
+    return sendChallenge(res, challenge, why);
   }
 
   console.log(

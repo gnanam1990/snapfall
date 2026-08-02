@@ -99,10 +99,44 @@ export class CircleFacilitator {
 
   constructor(cfg: FacilitatorConfig = {}) {
     this.apiKey = cfg.apiKey ?? process.env.CIRCLE_API_KEY ?? '';
-    this.verifyUrl = cfg.verifyUrl ?? process.env.CIRCLE_X402_VERIFY_URL ?? CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.verify;
-    this.settleUrl = cfg.settleUrl ?? process.env.CIRCLE_X402_SETTLE_URL ?? CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.settle;
+
+    // Endpoint overrides are IGNORED unless a test explicitly opts in.
+    //
+    // I originally read CIRCLE_X402_VERIFY_URL/SETTLE_URL straight from the environment, which
+    // was a hole in two directions at once: anything able to set an env var could point this at
+    // a host of its choosing, and that host would receive the real Circle bearer key AND be able
+    // to answer with a forged 0x-64 hash that marks the purchase settled and releases the paid
+    // resource. Free goods plus a leaked credential, from one env var.
+    //
+    // Now redirection requires SNAPFALL_FACILITATOR_TEST_ENDPOINTS=1, which nothing in the demo
+    // path, the runbook or the deployed image sets. Without it a deployment cannot be redirected
+    // at all, whatever else it can write into its environment.
+    const overridesAllowed = process.env.SNAPFALL_FACILITATOR_TEST_ENDPOINTS === '1';
+    const envVerify = overridesAllowed ? process.env.CIRCLE_X402_VERIFY_URL : undefined;
+    const envSettle = overridesAllowed ? process.env.CIRCLE_X402_SETTLE_URL : undefined;
+
+    this.verifyUrl = cfg.verifyUrl ?? envVerify ?? CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.verify;
+    this.settleUrl = cfg.settleUrl ?? envSettle ?? CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.settle;
     this.doFetch = cfg.fetchImpl ?? ((input, init) => fetch(input, init));
     this.timeoutMs = cfg.timeoutMs ?? Number(process.env.CIRCLE_X402_TIMEOUT_MS ?? 20_000);
+
+    if (!this.isCircle()) {
+      // Loud, every time. A redirected facilitator is a test rig, and a test rig that runs
+      // quietly is one somebody eventually mistakes for the real thing.
+      console.warn(
+        `[facilitator] NOT Circle: verify=${this.verifyUrl} settle=${this.settleUrl}. ` +
+          'Settlements from this endpoint are never treated as evidence and no fixture can be ' +
+          'captured from them.',
+      );
+    }
+  }
+
+  /** True only for the endpoints AT-18 pins. Everything else is a rig, not a payment rail. */
+  private isCircle(): boolean {
+    return (
+      this.verifyUrl === CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.verify &&
+      this.settleUrl === CIRCLE_TESTNET_FACILITATOR_ENDPOINTS.settle
+    );
   }
 
   /**
@@ -198,6 +232,16 @@ export class CircleFacilitator {
     }
 
     const txHash = stringField(parsed, 'transaction', 'txHash', 'transactionHash');
+
+    if (!this.isCircle()) {
+      // A rig can return a perfectly well-formed hash. Refusing to call it settled is what stops
+      // a redirected facilitator from releasing a paid resource for nothing: the seller withholds
+      // on anything that is not 'settled', and the capture gate refuses the marker as evidence.
+      return {
+        state: 'unknown',
+        reason: `settled through ${this.settleUrl}, which is not Circle's facilitator; not treated as payment`,
+      };
+    }
     if (parsed.success === false) {
       return { state: 'rejected', reason: stringField(parsed, 'errorReason', 'message') || 'facilitator reported failure' };
     }

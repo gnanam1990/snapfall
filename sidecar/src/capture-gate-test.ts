@@ -19,6 +19,7 @@ import {
   validateCircleV1Fixture,
 } from './circle-facilitator-fixture.js';
 import { NOT_BROADCAST, PENDING_SETTLEMENT } from './facilitator.js';
+import { DRY_RUN_SETTLEMENTS, isConfirmedSettlement } from './settlement-markers.js';
 
 const TX = `0x${'ef'.repeat(32)}`;
 
@@ -54,9 +55,9 @@ test('a fixture from the real endpoints validates', () => {
 });
 
 test('every non-settled marker is refused as evidence', () => {
-  // capture-v1-fixture.ts refuses these before it ever reaches the endpoint check. Asserted here
-  // so the two modules cannot drift apart on what counts as "not settled".
-  const DRY_RUN = new Set(['NOT_BROADCAST', 'DRY_RUN', 'SIMULATED', 'MOCK', 'PENDING', 'NONE']);
+  // Imported from the capture module rather than copied. A local copy passed while the real gate
+  // drifted, which is the same class of defect as a mock that cannot express the thing it mocks.
+  const DRY_RUN = DRY_RUN_SETTLEMENTS;
   for (const marker of [NOT_BROADCAST, PENDING_SETTLEMENT]) {
     assert.ok(
       DRY_RUN.has(marker.toUpperCase()),
@@ -65,10 +66,11 @@ test('every non-settled marker is refused as evidence', () => {
   }
 });
 
-test('only a 0x-64 hash passes the settlement shape check', () => {
-  const isHash = (v: string) => /^0x[0-9a-fA-F]{64}$/.test(v);
-  assert.ok(isHash(TX));
-  for (const bad of ['', 'NOT_BROADCAST', 'PENDING', '0xdeadbeef', `0x${'ab'.repeat(31)}`, 'settled']) {
-    assert.ok(!isHash(bad), `${bad} would be accepted as a transaction hash`);
+test('only a 0x-64 hash counts as a confirmed settlement', () => {
+  // The gate's OWN predicate, not a copy. Note 'settled' and 'ok': a marker blacklist would let
+  // those through, which is why the check is a whitelist of one shape.
+  assert.ok(isConfirmedSettlement(TX));
+  for (const bad of ['', '   ', 'NOT_BROADCAST', 'PENDING', 'UNIMPLEMENTED', '0xdeadbeef', `0x${'ab'.repeat(31)}`, 'settled', 'ok']) {
+    assert.ok(!isConfirmedSettlement(bad), `"${bad}" would be written as committed evidence of a payment`);
   }
 });

@@ -70,15 +70,19 @@ before(async () => {
   });
   await new Promise<void>((r) => facilitator!.listen(FAC_PORT, '127.0.0.1', r));
 
-  seller = spawn('npx', ['tsx', 'src/seller.ts'], {
+  seller = spawn(process.execPath, ['--import', 'tsx', 'src/seller.ts'], {
     env: {
       ...process.env,
       PAID_API_PORT: String(SELLER_PORT),
       CIRCLE_API_KEY: TEST_KEY,
+      // Redirection is refused outright without this flag, so that an env var alone can never
+      // point a deployment at somebody else's facilitator. See facilitator.ts's constructor.
+      SNAPFALL_FACILITATOR_TEST_ENDPOINTS: '1',
       CIRCLE_X402_VERIFY_URL: `${FAC}/verify`,
       CIRCLE_X402_SETTLE_URL: `${FAC}/settle`,
     },
-    shell: true,
+    // No shell: with `shell: true` the kill below reaches the shell, not the node grandchild
+    // that actually holds port 4041, and the orphan makes the next run fail to bind.
     stdio: 'ignore',
   });
   for (let i = 0; i < 80; i++) {
@@ -122,27 +126,20 @@ async function buyOnce(): Promise<{ settlement: string; facilitator?: { verify: 
   return result.receipt as { settlement: string; facilitator?: { verify: string; settle: string } };
 }
 
-test('a settled purchase records the facilitator transaction hash, not a marker', async () => {
+test('a stub facilitator returning a perfect hash still cannot buy the goods', async () => {
+  // The P0, from the outside. The stub answers with a flawless 0x-64 hash; because it is not
+  // Circle's endpoint the seller must refuse to call it settled and must withhold the resource.
+  // Before the fix this returned 200 with the forged hash on the receipt: free goods, and a
+  // credential handed to whoever set the env var.
   stub.seen.length = 0;
   stub.settle = { status: 200, body: { success: true, transaction: TX } };
 
-  const receipt = await buyOnce();
+  await assert.rejects(buyOnce(), 'a forged settlement from a non-Circle facilitator released the resource');
 
-  assert.equal(receipt.settlement, TX, 'the receipt did not carry the broadcast transaction hash');
   assert.deepEqual(
     stub.seen.map((s) => s.path),
     ['verify', 'settle'],
     'verify must run before settle: a pre-broadcast refusal is the only clean one',
-  );
-
-  // The receipt must name the facilitator that settled it. Evidence has to identify its own
-  // source: a transaction hash proves money moved, not who moved it. capture-v1-fixture.ts
-  // refuses to write a fixture when these are not Circle's documented endpoints, which is what
-  // stops a run against THIS stub from becoming committed proof of a Circle payment.
-  assert.deepEqual(
-    receipt.facilitator,
-    { verify: `${FAC}/verify`, settle: `${FAC}/settle` },
-    'the receipt did not record which facilitator settled it',
   );
 });
 
@@ -158,23 +155,32 @@ test('the seller sends ITS OWN payment requirements, never the buyer\'s', async 
   assert.equal(settleCall.auth, `Bearer ${TEST_KEY}`);
 });
 
-test('a declined settle returns 402 and withholds the goods', async () => {
+test('a declined settle withholds the goods, and the refusal names why', async () => {
+  // The previous version of this checked that a NEW unpaid request got a 402, which is true of
+  // any request and proved nothing. What matters is the answer to the PAID one: no resource
+  // data, and a reason the buyer can act on.
   stub.seen.length = 0;
   stub.settle = { status: 400, body: { success: false, errorReason: 'insufficient balance' } };
 
-  // Straight HTTP, because the buyer would refuse before signing on a 402 and we want to observe
-  // the seller's own answer to a declined broadcast.
-  let threw = false;
-  try {
-    await buyOnce();
-  } catch {
-    threw = true;
-  }
-  assert.ok(threw, 'the purchase reported success although the facilitator declined the broadcast');
+  await assert.rejects(
+    buyOnce(),
+    (e: Error) => /insufficient balance|facilitator declined/i.test(e.message),
+    'the declined purchase did not surface the facilitator reason',
+  );
 
-  const res = await fetch(`${SELLER}/v1/company-profile`);
-  assert.equal(res.status, 402, 'the seller stopped serving challenges after a declined settle');
+  const settleCall = stub.seen.find((s) => s.path === 'settle');
+  assert.ok(settleCall, 'settle was never attempted');
 
-  // Restore, so ordering between tests cannot leave the stub declining.
+  stub.settle = { status: 200, body: { success: true, transaction: TX } };
+});
+
+test('a timeout after submitting withholds the goods rather than delivering on hope', async () => {
+  // UNKNOWN is not a payment. The authorization may still land, so this is not a refusal of the
+  // payment -- it is a refusal to hand over the product before the money is confirmed.
+  stub.seen.length = 0;
+  stub.settle = { status: 503, body: { message: 'gateway busy' } };
+
+  await assert.rejects(buyOnce(), 'an unconfirmed settlement released the paid resource');
+
   stub.settle = { status: 200, body: { success: true, transaction: TX } };
 });
