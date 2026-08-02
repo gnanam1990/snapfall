@@ -14,8 +14,8 @@
  *                by line weight, never by a shadow.
  *   NO GLOW.     Every *-glow token resolves to transparent. A glow is light emission; ink does
  *                not emit. The names survive because components reference them.
- *   NO GRADIENT. --cta-from and --cta-to hold the same value, so any gradient built from them
- *                renders as a flat field.
+ *   NO GRADIENT. Not one gradient declaration survives in this stylesheet; the CTA stops are
+ *                also identical, so even a reintroduced one would render flat.
  *
  * Colour is semantic only, in the instrument grammar: green reads open/flowing/settled, red reads
  * alarm/refused, amber reads caution/pending, and the process teal marks the live path. Nothing
@@ -100,7 +100,7 @@
   --accent-glow-3: transparent;
   --on-accent: #0e1416;
 
-  /* Both CTA stops are identical, so a gradient built from them renders as one flat field. */
+  /* Both stops identical: belt and braces, since no gradient declaration remains anywhere. */
   --cta-from: #6ba3a8;
   --cta-to: #6ba3a8;
   --cta-glow: transparent;
@@ -232,7 +232,7 @@
 * { box-sizing: border-box; }
 html, body { padding: 0; margin: 0; }
 body {
-  background: radial-gradient(1200px 600px at 80% -10%, var(--bg-glow-top) 0%, var(--bg) 55%);
+  background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -246,7 +246,7 @@ a { color: inherit; text-decoration: none; }
 /* ── sidebar ── */
 .sidebar {
   border-right: 1px solid var(--border);
-  background: linear-gradient(180deg, var(--bg-2), var(--bg));
+  background: var(--bg);
   padding: 20px 14px;
   display: flex;
   flex-direction: column;
@@ -302,7 +302,7 @@ a { color: inherit; text-decoration: none; }
   .sidebar { position: static; height: auto; }
 }
 .card {
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px 18px;
@@ -320,9 +320,7 @@ a { color: inherit; text-decoration: none; }
 .hero {
   grid-column: 1 / -1;
   display: flex; align-items: center; justify-content: space-between;
-  background:
-    radial-gradient(600px 200px at 90% 0%, var(--sky-wash), transparent 60%),
-    linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   border: 1px solid var(--border-2);
   border-radius: 16px;
   padding: 22px 26px;
@@ -336,9 +334,7 @@ a { color: inherit; text-decoration: none; }
 /* ── humanized team activity ── */
 .activity {
   overflow: hidden;
-  background:
-    radial-gradient(600px 260px at 70% -20%, var(--accent-wash), transparent 62%),
-    linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -396,7 +392,7 @@ a { color: inherit; text-decoration: none; }
   top: 26px;
   bottom: 26px;
   width: 1px;
-  background: linear-gradient(var(--border-2), var(--border), transparent);
+  background: var(--border);
 }
 .activity-item {
   --actor-color: var(--accent);
@@ -586,9 +582,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 30px 34px 32px;
   border: 1px solid var(--border-2);
   border-radius: 16px;
-  background:
-    radial-gradient(760px 260px at 92% -20%, var(--sky-wash), transparent 62%),
-    linear-gradient(145deg, var(--well), var(--well-2));
+  background: var(--well-2);
   box-shadow: var(--shadow);
 }
 .float-capital-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
@@ -624,7 +618,7 @@ table.t { width: 100%; border-collapse: collapse; }
   inset: 0 auto 0 0;
   min-width: 3px;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+  background: var(--accent-bright);
   box-shadow: 0 0 18px var(--accent-glow-2);
   transition: width 0.45s ease;
 }
@@ -639,7 +633,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 19px 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(145deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   box-shadow: var(--shadow);
 }
 .float-metric-symbol {
@@ -688,9 +682,7 @@ table.t { width: 100%; border-collapse: collapse; }
   min-width: 0;
   border: 1px solid var(--border-2);
   border-radius: 16px;
-  background:
-    radial-gradient(680px 240px at 74% -20%, var(--accent-wash), transparent 62%),
-    linear-gradient(145deg, var(--well), var(--well-2));
+  background: var(--well-2);
   box-shadow: var(--shadow);
 }
 .rate-engine { margin-top: 12px; padding: 26px 28px 0; overflow: hidden; }
@@ -758,7 +750,7 @@ table.t { width: 100%; border-collapse: collapse; }
   right: 20px;
   height: 3px;
   border-radius: 99px;
-  background: linear-gradient(90deg, var(--border-2), var(--accent), var(--border-2));
+  background: var(--border-2);
 }
 .rate-marker {
   position: absolute;
@@ -943,7 +935,7 @@ table.t { width: 100%; border-collapse: collapse; }
 .portal-shell {
   position: fixed; inset: 0; z-index: 50; overflow-y: auto;
   display: flex; align-items: flex-start; justify-content: center;
-  padding: 8vh 20px 60px; background: radial-gradient(1200px 600px at 50% -10%, var(--bg-2), var(--bg));
+  padding: 8vh 20px 60px; background: var(--bg);
 }
 .portal-card {
   width: 100%; max-width: 520px; background: var(--panel); border: 1px solid var(--border);
@@ -1032,9 +1024,7 @@ table.t { width: 100%; border-collapse: collapse; }
 .manifest-gallery {
   border: 1px solid var(--border);
   border-radius: 14px;
-  background:
-    radial-gradient(560px 220px at 8% -30%, var(--accent-wash), transparent 70%),
-    linear-gradient(180deg, var(--panel-a), var(--panel-b));
+  background: var(--panel-b);
   box-shadow: var(--shadow);
 }
 .workforce-active { padding: 18px 20px 20px; }
@@ -1093,7 +1083,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 11px;
   border: 1px solid var(--border-2);
   border-radius: 10px;
-  background: linear-gradient(145deg, var(--panel-a), var(--panel-b));
+  background: var(--panel-b);
 }
 .active-agent-icon,
 .manifest-icon {
@@ -1162,7 +1152,7 @@ table.t { width: 100%; border-collapse: collapse; }
   min-width: 0;
   border: 1px solid var(--border-2);
   border-radius: 12px;
-  background: linear-gradient(160deg, var(--well), var(--bg-2));
+  background: var(--bg-2);
 }
 .manifest-featured {
   padding: 16px;
@@ -1332,7 +1322,7 @@ table.t { width: 100%; border-collapse: collapse; }
   margin-top: 11px;
   border: 0;
   border-radius: 7px;
-  background: linear-gradient(90deg, var(--cta-from), var(--cta-to));
+  background: var(--cta-to);
   color: var(--on-accent);
   font: inherit;
   font-size: 12px;
@@ -1448,7 +1438,7 @@ table.t { width: 100%; border-collapse: collapse; }
 /* budget bar */
 .job-budget { display: grid; gap: 8px; }
 .job-budget-bar { height: 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border); overflow: hidden; }
-.job-budget-fill { height: 100%; background: linear-gradient(90deg, var(--sky), var(--accent)); transition: width 0.4s ease; }
+.job-budget-fill { height: 100%; background: var(--accent); transition: width 0.4s ease; }
 .job-budget-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; font-size: 13px; font-variant-numeric: tabular-nums; }
 
 .job-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
@@ -1456,7 +1446,7 @@ table.t { width: 100%; border-collapse: collapse; }
 
 /* per-job timeline */
 .job-timeline { list-style: none; margin: 0; padding: 0; position: relative; }
-.job-timeline::before { content: ""; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 1px; background: linear-gradient(var(--border-2), var(--border), transparent); }
+.job-timeline::before { content: ""; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 1px; background: var(--border); }
 .job-event { display: flex; gap: 12px; padding: 8px 0; position: relative; }
 .job-event-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); margin-top: 5px; flex: none; z-index: 1; }
 .job-event.tone-funding .job-event-dot { background: var(--accent); }
@@ -1502,7 +1492,7 @@ table.t { width: 100%; border-collapse: collapse; }
 /* ── F1 Live Money Graph + F2 Score Ring (V10/V11, PRD §8) ── */
 .mg {
   overflow: hidden;
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -1646,7 +1636,7 @@ table.t { width: 100%; border-collapse: collapse; }
  * UI is built in, and the highlight would have needed a new white literal to express. Surfaces here
  * are flat fills separated by hairlines and one shadow token, with no gradient and no glow.
  *
- * .card-shell is a sibling of .card, not a replacement: .card keeps its gradient and its 12px
+ * .card-shell is a sibling of .card, not a replacement: .card keeps its own radius and border weight
  * radius for the pages that already use it, and nothing here restyles it.
  *
  * Contrast, computed rather than eyeballed, dark / light, worst case across the three surfaces a
