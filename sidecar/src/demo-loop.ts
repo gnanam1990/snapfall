@@ -211,6 +211,39 @@ async function main() {
     );
     check('bound purchase returns 200', bound.amountPaid === 40_000n, `paid ${formatUsdc(bound.amountPaid)} USDC`);
 
+    // ── 9. The third endpoint, actually served (V2's done-when) ──
+    //
+    // V2 is done when "V1's client buys all three end-to-end". Two of the three were bound
+    // above; the premium dataset only ever appeared in test 2, where policy REFUSES it before
+    // a signature exists. That proves AT-03 and proves nothing about the endpoint: until now
+    // nothing in the repo had ever paid for /v1/premium-dataset and received its body.
+    //
+    // The distinction is the whole point of the demo's rejection beat. HUMAN_APPROVAL_REQUIRED
+    // means the treasury must not sign on its own; HUMAN_APPROVED means the owner already said
+    // yes. The seller serves the same resource either way -- what changes is who authorized it.
+    //
+    // Deliberately AFTER test 6, so the demo arithmetic there stays exactly the 0.10 of PRD
+    // 15.2. This purchase is evidence about the seller, not part of the story on camera.
+    console.log('\n9. premium dataset, 4.00 USDC, owner-approved — the third endpoint served');
+    const premium = await purchase(
+      intent({
+        resource: `${BASE}/v1/premium-dataset`,
+        maxAmount: 4_000_000n,
+        decision: 'HUMAN_APPROVED',
+      }),
+      account,
+      { chainId: CHAIN_ID },
+    );
+    check('402 -> signed -> retried -> 200', premium.amountPaid === 4_000_000n, `paid ${formatUsdc(premium.amountPaid)} USDC`);
+    check('premium data returned', typeof (premium.data as { rows?: number })?.rows === 'number');
+    check('receipt binds payer', premium.receipt.payer.toLowerCase() === account.address.toLowerCase());
+    // All three resources have now been paid for and served in one run, which is the clause.
+    check(
+      'all three endpoints bought end to end',
+      profile.amountPaid === 40_000n && bench.amountPaid === 60_000n && premium.amountPaid === 4_000_000n,
+      '0.04 + 0.06 + 4.00',
+    );
+
     console.log(
       failures === 0
         ? '\nx402 loop green: 402 -> sign -> retry -> 200, with policy gates holding.\n'
