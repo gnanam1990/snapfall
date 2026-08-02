@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useState } from 'react';
-import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage } from '@/lib/types';
+import { useCallback, useEffect, useState } from 'react';
+import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage, FloatSnapshot } from '@/lib/types';
 import type { ActivityMessage } from '@/lib/activity';
 import { humanizeLegacyEvent, humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdc, formatBps } from '@/lib/format';
@@ -18,17 +18,21 @@ import ActiveJobs from '@/components/ActiveJobs';
 
 export default function OverviewPage() {
   const [snap, setSnap] = useState<OverviewSnapshot | null>(null);
-  const [treasury, setTreasury] = useState<string | null>(null);
   const [pool, setPool] = useState<PoolStats | null>(null);
   const [advances, setAdvances] = useState<OpenAdvance[] | null>(null);
   const [activity, setActivity] = useState<ActivityMessage[]>([]);
   const [demo, setDemo] = useState(false);
+  // Treasury and the pool stats are chain reads, served by /api/float — the same verifiable
+  // source the Float page uses, independent of the SSE daemon stream. This is deliberate: a
+  // visitor can re-run a balanceOf/pool read, but cannot check a daemon's assertion, and it
+  // means the daemon-less public deploy shows real numbers instead of dashes. The SSE stream
+  // still supplies the agent feed, workforce, advances, active jobs and approvals.
+  const [float, setFloat] = useState<FloatSnapshot | null>(null);
 
   const onMessage = useCallback((msg: StreamMessage) => {
     if (msg.kind === 'snapshot') {
       setDemo(msg.demo === true);
       setSnap(msg.snapshot);
-      setTreasury(msg.snapshot.treasuryUsdc);
       setPool(msg.snapshot.pool);
       setAdvances(msg.snapshot.openAdvances);
       const recent = (msg.snapshot.recentEvents ?? []).map((e) => humanizeLegacyEvent(e, msg.demo === true));
@@ -40,7 +44,6 @@ export default function OverviewPage() {
       const next = humanizeStreamEvent(msg);
       setActivity((prev) => [next, ...prev.filter((item) => item.id !== next.id)].slice(0, 30));
       const aggregates = msg.aggregates;
-      if (aggregates?.treasuryUsdc != null) setTreasury(aggregates.treasuryUsdc);
       if (aggregates?.pool) setPool(aggregates.pool);
       if (aggregates?.openAdvances) setAdvances(aggregates.openAdvances);
       if (aggregates && (aggregates.activeJobs || aggregates.pendingApprovals !== undefined)) {
@@ -59,20 +62,76 @@ export default function OverviewPage() {
 
   const status = useEventStream('/api/events/stream', onMessage);
 
+  // Poll the chain-read snapshot. Independent of the daemon stream, so it populates on the
+  // public deploy too. A failed/unavailable read leaves the last value (or null → dashes),
+  // never a fabricated number.
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/float', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = (await res.json()) as FloatSnapshot;
+        if (alive) setFloat(data);
+      } catch {
+        /* keep last known values */
+      }
+    };
+    void load();
+    const timer = setInterval(load, 15_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // Treasury + pool stats, sourced from the chain read (float), rendered identically whether or
+  // not a daemon is connected. formatUsdc/formatBps dash any absent field, so a pending or
+  // unavailable read shows a dash, never a wrong or fabricated value.
+  const treasuryAndPool = (
+    <>
+      <TreasuryHero treasuryUsdc={float?.treasuryUsdc ?? null} orgRateBps={float?.orgRateBps ?? null} />
+      <div className="grid cols-4 mt">
+        <StatCard
+          label="Pool TVL"
+          value={float ? <>{formatUsdc(float.totalAssetsUsdc)} <span className="u">USDC</span></> : '—'}
+          sub="read live from Arc testnet"
+        />
+        <StatCard
+          label="Utilization"
+          value={float ? formatBps(float.utilizationBps) : '—'}
+          sub="drawn / TVL · cap 80%"
+        />
+        <StatCard
+          label="Fees accrued"
+          value={float ? <>{formatUsdc(float.feesAccruedUsdc)} <span className="u">USDC</span></> : '—'}
+          sub={float ? `first-loss reserve ${formatUsdc(float.reserveUsdc)}` : '—'}
+        />
+        <StatCard
+          label="Pending approvals"
+          value={String(snap?.pendingApprovals ?? 0)}
+          sub={snap?.pendingApprovals ? 'action needed' : 'all clear'}
+        />
+      </div>
+    </>
+  );
+
   if (!snap) {
     return (
       <>
         <div className="topbar">
           <h1 className="page-title">Overview</h1>
         </div>
-        <div className="loading">Connecting to the daemon event stream…</div>
+        {treasuryAndPool}
+        <div className="loading mt">Connecting to the daemon event stream…</div>
       </>
     );
   }
 
   // No daemon is wired to this deployment (SNAPFALL_OWNER_API_URL unset, demo replay off).
-  // Rather than fabricate a feed, say so plainly and send the visitor to the real evidence:
-  // the live on-chain Float page, and the chain-verified settlement proof in docs/addresses.md.
+  // Treasury and the pool stats above ARE shown — they are chain reads, verifiable from any
+  // node. What needs the daemon is the agent feed, workforce and approvals; rather than
+  // fabricate those, this says so and points at the rest of the verifiable evidence.
   if (snap.daemonConnected === false) {
     return (
       <>
@@ -82,17 +141,17 @@ export default function OverviewPage() {
             <p className="page-sub">One founder, a workforce that finances itself.</p>
           </div>
         </div>
-        <Card>
-          <CardHeader title="No daemon connected to this deployment" />
+        {treasuryAndPool}
+        <Card className="mt">
+          <CardHeader title="No daemon connected — showing on-chain data only" />
           <CardBody>
             <p>
-              The live agent feed, treasury and workforce come from the owner’s daemon, which does
-              not run on this public site. Rather than show fabricated activity, this page shows
-              nothing here — everything Snapfall displays is meant to be verifiable.
+              The treasury and pool figures above are read live from Arc testnet. The live agent
+              feed, workforce and approvals come from the owner’s daemon, which does not run on this
+              public site — so they are omitted rather than fabricated. Everything Snapfall shows is
+              meant to be verifiable.
             </p>
-            <p className="mt">
-              The real, on-chain evidence is still one click away:
-            </p>
+            <p className="mt">More on-chain evidence:</p>
             <ul className="disconnected-links mt">
               <li>
                 <Link href="/float">Float</Link> — live pool, advance rate and history, read
@@ -130,35 +189,16 @@ export default function OverviewPage() {
         )}
       </div>
 
-      <TreasuryHero treasuryUsdc={treasury} orgRateBps={pool?.orgRateBps ?? null} />
+      {treasuryAndPool}
 
       <div className="mt">
         <MoneyGraph
           latest={activity[0] ?? null}
-          treasuryUsdc={treasury}
+          treasuryUsdc={float?.treasuryUsdc ?? null}
           pool={pool}
           jobPriceUsdc={snap.activeJobs?.[0]?.priceUsdc ?? null}
           live={status === 'live'}
         />
-      </div>
-
-      <div className="grid cols-4 mt">
-        <StatCard
-          label="Pool TVL"
-          value={pool ? <>{formatUsdc(pool.tvlUsdc)} <span className="u">USDC</span></> : '—'}
-          sub={pool ? 'seeded by demo LPs' : 'awaiting chain indexer'}
-        />
-        <StatCard
-          label="Utilization"
-          value={pool ? formatBps(pool.utilizationBps) : '—'}
-          sub={pool ? 'drawn / TVL · cap 80%' : 'awaiting chain indexer'}
-        />
-        <StatCard
-          label="Fees accrued"
-          value={pool ? <>{formatUsdc(pool.feesAccruedUsdc)} <span className="u">USDC</span></> : '—'}
-          sub={pool ? `first-loss reserve ${formatUsdc(pool.reserveUsdc)}` : 'awaiting chain indexer'}
-        />
-        <StatCard label="Pending approvals" value={String(snap.pendingApprovals)} sub={snap.pendingApprovals ? 'action needed' : 'all clear'} />
       </div>
 
       <div className="activity-layout mt">
