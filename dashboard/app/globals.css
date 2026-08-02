@@ -2107,3 +2107,11 @@ table.t { width: 100%; border-collapse: collapse; }
   .audit-leg { grid-template-columns: 1fr; gap: 2px; }
   .audit-leg-detail { text-align: left; }
 }
+
+/* ══ Workforce, converted ══ */
+/* The role marks are drawn now, so the container is a box for an SVG rather than a type slot. */
+.active-agent-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--text-2); }
+.role-mark { display: block; }
+/* The section states an authority model, not a live roster, and says so at the muted floor so the
+   caveat is present without competing with the roles it qualifies. */
+.workforce-caveat { margin: 14px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); max-width: 68ch; }
