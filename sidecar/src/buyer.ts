@@ -124,6 +124,25 @@ export class PolicyViolation extends Error {
  *  `RESOURCE_NOT_FOUND`, `CHALLENGE_UNAVAILABLE`, `NO_MATCHING_NETWORK`,
  *  `UPSTREAM_UNREACHABLE`. (Dry run: no broadcast, so PAYMENT_REJECTED is effectively
  *  terminal; the distinction becomes load-bearing once a real facilitator is wired.) */
+/**
+ * The post-sign codes as a VALUE, not just as prose in the comment above.
+ *
+ * The doc comment had the taxonomy right and service.ts implemented half of it: it special-cased
+ * FACILITATOR_ERROR and let PAYMENT_REJECTED fall through to FAILED, which the daemon reads as
+ * "nothing settled, release" (h3.Unresolved). That releases the reservation backing a signed
+ * bearer authorization the seller has already received. Exporting the set means the rule has one
+ * home and the two cannot drift again.
+ */
+export const POST_SIGN_CODES: ReadonlySet<PaymentCode> = new Set<PaymentCode>([
+  'FACILITATOR_ERROR',
+  'PAYMENT_REJECTED',
+]);
+
+/** True when the signed authorization left this process and may still settle. */
+export function isPostSign(e: unknown): boolean {
+  return e instanceof PaymentFailed && POST_SIGN_CODES.has(e.code);
+}
+
 export class PaymentFailed extends Error {
   readonly code: PaymentCode;
   constructor(code: PaymentCode, message: string) {

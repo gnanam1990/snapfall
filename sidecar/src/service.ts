@@ -26,6 +26,7 @@ import {
   signAndSubmit,
   PolicyViolation,
   PaymentFailed,
+  isPostSign,
   type ApprovedIntent,
 } from './buyer.js';
 import { formatUsdc } from './x402.js';
@@ -385,9 +386,18 @@ async function handlePay(body: unknown): Promise<Reply> {
       store.upsert(rec);
       return { status: 200, json: payResponse(rec, false) };
     } catch (e) {
-      // Post-sign failure. FACILITATOR_ERROR may still settle -> RECONCILING; else FAILED.
-      const facilitator = e instanceof PaymentFailed && e.code === 'FACILITATOR_ERROR';
-      store.upsert({ ...rec, state: facilitator ? 'RECONCILING' : 'FAILED', reason: (e as Error).message, updatedAt: new Date().toISOString() });
+      // Post-sign failure. The authorization is already signed and submitted, so the question
+      // is whether it may still settle. buyer.ts names both codes that can:
+      // FACILITATOR_ERROR and PAYMENT_REJECTED -- a non-200 to X-PAYMENT still means the seller
+      // RECEIVED the bearer authorization.
+      //
+      // This used to special-case FACILITATOR_ERROR only, so PAYMENT_REJECTED became FAILED,
+      // which the daemon reads as "nothing settled, release" (h3.Unresolved, h3.go). That
+      // releases the budget reservation backing an authorization somebody else is holding and
+      // can still present. Inert only while nothing broadcasts; live the hour a facilitator is
+      // wired, which is exactly when nobody would be looking for it.
+      const mayStillSettle = isPostSign(e);
+      store.upsert({ ...rec, state: mayStillSettle ? 'RECONCILING' : 'FAILED', reason: (e as Error).message, updatedAt: new Date().toISOString() });
       return mapBuyerError(e, paymentId);
     }
   } finally {

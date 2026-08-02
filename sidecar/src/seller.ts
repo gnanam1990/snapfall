@@ -29,6 +29,8 @@ import {
 } from './x402.js';
 
 const PORT = Number(process.env.PAID_API_PORT ?? 4021);
+// Loopback, matching service.ts. Overridable for a container, but never silently 0.0.0.0.
+const HOST = process.env.PAID_API_HOST ?? '127.0.0.1';
 
 /** Arc testnet — docs.arc.io/arc/references/connect-to-arc (verified 19 Jul 2026). */
 const CHAIN_ID = Number(process.env.ARC_CHAIN_ID ?? 5042002);
@@ -122,6 +124,35 @@ function sendChallenge(res: ServerResponse, challenge: PaymentChallenge, error?:
 
 type Verdict = { ok: true } | { ok: false; reason: string };
 
+/** Atomic USDC on the wire is a base-10 STRING (H1 §2). Not a number, not a decimal. */
+const ATOMIC_RE = /^[0-9]{1,20}$/;
+
+/**
+ * Rejects a malformed authorization BEFORE any of it reaches BigInt() or .toLowerCase().
+ *
+ * Every one of these used to be an uncaught throw inside an async request handler, which on Node
+ * is an unhandled rejection and takes the whole process down. A well-formed-looking client that
+ * sent `value` as a JSON number instead of a string -- an honest mistake, not an attack -- killed
+ * the seller for everyone. Verified: ten different malformed bodies, one fresh process each, all
+ * ten exited.
+ *
+ * These are shape checks only. Whether the amount is CORRECT is verifyPayment's job; this just
+ * guarantees it can ask the question without crashing.
+ */
+function authorizationShape(a: unknown): { ok: true } | { ok: false; reason: string } {
+  if (typeof a !== 'object' || a === null) return { ok: false, reason: 'authorization is not an object' };
+  const r = a as Record<string, unknown>;
+  for (const field of ['value', 'validAfter', 'validBefore'] as const) {
+    const v = r[field];
+    if (typeof v !== 'string') return { ok: false, reason: `${field} must be a base-10 atomic string, got ${typeof v}` };
+    if (!ATOMIC_RE.test(v)) return { ok: false, reason: `${field} is not a base-10 atomic amount` };
+  }
+  for (const field of ['from', 'to', 'nonce'] as const) {
+    if (typeof r[field] !== 'string') return { ok: false, reason: `${field} must be a string, got ${typeof r[field]}` };
+  }
+  return { ok: true };
+}
+
 async function verifyPayment(payment: PaymentPayload, resource: Resource): Promise<Verdict> {
   const { signature, authorization: a } = payment.payload;
 
@@ -144,7 +175,24 @@ async function verifyPayment(payment: PaymentPayload, resource: Resource): Promi
   if (spentNonces.has(a.nonce)) return { ok: false, reason: 'nonce already spent (replay)' };
 
   // The actual cryptography: does this signature bind THIS authorization to `from`?
-  const valid = await verifyTypedData({
+  // verifyTypedData does not merely return false on a malformed signature -- it THROWS
+  // ("Invalid yParityOrV value") when the bytes cannot be parsed into (r, s, v) at all. A bad
+  // signature is the most ordinary thing a real client gets wrong, so it belongs in the same
+  // 402-with-a-reason bucket as every other verification failure, not in the outer catch as a
+  // 500. The outer catch stays as the backstop for what neither of us anticipated.
+  let valid: boolean;
+  try {
+    valid = await verifySignature(payment, a);
+  } catch (e) {
+    return { ok: false, reason: `signature is not parseable: ${(e as Error).message}` };
+  }
+  if (!valid) return { ok: false, reason: 'signature does not recover to authorization.from' };
+  return { ok: true };
+}
+
+async function verifySignature(payment: PaymentPayload, a: PaymentPayload['payload']['authorization']): Promise<boolean> {
+  const { signature } = payment.payload;
+  return verifyTypedData({
     address: a.from as Address,
     domain: {
       name: 'USD Coin',
@@ -164,12 +212,27 @@ async function verifyPayment(payment: PaymentPayload, resource: Resource): Promi
     },
     signature: signature as Hex,
   });
-  if (!valid) return { ok: false, reason: 'signature does not recover to authorization.from' };
-
-  return { ok: true };
 }
 
+// Nothing reachable from a request may end the process. The shape guard above covers what we
+// know about; this covers what we do not. viem's signature recovery throws on a signature that
+// does not recover ("Invalid yParityOrV value") and that is a WELL-FORMED payment with a bad
+// signature -- the single most likely thing a real client gets wrong, and it killed the seller
+// mid-demo with an ECONNRESET the client could not interpret.
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  try {
+    await handle(req, res);
+  } catch (err) {
+    console.error(`[seller] 500 ${req.url ?? ''} — unhandled:`, err);
+    if (!res.headersSent) {
+      send(res, 500, { error: 'internal error' });
+    } else {
+      res.end();
+    }
+  }
+});
+
+async function handle(req: IncomingMessage, res: ServerResponse) {
   const path = (req.url ?? '').split('?')[0] ?? '';
 
   if (path === '/health') return send(res, 200, { ok: true, network: NETWORK, payTo: PAY_TO });
@@ -190,6 +253,14 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   if (!payment?.payload?.authorization) {
     console.log(`[seller] 402 ${path} — malformed X-PAYMENT`);
     return sendChallenge(res, challenge, 'malformed X-PAYMENT header');
+  }
+
+  // Shape before semantics. A 402 with a reason is the correct answer to a malformed payment;
+  // exiting the process is not, and that is what every one of these used to do.
+  const shape = authorizationShape(payment.payload.authorization);
+  if (!shape.ok) {
+    console.log(`[seller] 402 ${path} — malformed authorization: ${shape.reason}`);
+    return sendChallenge(res, challenge, `malformed authorization: ${shape.reason}`);
   }
 
   const verdict = await verifyPayment(payment, resource);
@@ -220,10 +291,13 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   return send(res, 200, { data: resource.data, receipt }, {
     'x-payment-response': encodeBase64Json(receipt),
   });
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`[seller] Snapfall paid demo API on http://127.0.0.1:${PORT}`);
+// Loopback by default. `server.listen(PORT, cb)` binds 0.0.0.0 while the banner below prints
+// 127.0.0.1, so the demo seller was reachable from the whole network on conference wifi while
+// claiming otherwise. service.ts already binds this way; the seller did not.
+server.listen(PORT, HOST, () => {
+  console.log(`[seller] Snapfall paid demo API on http://${HOST}:${PORT}`);
   console.log(`[seller] network ${NETWORK} · payTo ${PAY_TO}`);
   for (const [path, r] of Object.entries(RESOURCES)) {
     console.log(`[seller]   ${path} — ${formatUsdc(r.price)} USDC`);
