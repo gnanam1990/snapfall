@@ -127,8 +127,12 @@ export function beatFor(msg: ActivityMessage): Beat | null {
     // would publish a guessed figure as fact and then let the real JobSettled animate the
     // waterfall a second time -- precisely the defect the comment above records from PR #40.
     // Only JobSettled reports both legs, so only JobSettled drains the escrow.
+    // `job.accepted` was here and is gone for the same reason as settlement.executed: it carries
+    // no legs either, so it would take the deriving branch too. It was safe only by accident --
+    // nothing in production emits it, and demoStream REWRITES it to JobSettled (with both legs)
+    // before it ever reaches this function. Keeping a mapping that is dead AND contradicts the
+    // rule stated above is how the rule stops being believed.
     case 'JobSettled':
-    case 'job.accepted':
       return 'fall';
     case 'RateChanged':
     case 'rate.updated':

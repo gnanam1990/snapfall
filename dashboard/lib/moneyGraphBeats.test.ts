@@ -28,33 +28,75 @@ function msg(kind: string, over: Partial<ActivityMessage> = {}): ActivityMessage
 }
 
 /**
- * Every `"some.kind"` string literal the daemon writes as an event kind.
+ * Extracts the contents of every Go string literal, skipping comments.
  *
- * SCOPE, stated so this is not mistaken for total coverage: it matches the prefixes the money
- * graph could plausibly animate. Kinds outside them (billing.*, budget.*, brain.msg.*, agent.*)
- * are not money beats and are deliberately out of scope; widening the prefix list would demand a
- * classification for every internal kind without making the graph any more correct.
+ * A regex cannot do this correctly in either direction. Matching every quoted run counts kinds
+ * named in prose; stripping `//` with a regex first truncates any line whose STRING contains
+ * `//`, silently dropping a real emitted kind. The second is the dangerous one: it makes the
+ * drift guard pass over an unmapped event.
  *
- * Comments are stripped FIRST. Without that, store.go's doc comment -- which names "job.funded"
- * and "advance.issued" as examples of the taxonomy -- registers them as emitted, and the dead
- * V5-mock aliases in beatFor then look live to this guard. A drift guard that counts prose is
- * worse than none, because it reports confidence it has not earned.
+ * So this walks the source once, tracking whether it is inside an interpreted string, a raw
+ * string, a line comment or a block comment. Small, but the only version that is right.
+ *
+ * SCOPE, stated so this is not mistaken for total coverage: daemonEventKinds keeps only the
+ * prefixes the money graph could plausibly animate. billing.*, budget.*, brain.msg.* and agent.*
+ * are not money beats and are deliberately out of scope.
  */
+function goStringLiterals(src: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') i++;
+    } else if (c === '/' && src[i + 1] === '*') {
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
+      i += 2;
+    } else if (c === '`') {
+      i++;
+      const start = i;
+      while (i < src.length && src[i] !== '`') i++;
+      out.push(src.slice(start, i));
+      i++;
+    } else if (c === '"') {
+      i++;
+      let lit = '';
+      while (i < src.length && src[i] !== '"') {
+        // A backslash escapes the next byte, so an escaped quote does not end the literal.
+        if (src[i] === '\\') {
+          lit += src[i]! + (src[i + 1] ?? '');
+          i += 2;
+          continue;
+        }
+        if (src[i] === '\n') break; // unterminated; Go would not compile, so stop cleanly
+        lit += src[i];
+        i++;
+      }
+      out.push(lit);
+      i++;
+    } else {
+      i++;
+    }
+  }
+  return out;
+}
+
 function daemonEventKinds(): Set<string> {
   const root = path.resolve(process.cwd(), '..', 'daemon');
   const kinds = new Set<string>();
-  const re = /"((?:advance|settlement|payment|purchase|approval|policy|job|freeze|task)\.[a-z_.]+)"/g;
-
-  // The `[^:]` guard keeps `://` inside a URL string from being read as the start of a comment.
-  const stripComments = (src: string) =>
-    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const KIND = /^(?:advance|settlement|payment|purchase|approval|policy|job|freeze|task)\.[a-z_.]+$/;
 
   const walk = (dir: string) => {
     for (const entry of readdirSafe(dir)) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (entry.name.endsWith('.go') && !entry.name.endsWith('_test.go')) {
-        for (const m of stripComments(readFileSync(full, 'utf8')).matchAll(re)) kinds.add(m[1]!);
+        // Anchored: the whole literal must BE a kind. A sentence mentioning one is not a literal
+        // equal to it, so prose cannot register even when it is inside a string.
+        for (const lit of goStringLiterals(readFileSync(full, 'utf8'))) {
+          if (KIND.test(lit)) kinds.add(lit);
+        }
       }
     }
   };
@@ -98,6 +140,15 @@ test('a legless settlement must NOT drive the waterfall', () => {
     'settlement.executed drives the waterfall with no legs to divide',
   );
   assert.equal(beatFor(msg('JobSettled')), 'fall');
+
+  // Same rule, same reason: job.accepted carries no legs either. It was safe only by accident,
+  // since nothing in production emits it and demoStream rewrites it to JobSettled before it
+  // reaches beatFor. Only the event that reports both legs may divide the money.
+  assert.equal(
+    beatFor(msg('job.accepted')),
+    null,
+    'job.accepted drives the waterfall with no legs, contradicting the rule the file states',
+  );
 });
 
 // ── the beats that were already right, so a fix cannot quietly break them ───
