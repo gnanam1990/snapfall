@@ -21,8 +21,10 @@ import (
 
 // chainCursor is a position in the (block_number, log_index) order the indexer writes and the
 // H2 relay contract requires. It is NOT the SSE id: Last-Event-ID carries the daemon `seq` and is
-// parsed as an int64 (H2 §2.1), so a chain frame that set the SSE id would make the next reconnect
-// parse a chain cursor as a daemon seq. Chain frames therefore write no id at all.
+// parsed with strconv.ParseInt(..., 10, 64) (H2 §2.1). A "block:logIndex" cursor is not a valid
+// int64, so if a chain frame set the SSE id, the next reconnect would ParseInt it to (0, error),
+// discard the error, and resume the daemon stream from seq 0 — replaying every daemon event.
+// Chain frames therefore write no id at all.
 type chainCursor struct {
 	block    int64
 	logIndex int64
