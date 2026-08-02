@@ -7,7 +7,7 @@ import type { ActivityMessage } from '@/lib/activity';
 import { humanizeLegacyEvent, humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdc, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
-import TreasuryHero from '@/components/TreasuryHero';
+import PoolVessel from '@/components/PoolVessel';
 import MoneyGraph from '@/components/MoneyGraph';
 import StatCard from '@/components/StatCard';
 import Card, { CardHeader, CardBody } from '@/components/Card';
@@ -90,7 +90,7 @@ export default function OverviewPage() {
   // unavailable read shows a dash, never a wrong or fabricated value.
   const treasuryAndPool = (
     <>
-      <TreasuryHero treasuryUsdc={float?.treasuryUsdc ?? null} orgRateBps={float?.orgRateBps ?? null} />
+      <PoolVessel tvlUsdc={float ? formatUsdc(float.totalAssetsUsdc) : null} utilizationBps={float?.utilizationBps ?? null} orgRateBps={float?.orgRateBps ?? null} />
       <div className="grid cols-4 mt">
         <StatCard
           label="Pool TVL"
