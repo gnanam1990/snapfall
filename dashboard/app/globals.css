@@ -995,7 +995,7 @@ table.t { width: 100%; border-collapse: collapse; }
 }
 .portal-card {
   width: 100%; max-width: 520px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 16px; padding: 34px 34px 30px;
+  border-radius: var(--radius); padding: 34px 34px 30px;
 }
 .portal-brand { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 14px; font-weight: 600; }
 .portal-title { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
@@ -1008,7 +1008,7 @@ table.t { width: 100%; border-collapse: collapse; }
    there: 6.52:1 dark / 4.62:1 light against the fill, where --accent-border would drop it to
    4.18:1 / 3.64:1. Swapping it would weaken the primary CTA's edge, not fix it. */
 .portal-accept {
-  width: 100%; min-height: 46px; border-radius: 10px; border: 1px solid var(--accent-dim);
+  width: 100%; min-height: 46px; border-radius: var(--radius); border: 1px solid var(--accent-dim);
   background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 700; font-size: 15px; cursor: pointer;
 }
 .portal-accept:disabled { opacity: 0.6; cursor: default; }
@@ -2048,3 +2048,18 @@ table.t { width: 100%; border-collapse: collapse; }
 .job-txlink:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
 /* Focusable so the full hash in the accessible name is reachable by keyboard. */
 .job-hashv:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
+
+/* ══ Customer portal, converted ══
+ *
+ * Same tokens and the same flat register as the owner surfaces, and deliberately none of the
+ * instrument vocabulary: this reader arrived from one link to accept one deliverable, and owes
+ * nobody a drafting language to do it.
+ */
+.portal-jobid { word-break: break-all; font-variant-numeric: tabular-nums; }
+.portal-receipt-title { margin: 0 0 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.portal-total { margin: 0; font-size: 15px; display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-variant-numeric: tabular-nums; }
+/* Absent is not zero, and on a receipt that distinction is the customer's money. */
+.portal-absent { color: var(--muted-2); font-size: 12.5px; font-variant-numeric: normal; }
+.portal-proof { margin: 14px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.portal-proof code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text-2); }
+.portal-accept:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
