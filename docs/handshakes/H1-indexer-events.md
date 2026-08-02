@@ -87,7 +87,9 @@ stable H1 stream or projections instead of re-decoding contract logs.
 
 ## 5. Golden fixture
 
-`daemon/internal/indexer/testdata/h1-spine-logs.json` is the cross-team fixture. It contains all
-eight events deliberately shuffled; a conforming implementation must emit them in chain order,
-project 25.00 USDC funded, 12.50 principal, 0.25 fee, 12.75 repaid, 12.25 operator net and a
-55% rate, emit a 0.05 reserve cut in `AdvanceRepaid`, and produce the same result on replay.
+`daemon/internal/indexer/testdata/h1-spine-logs.json` is a **synthetic** cross-team fixture, not
+an Arc capture or recording artifact. It contains all eight events deliberately shuffled; a
+conforming implementation must emit them in chain order, project 25.00 USDC funded, 12.50
+principal, 0.25 fee, 12.75 repaid, 12.25 operator net and a 55% rate, emit a 0.05 reserve cut
+in `AdvanceRepaid`, and produce the same result on replay. See the adjacent testdata README and
+the A14 audit before using any fixture as demo evidence.

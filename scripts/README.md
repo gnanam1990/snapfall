@@ -57,3 +57,12 @@ Typical loop between takes:
 - `./scripts/redeploy-testnet --account <name>` — broadcasts the frozen deployment script
   only after 48 chain-hours have elapsed from the later of the current deployment and last
   successful broadcast. It resolves and passes the keystore's sender explicitly.
+
+## Submission integrity
+
+- `./scripts/a14-audit` — scans the tracked tree and all ref-reachable Git commit trees for
+  high-confidence secret formats, validates secret placeholders, and inventories committed
+  logs/recording artifacts without printing matched values. It refuses shallow or unreadable
+  history rather than producing an incomplete pass. Manual recording claims still follow
+  `docs/A14-SECRET-INTEGRITY-AUDIT.md`.
+  Run `./scripts/a14-audit-test` for its temporary-repository and real-checkout regressions.

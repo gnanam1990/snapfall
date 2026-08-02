@@ -14,6 +14,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secret-audit:
+    name: A14 secret and recording-integrity audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run audit regression suite
+        run: ./scripts/a14-audit-test
+      - name: Scan tracked tree and complete reachable history
+        run: ./scripts/a14-audit
+
   contracts:
     name: Contracts and duplicate-advance protection
     runs-on: ubuntu-latest

@@ -2,6 +2,12 @@
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+keystores/
 
 # node / bun
 node_modules/

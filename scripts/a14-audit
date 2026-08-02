@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# High-confidence formats only. Generic words such as "token" and "secret" are
+# deliberately excluded: this repository contains security interfaces and inert test
+# values, and a noisy scanner is easier to ignore than a narrow, actionable one.
+# Matching is case-insensitive so JSON/camelCase and shell/YAML spellings are equivalent.
+secret_pattern='(-----BEGIN (RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-(proj-|ant-api03-)?[A-Za-z0-9_-]{20,}|[0-9]{8,10}:[A-Za-z0-9_-]{35}|act_[0-9a-fA-F]{64}|(TEST|SAND|LIVE)_API_KEY:[0-9a-fA-F-]+:[A-Za-z0-9_-]{8,}|((PRIVATE_KEY|PRIVATEKEY|SECRET_KEY|SECRETKEY|API_KEY|APIKEY|ACCESS_KEY|ACCESSKEY|SEED_PHRASE|SEEDPHRASE|AUTH_TOKEN|AUTHTOKEN|APPROVAL_SECRET|APPROVALSECRET|OWNER_TOKEN|OWNERTOKEN|BOT_TOKEN|BOTTOKEN)["'"'"'`]?[[:space:]]*[:=][[:space:]]*["'"'"'`]?(0x)?[0-9a-fA-F]{64})|((SIDECAR_AUTH_TOKEN|H2_APPROVAL_SECRET|CIRCLE_API_KEY|TREASURY_PRIVATE_KEY|SNAPFALL_CUSTOMER_PRIVATE_KEY|SNAPFALL_LP_PRIVATE_KEY|SNAPFALL_OWNER_TOKEN)["'"'"'`]?[[:space:]]*=[[:space:]]*["'"'"'`]?[^[:space:]"'"'"'`#]{8,})|((SIDECAR_AUTH_TOKEN|H2_APPROVAL_SECRET|CIRCLE_API_KEY|TREASURY_PRIVATE_KEY|SNAPFALL_CUSTOMER_PRIVATE_KEY|SNAPFALL_LP_PRIVATE_KEY|SNAPFALL_OWNER_TOKEN)["'"'"'`]?[[:space:]]*:[[:space:]]*["'"'"'`][^"'"'"'`]{8,})|([-][-]private-key[[:space:]]+["'"'"'`]?(0x)?[0-9a-fA-F]{64})|("crypto"[[:space:]]*:[[:space:]]*\{[^}]*"ciphertext"[[:space:]]*:)|([a-z]+://)[^/@[:space:]]+:[^/@[:space:]]+@)'
+sensitive_path_pattern='(^|/)(\.env($|\.)|.*(secret|credential|private[-_]?key|mnemonic|seed[-_]?phrase|seedphrase).*)|(^|/)(keystore|keystores)(/|$)|(^|/)UTC--[^/]+|\.(pem|key|p12|pfx|jks|keystore)$'
+artifact_path_pattern='\.(har|log|png|jpe?g|gif|webp|mp4|mov|webm)$'
+secret_env_name_pattern='^(SIDECAR_AUTH_TOKEN|H2_APPROVAL_SECRET|CIRCLE_API_KEY|TREASURY_PRIVATE_KEY|SNAPFALL_CUSTOMER_PRIVATE_KEY|SNAPFALL_LP_PRIVATE_KEY|SNAPFALL_OWNER_TOKEN|BOT_TOKEN)$'
+
+allowlist="$repo_root/scripts/a14-audit.allow"
+if [[ ! -f "$allowlist" ]]; then
+  echo "ERROR: missing reviewed path allowlist: scripts/a14-audit.allow" >&2
+  exit 2
+fi
+
+work_dir="$(mktemp -d)"
+trap 'rm -rf "$work_dir"' EXIT
+revisions_file="$work_dir/revisions"
+paths_file="$work_dir/paths"
+failed=0
+
+die_scan() {
+  echo "ERROR: $1" >&2
+  exit 2
+}
+
+if [[ "$(git rev-parse --is-shallow-repository)" != "false" ]]; then
+  die_scan "refusing an incomplete shallow history; fetch with --unshallow or checkout with fetch-depth: 0"
+fi
+if ! git rev-list --all >"$revisions_file" 2>"$work_dir/rev-list.err"; then
+  cat "$work_dir/rev-list.err" >&2
+  die_scan "could not enumerate reachable revisions"
+fi
+if [[ ! -s "$revisions_file" ]]; then
+  die_scan "no reachable revisions were found"
+fi
+if ! git rev-list --objects --all --missing=error >/dev/null 2>"$work_dir/objects.err"; then
+  cat "$work_dir/objects.err" >&2
+  die_scan "reachable history has missing or unreadable objects"
+fi
+
+scan_grep() {
+  local label="$1"
+  shift
+  local output status=0 err_file="$work_dir/grep.err"
+  : >"$err_file"
+  if output="$(git grep -l -a -i -E "$secret_pattern" "$@" 2>"$err_file")"; then
+    status=0
+  else
+    status=$?
+  fi
+  if [[ -s "$err_file" ]]; then
+    cat "$err_file" >&2
+    die_scan "git grep emitted an error while scanning $label"
+  fi
+  case "$status" in
+    0) [[ -n "$output" ]] && printf '%s\n' "$output" ;;
+    1) ;;
+    *) die_scan "git grep failed with status $status while scanning $label" ;;
+  esac
+}
+
+current_hits="$(scan_grep "the current tree" -- . ':(exclude)contracts/lib/**')"
+if [[ -n "$current_hits" ]]; then
+  echo "FAIL: high-confidence secret pattern(s) in the current tree:"
+  printf '%s\n' "$current_hits"
+  failed=1
+else
+  echo "PASS: no high-confidence secret patterns in the current tree"
+fi
+
+history_file="$work_dir/history-hits"
+: >"$history_file"
+while IFS= read -r revision; do
+  scan_grep "revision $revision" "$revision" -- . ':(exclude)contracts/lib/**' >>"$history_file"
+done <"$revisions_file"
+sort -u -o "$history_file" "$history_file"
+if [[ -s "$history_file" ]]; then
+  echo "FAIL: high-confidence secret pattern(s) in reachable Git tree history:"
+  cat "$history_file"
+  failed=1
+else
+  echo "PASS: no high-confidence secret patterns in reachable Git tree history"
+fi
+
+# Enumerate every revision tree rather than git-log diffs. A path introduced only while
+# resolving a merge is in neither parent diff and must still be visible to this inventory.
+: >"$paths_file"
+while IFS= read -r revision; do
+  if ! git ls-tree -r --name-only "$revision" >>"$paths_file" 2>"$work_dir/ls-tree.err"; then
+    cat "$work_dir/ls-tree.err" >&2
+    die_scan "could not enumerate paths in revision $revision"
+  fi
+done <"$revisions_file"
+sort -u -o "$paths_file" "$paths_file"
+
+allowlist_paths="$work_dir/allowlist-paths"
+: >"$allowlist_paths"
+validate_allowlist() {
+  local entry path reason
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
+    [[ "$entry" =~ ^[[:space:]]*(#|$) ]] && continue
+    path="${entry%%|*}"
+    reason="${entry#*|}"
+    path="${path#"${path%%[![:space:]]*}"}"
+    path="${path%"${path##*[![:space:]]}"}"
+    reason="${reason#"${reason%%[![:space:]]*}"}"
+    if [[ "$entry" != *"|"* || -z "$path" || -z "$reason" ]]; then
+      die_scan "malformed allowlist entry; expected exact/path | justification"
+    fi
+    printf '%s\n' "$path" >>"$allowlist_paths"
+  done <"$allowlist"
+}
+validate_allowlist
+
+is_allowlisted() {
+  grep -Fqx -- "$1" "$allowlist_paths"
+}
+
+# .env.example is accepted only after every reachable version proves that its secret-named
+# assignments are empty. It is not an unconditional filename exception.
+validate_env_example() {
+  local path="$1" revision line name rhs
+  while IFS= read -r revision; do
+    if ! git cat-file -e "$revision:$path" 2>/dev/null; then
+      continue
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+      [[ "$line" != *"="* ]] && continue
+      name="${line%%=*}"
+      name="${name#export }"
+      name="${name//[[:space:]]/}"
+      [[ "$name" =~ $secret_env_name_pattern ]] || continue
+      rhs="${line#*=}"
+      rhs="$(strip_unquoted_comment "$rhs")"
+      rhs="${rhs//[[:space:]]/}"
+      rhs="${rhs%\"}"; rhs="${rhs#\"}"
+      rhs="${rhs%\'}"; rhs="${rhs#\'}"
+      if [[ -n "$rhs" ]]; then
+        echo "FAIL: populated secret value in $path at revision $revision (variable $name)" >&2
+        return 1
+      fi
+    done < <(git show "$revision:$path")
+  done <"$revisions_file"
+}
+
+# Shell-style comments begin only outside quotes. Treating the first # as a comment
+# unconditionally would turn a valid quoted bearer such as "#..." into an empty value.
+strip_unquoted_comment() {
+  local input="$1" output="" quote="" char next i
+  for ((i = 0; i < ${#input}; i++)); do
+    char="${input:i:1}"
+    if [[ -z "$quote" ]]; then
+      case "$char" in
+        "'"|'"') quote="$char"; output+="$char" ;;
+        '#')
+          # In an assignment RHS, # begins a comment only as a whitespace-delimited
+          # token. At position zero (KEY=#value) or inside data (KEY=a#b), it is value
+          # material and must keep the assignment nonempty.
+          if ((i > 0)) && [[ "${input:i-1:1}" =~ [[:space:]] ]]; then
+            break
+          fi
+          output+="$char"
+          ;;
+        *) output+="$char" ;;
+      esac
+      continue
+    fi
+    output+="$char"
+    if [[ "$char" == '\\' && "$quote" == '"' && $((i + 1)) -lt ${#input} ]]; then
+      i=$((i + 1))
+      next="${input:i:1}"
+      output+="$next"
+    elif [[ "$char" == "$quote" ]]; then
+      quote=""
+    fi
+  done
+  printf '%s' "$output"
+}
+
+sensitive_file="$work_dir/sensitive-paths"
+: >"$sensitive_file"
+while IFS= read -r path; do
+  [[ "$path" =~ $sensitive_path_pattern ]] || continue
+  # A reviewed path exception must never override the value check for env examples.
+  if [[ "$path" == *.env.example ]]; then
+    if validate_env_example "$path"; then
+      continue
+    fi
+    printf '%s\n' "$path" >>"$sensitive_file"
+    continue
+  fi
+  if is_allowlisted "$path"; then
+    continue
+  fi
+  printf '%s\n' "$path" >>"$sensitive_file"
+done <"$paths_file"
+if [[ -s "$sensitive_file" ]]; then
+  echo "FAIL: sensitive filename(s) occurred in reachable Git tree history:"
+  cat "$sensitive_file"
+  failed=1
+else
+  echo "PASS: no unexplained sensitive filenames in reachable Git tree history"
+fi
+
+artifact_file="$work_dir/artifacts"
+grep -E -i "$artifact_path_pattern" "$paths_file" >"$artifact_file" || status=$?
+status="${status:-0}"
+if ((status > 1)); then
+  die_scan "artifact inventory failed with status $status"
+fi
+if [[ -s "$artifact_file" ]]; then
+  echo "INFO: tracked log/recording artifacts require manual visual review:"
+  cat "$artifact_file"
+else
+  echo "PASS: no tracked logs, screenshots, or video artifacts"
+fi
+
+revision_count="$(wc -l <"$revisions_file" | tr -d ' ')"
+path_count="$(wc -l <"$paths_file" | tr -d ' ')"
+echo "INFO: coverage denominator: $revision_count reachable revisions, $path_count unique tree paths"
+
+if ((failed != 0)); then
+  exit 1
+fi
+
+echo "A14 automated secret preflight passed."
+echo "Recording claims still require the manual evidence checks in docs/A14-SECRET-INTEGRITY-AUDIT.md."
