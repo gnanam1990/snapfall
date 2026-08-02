@@ -27,18 +27,34 @@ function msg(kind: string, over: Partial<ActivityMessage> = {}): ActivityMessage
   } as ActivityMessage;
 }
 
-/** Every `"some.kind"` string literal the daemon writes as an event kind. */
+/**
+ * Every `"some.kind"` string literal the daemon writes as an event kind.
+ *
+ * SCOPE, stated so this is not mistaken for total coverage: it matches the prefixes the money
+ * graph could plausibly animate. Kinds outside them (billing.*, budget.*, brain.msg.*, agent.*)
+ * are not money beats and are deliberately out of scope; widening the prefix list would demand a
+ * classification for every internal kind without making the graph any more correct.
+ *
+ * Comments are stripped FIRST. Without that, store.go's doc comment -- which names "job.funded"
+ * and "advance.issued" as examples of the taxonomy -- registers them as emitted, and the dead
+ * V5-mock aliases in beatFor then look live to this guard. A drift guard that counts prose is
+ * worse than none, because it reports confidence it has not earned.
+ */
 function daemonEventKinds(): Set<string> {
   const root = path.resolve(process.cwd(), '..', 'daemon');
   const kinds = new Set<string>();
   const re = /"((?:advance|settlement|payment|purchase|approval|policy|job|freeze|task)\.[a-z_.]+)"/g;
+
+  // The `[^:]` guard keeps `://` inside a URL string from being read as the start of a comment.
+  const stripComments = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 
   const walk = (dir: string) => {
     for (const entry of readdirSafe(dir)) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (entry.name.endsWith('.go') && !entry.name.endsWith('_test.go')) {
-        for (const m of readFileSync(full, 'utf8').matchAll(re)) kinds.add(m[1]!);
+        for (const m of stripComments(readFileSync(full, 'utf8')).matchAll(re)) kinds.add(m[1]!);
       }
     }
   };
@@ -70,16 +86,18 @@ test('the snap beat fires on the kind the daemon actually writes', () => {
   );
 });
 
-test('the waterfall fires on settlement, not only on the customer click', () => {
+test('a legless settlement must NOT drive the waterfall', () => {
+  // I mapped settlement.executed to 'fall' and it was wrong. Its payload is {tx_hash, block,
+  // gas_used} -- no legs, no amount -- and the 'fall' handler DERIVES the operator's share when
+  // the legs are absent. That publishes a guess as fact and then lets the real JobSettled
+  // animate the waterfall a second time, which is the defect PR #40 fixed. Only JobSettled
+  // reports both legs, so only JobSettled may drain the escrow.
   assert.equal(
     beatFor(msg('settlement.executed')),
-    'fall',
-    'settlement.executed is when the money actually divides; job.accepted is the click before it',
+    null,
+    'settlement.executed drives the waterfall with no legs to divide',
   );
-});
-
-test('a completed purchase animates a spend', () => {
-  assert.equal(beatFor(msg('purchase.delivered')), 'spend');
+  assert.equal(beatFor(msg('JobSettled')), 'fall');
 });
 
 // ── the beats that were already right, so a fix cannot quietly break them ───
@@ -123,6 +141,8 @@ const INTENTIONALLY_SILENT: Record<string, string> = {
   'advance.interrupted': 'no money moved',
   'advance.reverted': 'reverted on chain; nothing moved',
   'settlement.pending_chain': 'submitted, not landed',
+  'settlement.executed': 'the tx landed, but the payload carries no legs; JobSettled divides the money',
+  'purchase.delivered': 'its amount is amount_micros, unread by eventAmount; approval.requested(approved) already counts this purchase',
   'settlement.reverted': 'reverted on chain; the waterfall did not divide anything',
   'task.withheld': 'a QA hold on delivery, not a movement of money',
   'freeze.engaged': 'a control-plane state, not a money beat',
