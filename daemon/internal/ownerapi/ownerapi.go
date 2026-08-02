@@ -502,8 +502,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		if frames, err := readChainEvents(r.Context(), s.st.DB(), chainAt, 256); err == nil {
 			for _, f := range frames {
 				// id 0: chain frames deliberately write NO SSE id. Last-Event-ID carries the
-				// daemon seq and is parsed as an int64 (H2 §2.1), so an id of "512:3" would
-				// come back on reconnect as a daemon seq of 512 and silently skip the log.
+				// daemon seq and is parsed with strconv.ParseInt(..., 10, 64) (H2 §2.1). A chain
+				// seq like "512:3" is not a valid int64, so ParseInt returns (0, error); the
+				// error is discarded, leaving lastSeq=0. Setting the SSE id on a chain frame
+				// would therefore make the next reconnect resume the DAEMON stream from seq 0 and
+				// replay every daemon event — not skip ahead. Either way the daemon resume point
+				// is corrupted, so chain frames must never touch the SSE id namespace.
 				if err := sseWrite(w, fl, 0, f.msg); err != nil {
 					return
 				}
