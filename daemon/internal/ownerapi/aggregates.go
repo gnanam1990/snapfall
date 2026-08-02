@@ -20,8 +20,10 @@ import (
 // aggregates is the H2 §2.1 optional block. Every money field is a base-10 atomic-USDC STRING,
 // per the H1 §2 rule that amounts never cross the wire as numbers -- a float would round a
 // 6-decimal balance and the dashboard would render a number nobody can reconcile.
+// Treasury is intentionally not a field here. The operator balance needs a chain read (6dp
+// ERC-20 balanceOf); the dashboard reads it from /api/float so it is one verifiable source and
+// works on the daemon-less public deploy. This block carries only what the indexer projects.
 type aggregates struct {
-	TreasuryUsdc     *string       `json:"treasuryUsdc,omitempty"`
 	Pool             *poolAgg      `json:"pool,omitempty"`
 	OpenAdvances     []openAdvance `json:"openAdvances"`
 	ActiveJobs       []activeJob   `json:"activeJobs"`
@@ -61,8 +63,8 @@ type activeJob struct {
 // computeAggregates reads the indexer's projections. A missing table or an empty projection is
 // not an error: it is the documented "before the indexer has run" case, and the contract says the
 // dashboard keeps its last known values when the block is absent. So this returns a nil pointer
-// rather than a zeroed struct, and the caller omits the field entirely -- sending
-// treasuryUsdc:"0" against an un-indexed store would be a claim the daemon cannot support.
+// rather than a zeroed struct, and the caller omits the block entirely -- sending an org rate of
+// 0 against an un-indexed store would be a claim the daemon cannot support.
 func computeAggregates(ctx context.Context, db *sql.DB, orgAddress string, pendingApprovals int) *aggregates {
 	agg := &aggregates{
 		OpenAdvances:     []openAdvance{},

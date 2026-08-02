@@ -22,6 +22,8 @@ function floatConfig(): { config: FloatChainConfig; includeHistory: boolean } {
       explorerUrl: deployment.network.explorerUrl,
       startBlock: Number(process.env.SNAPFALL_DEPLOYMENT_BLOCK ?? deployment.network.startBlock),
       orgAddress: process.env.SNAPFALL_TREASURY_ADDRESS,
+      // USDC (ERC-20) address, so the treasury balanceOf can be read at the 6dp surface.
+      usdcAddress: process.env.ARC_USDC_ADDRESS ?? deployment.contracts.usdc.address,
       // Per-request eth_getLogs range cap — provider-dependent (Alchemy PAYG 10000, free 10,
       // public node unlimited-but-rate-limited). Defaults to 10000; the scan shrinks further
       // on a range error if the provider is stricter.

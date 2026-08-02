@@ -439,12 +439,13 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	pending := len(s.life.PendingRequests())
 	snapBody := map[string]any{
 		"pendingApprovals": pending,
-		"treasuryUsdc":     nil, "pool": nil, "openAdvances": nil, "activeJobs": nil,
+		"pool": nil, "openAdvances": nil, "activeJobs": nil,
 	}
+	// Treasury is deliberately NOT in this snapshot: the operator balance needs a chain read
+	// (6dp ERC-20 balanceOf), which the dashboard does directly against /api/float — a single,
+	// verifiable source rather than a daemon-asserted one that would also strand the number on
+	// the public deploy where no daemon runs. Pool/advances/jobs stay here (indexer projections).
 	if agg := computeAggregates(r.Context(), s.st.DB(), s.orgAddress, pending); agg != nil {
-		if agg.TreasuryUsdc != nil {
-			snapBody["treasuryUsdc"] = *agg.TreasuryUsdc
-		}
 		if agg.Pool != nil {
 			snapBody["pool"] = agg.Pool
 		}
