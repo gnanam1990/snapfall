@@ -2063,3 +2063,47 @@ table.t { width: 100%; border-collapse: collapse; }
 .portal-proof { margin: 14px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
 .portal-proof code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text-2); }
 .portal-accept:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
+/* ══ Audit ══
+ *
+ * A schedule of references, not a drawing: nothing here is flowing, so there is no instrument to
+ * draw. The one thing every row owes the reader is somewhere independent to follow it, which is
+ * why the reference link is the only coloured element on the page.
+ */
+.audit-lede { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 68ch; }
+.audit-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.audit-row { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; padding: 12px 0; border-top: 1px solid var(--border); }
+.audit-row:first-child { border-top: none; }
+.audit-row-main { min-width: 0; }
+.audit-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.audit-role { margin: 3px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; max-width: 56ch; }
+/* The reference out. This is the page's only accent, because following it is the page's point. */
+.audit-ref { display: inline-block; flex: none; color: var(--accent); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.audit-ref:hover { color: var(--accent-bright); }
+.audit-ref:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
+.audit-ref code { font-family: ui-monospace, "Cascadia Code", monospace; }
+.audit-inline { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+/* The two settlement legs, in log order. The order is the evidence, so it is numbered and the
+   rows are not reorderable by styling. */
+.audit-legs { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 0; counter-reset: leg; }
+.audit-leg { display: grid; grid-template-columns: 74px 96px auto 1fr; gap: 14px; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.audit-leg-index { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.audit-leg-to { font-size: 13px; font-weight: 600; }
+.audit-leg-amount { font-size: 15px; font-weight: 600; }
+.audit-unit { font-size: 10.5px; color: var(--muted); font-weight: 400; }
+.audit-leg-detail { font-size: 11.5px; color: var(--muted-2); text-align: right; }
+.audit-note { margin: 0 0 14px; font-size: 12.5px; line-height: 1.6; color: var(--text-2); max-width: 68ch; }
+.audit-note code, .audit-gap-detail code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text); }
+
+/* The gaps. Deliberately the same weight as the proofs above: an audit page that whispered its
+   absences and shouted its evidence would be doing the thing it exists to prevent. */
+.audit-gaps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.audit-gaps li { display: grid; gap: 3px; padding: 11px 0; border-top: 1px solid var(--border); }
+.audit-gap-claim { font-size: 13px; font-weight: 600; color: var(--text); }
+.audit-gap-detail { font-size: 12px; color: var(--muted); line-height: 1.55; max-width: 68ch; }
+@media (max-width: 640px) {
+  .audit-row { flex-direction: column; gap: 8px; }
+  .audit-leg { grid-template-columns: 1fr; gap: 2px; }
+  .audit-leg-detail { text-align: left; }
+}
