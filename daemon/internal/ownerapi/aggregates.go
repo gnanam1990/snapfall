@@ -32,18 +32,30 @@ type poolAgg struct {
 	OrgRateBps int64 `json:"orgRateBps"`
 }
 
+// openAdvance matches the dashboard's OpenAdvance shape (lib/types.ts). The money fields carry
+// atomic-USDC strings; the field names use the dashboard's `...Usdc` spelling so the wire keys
+// match what it reads (the earlier `principalAtomic`/`feeAtomic` keys never matched and rendered
+// blank). rateBps is intentionally absent: chain_job_financials records no per-advance draw rate,
+// and the current org rate is not the rate this advance was drawn at, so emitting it would be a
+// wrong number. The dashboard renders an absent rateBps as a dash.
 type openAdvance struct {
-	JobID           string `json:"jobId"`
-	PrincipalAtomic string `json:"principalAtomic"`
-	FeeAtomic       string `json:"feeAtomic"`
-	Status          string `json:"status"`
+	JobID         string `json:"jobId"`
+	Org           string `json:"org"`
+	PrincipalUsdc string `json:"principalUsdc"`
+	FeeUsdc       string `json:"feeUsdc"`
+	Status        string `json:"status"`
 }
 
+// activeJob carries only what the chain projection can source: the job id and its price (the
+// funded escrow amount). The dashboard's JobSummary also shows customer, title and lifecycle
+// state — none of which live in chain_job_financials. customer and state are in the daemon's own
+// `jobs` table (customer_ref/status); title lives only in Brain's per-job memory. Sourcing those
+// would mean reading a different, daemon-asserted projection, which is a deliberate decision, not
+// a widening — so they are omitted here and the dashboard renders their absence as a dash rather
+// than a fabricated value.
 type activeJob struct {
-	JobID         string `json:"jobId"`
-	FundedAtomic  string `json:"fundedAtomic"`
-	ExpenseAtomic string `json:"expenseAtomic"`
-	AdvanceStatus string `json:"advanceStatus"`
+	JobID     string `json:"jobId"`
+	PriceUsdc string `json:"priceUsdc"`
 }
 
 // computeAggregates reads the indexer's projections. A missing table or an empty projection is
@@ -95,14 +107,12 @@ func computeAggregates(ctx context.Context, db *sql.DB, orgAddress string, pendi
 			// are both terminal), so anything else must not be presented as outstanding money.
 			if status == "Issued" && principal != "" {
 				agg.OpenAdvances = append(agg.OpenAdvances, openAdvance{
-					JobID: jobID, PrincipalAtomic: principal, FeeAtomic: fee, Status: status,
+					JobID: jobID, Org: orgAddress, PrincipalUsdc: principal, FeeUsdc: fee, Status: status,
 				})
 			}
 			if funded != "" {
-				agg.ActiveJobs = append(agg.ActiveJobs, activeJob{
-					JobID: jobID, FundedAtomic: funded,
-					ExpenseAtomic: expense, AdvanceStatus: status,
-				})
+				// funded escrow == the job's price (SC-JV-001: the customer funds the quoted amount).
+				agg.ActiveJobs = append(agg.ActiveJobs, activeJob{JobID: jobID, PriceUsdc: funded})
 			}
 		}
 	}
