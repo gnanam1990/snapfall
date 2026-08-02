@@ -16,6 +16,8 @@
     "test:h3-vectors": "tsx --test src/h3-golden-vector-test.ts",
     "test:post-sign": "tsx --test src/post-sign-taxonomy-test.ts",
     "test:seller-hostile": "tsx --test src/seller-hostile-test.ts",
+    "test:facilitator": "tsx --test src/facilitator-test.ts src/capture-gate-test.ts",
+    "test:facilitator-wiring": "tsx --test src/facilitator-wiring-test.ts",
     "verify:circle-facilitator-fixture": "tsx src/verify-circle-facilitator-fixture.ts",
     "capture:v1-fixture": "tsx src/capture-v1-fixture.ts",
     "typecheck": "tsc --noEmit"

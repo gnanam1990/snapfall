@@ -79,6 +79,14 @@ export interface PurchaseResult {
     payee: string;
     nonce: string;
     settlement: string;
+    /**
+     * Which facilitator broadcast this, when one did.
+     *
+     * Carried so evidence can name its own source: a transaction hash proves money moved, not
+     * WHO moved it, and V1's claim is specifically that Circle's facilitator settled the payment.
+     * Absent when no broadcast was attempted, in which case `settlement` is a dry-run marker.
+     */
+    facilitator?: { verify: string; settle: string };
   };
   /** Hash of the signed authorization, for the audit receipt (FR-X402-004). */
   authorizationSignature: string;
