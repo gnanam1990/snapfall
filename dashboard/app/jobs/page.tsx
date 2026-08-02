@@ -110,7 +110,7 @@ export default function JobsPage() {
           <p>
             The job list comes from the owner’s daemon, which does not run on this public site. It
             is left empty rather than filled with examples. The pool and advance figures on{' '}
-            <Link className="job-open" href="/float">
+            <Link className="jobs-open" href="/float">
               Float
             </Link>{' '}
             are read straight from Arc testnet and do not need a daemon.
@@ -128,19 +128,19 @@ export default function JobsPage() {
           </p>
         </div>
       ) : (
-        <ul className="job-list">
+        <ul className="jobs-list">
           {jobs.map((job) => {
             const vault = vaultIDOf(job);
             // Both sides are chain_job_financials.job_id, so this join is sound.
             const advance = advances.find((a) => a.jobId === job.jobId);
             return (
-              <li key={job.jobId} className="job-row">
-                <div className="job-line">
-                  <div className="job-ident">
-                    <h2 className="job-title">
+              <li key={job.jobId} className="jobs-row">
+                <div className="jobs-line">
+                  <div className="jobs-ident">
+                    <h2 className="jobs-title">
                       {job.title || (vault ? shortHash(vault) : job.jobId)}
                     </h2>
-                    <p className="job-origin">
+                    <p className="jobs-origin">
                       {job.customer || (
                         <span className="is-absent">
                           customer is daemon-side and not in this projection
@@ -148,15 +148,15 @@ export default function JobsPage() {
                       )}
                     </p>
                   </div>
-                  <div className="job-amount">
-                    <span className="job-figure">{formatUsdcExact(job.priceUsdc)}</span>
-                    <span className="job-unit">USDC</span>
+                  <div className="jobs-amount">
+                    <span className="jobs-figure">{formatUsdcExact(job.priceUsdc)}</span>
+                    <span className="jobs-unit">USDC</span>
                   </div>
                 </div>
 
-                <p className="job-source">escrowed price · indexer projection of JobVault</p>
+                <p className="jobs-source">escrowed price · indexer projection of JobVault</p>
 
-                <dl className="job-facts">
+                <dl className="jobs-facts">
                   <div>
                     <dt>lifecycle</dt>
                     <dd>
@@ -173,7 +173,7 @@ export default function JobsPage() {
                       {advance ? (
                         <>
                           {formatUsdcExact(advance.principalUsdc)} USDC{' '}
-                          <span className="job-sub">
+                          <span className="jobs-sub">
                             + {formatUsdcExact(advance.feeUsdc)} fee · {advance.status}
                           </span>
                         </>
@@ -184,7 +184,7 @@ export default function JobsPage() {
                   </div>
                   <div>
                     <dt>chain identity</dt>
-                    <dd className="job-hash">
+                    <dd className="jobs-hash">
                       {vault ? (
                         shortHash(vault)
                       ) : (
@@ -196,7 +196,7 @@ export default function JobsPage() {
 
                 {vault ? (
                   <Link
-                    className="job-open"
+                    className="jobs-open"
                     href={`/jobs/${vault}`}
                     // Every row renders the same words, so the name has to carry the job.
                     aria-label={`Open the detail page for ${job.title || shortHash(vault)}`}
@@ -204,7 +204,7 @@ export default function JobsPage() {
                     Open job detail <span aria-hidden="true">→</span>
                   </Link>
                 ) : (
-                  <p className="job-blocked">
+                  <p className="jobs-blocked">
                     This job has no bytes32 vault entity yet, so there is nothing to read from the
                     contracts and no detail page to open.
                   </p>
