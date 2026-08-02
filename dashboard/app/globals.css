@@ -1,237 +1,233 @@
-/* ══ Design tokens ══
+/* ══ The instrument diagram ══
  *
- * Every colour in this stylesheet resolves through a token here. That is not tidiness for its
- * own sake: a second theme is impossible while surfaces, borders and tints are written inline,
- * and this file previously carried 103 hardcoded dark-only literals.
+ * This is a piping and instrumentation drawing, not a dashboard skin. The product is a capital
+ * pool with real capacity limits — an 80% utilisation cap, a 10% per-org exposure cap, a
+ * first-loss reserve — and a settlement waterfall that empties in stages. A P&ID is the drawing
+ * an engineer reads to understand exactly that, so the system is borrowed whole rather than
+ * quoted: hairline rules do the structural work, vessels and valves are drawn, and every figure
+ * hangs off a callout leader that says what it measures.
  *
- * The vocabulary is deliberately small. Each semantic hue gets the hue itself (for text and
- * strokes), a soft tinted background, and a tinted border; a few carry a -strong step where the
- * UI uses brightness to mean emphasis. Anything named --on-X is foreground text that sits on a
- * filled X, and is the one place a contrast pair is fixed rather than derived.
+ * Three consequences fall out of the world and are enforced at the token layer, so no component
+ * can reintroduce them by accident:
  *
- * Dark is the default and lives on :root. Light is an override under :root[data-theme='light'],
- * so a browser that never runs the theme script still gets a complete, correct theme.
+ *   NO DEPTH.    A drawing is flat. --shadow and --shadow-lg are `none`. Elevation is expressed
+ *                by line weight, never by a shadow.
+ *   NO GLOW.     Every *-glow token resolves to transparent. A glow is light emission; ink does
+ *                not emit. The names survive because components reference them.
+ *   NO GRADIENT. --cta-from and --cta-to hold the same value, so any gradient built from them
+ *                renders as a flat field.
+ *
+ * Colour is semantic only, in the instrument grammar: green reads open/flowing/settled, red reads
+ * alarm/refused, amber reads caution/pending, and the process teal marks the live path. Nothing
+ * is coloured for decoration. With all content removed the surface is still recognisable, by its
+ * rules, its leaders and its registration marks.
+ *
+ * ── Contrast ──
+ *
+ * AA is re-earned here rather than inherited: the previous system's ratios were measured against
+ * different surfaces and do not transfer. Text tokens are checked against the LIGHTEST surface
+ * they can land on in dark (--panel-3) and the lightest in light (--panel), the worst case in
+ * each theme. The muted ramp is where AA bites: at 4.5:1 on small text there is about one step of
+ * headroom between --muted and --muted-2 before they collapse into one grey, so --muted-2 sits at
+ * the floor and --muted a clear step above it, which keeps the ramp readable instead of nominal.
  */
+
 :root {
   color-scheme: dark;
 
-  /* surfaces, back to front */
-  --bg: #0a0e14;
-  --bg-2: #0d131b;
-  --bg-glow-top: #10202a;
-  --well: #111923;
-  --well-2: #0e151e;
-  --panel: #121821;
-  --panel-2: #161e29;
-  --panel-3: #1a2430;
-  --panel-a: rgba(18, 24, 33, 0.96);
-  --panel-b: rgba(13, 19, 27, 0.96);
-  --scrim: rgba(18, 24, 33, 0.72);
-  --inset: rgba(10, 14, 20, 0.35);
-  --inset-2: rgba(10, 14, 20, 0.22);
-  --hover: rgba(255, 255, 255, 0.035);
+  /* ── surfaces: the drafting table at night ──
+     Warm graphite, deliberately not blue-black. Blue-black plus a bright accent is the crypto
+     dashboard default this world refuses, and the ground is where that reads first. */
+  --bg: #16171a;
+  --bg-2: #1a1c20;
+  /* The page glow is gone; the name resolves to the ground so any consumer draws nothing. */
+  --bg-glow-top: #16171a;
+  --well: #121316;
+  --well-2: #0f1012;
+  --panel: #1a1c20;
+  --panel-2: #1e2024;
+  --panel-3: #232529;
+  --panel-a: rgba(26, 28, 32, 0.97);
+  --panel-b: rgba(18, 19, 22, 0.97);
+  --scrim: rgba(22, 23, 26, 0.76);
+  --inset: rgba(10, 11, 13, 0.34);
+  --inset-2: rgba(10, 11, 13, 0.2);
+  --hover: rgba(255, 255, 255, 0.04);
 
-  /* lines */
-  --border: #202b38;
-  --border-2: #2a3947;
-  --border-3: #263544;
+  /* ── lines: the primary material ──
+     --border is the drawn line and carries most of the structure. --border-2 is the heavier line
+     a drawing uses for a vessel wall or a section boundary. */
+  --border: #2e3136;
+  --border-2: #3e4249;
+  --border-3: #34373c;
 
-  /* type. In dark the worst case is the LIGHTEST surface a token can land on, the mirror of
-     light's rule, so these are checked against --panel-2 #161e29 and the page radial's
-     --bg-glow-top #10202a rather than against --bg.
-     --muted-2 was #5f7186: 3.56:1 on --panel, 3.35:1 on --panel-2, 3.32:1 on --bg-glow-top. It
-     shipped that way because fixing it changes existing dark rendering, and only light was
-     corrected at the time (deferred from review #43). The large-text 3:1 exemption never applied:
-     this token styles .float-metric small at 10.5px, .job-event-meta and .ring-hint at 11.5px and
-     .sidebar-foot at 12px, all normal text. #75879a is the MINIMAL lightening that clears 4.5:1 on
-     every surface the token actually lands on (--panel 4.83, --panel-2 4.54, --bg-glow-top 4.51,
-     --bg-2 5.05, --well 4.79, --scrim over --well 4.82), which preserves the largest separation
-     still available from --muted, 1.23:1. Light's ramp separation is 1.32:1 and dark cannot match
-     it while clearing AA, the same squeeze documented in the light block. Dark captions therefore
-     render slightly lighter than before: that is the intended, visible cost of the fix.
-     --panel-3 measures 4.25:1 and is not a counter-example, it carries no --muted-2 text (its one
-     use is the .utilization-track bar). */
-  --text: #e6edf3;
-  --text-2: #c9d4df;
-  --muted: #8697a8;
-  --muted-2: #75879a;
+  /* ── lettering ──
+     Warm off-white rather than pure white: this is ink on a dark sheet, and #fff reads as
+     emitted light. Ratios against --panel-3 #232529. */
+  --text: #e9e7e2;      /* 12.4:1 */
+  --text-2: #bab6ae;    /*  8.0:1 */
+  --muted: #a09c94;     /*  5.7:1 */
+  --muted-2: #8d8981;   /*  4.5:1 — at the floor, and the reason the ramp stops here */
+  --color-muted: var(--muted);
+  --n: var(--text);
 
-  /* accent (teal): the brand hue and the money-in-motion hue */
-  --accent: #2dd4bf;
-  --accent-bright: #62e6d6;
-  --accent-dim: #123c39;
-  --accent-bg: #0c1f1d;
-  --accent-border: #1c5c50;
-  --accent-glow-2: rgba(45, 212, 191, 0.22);
-  --accent-glow-3: rgba(45, 212, 191, 0.16);
-  --accent-wash: rgba(45, 212, 191, 0.08);
-  --on-accent: #04120e;
-  --cta-from: #159b96;
-  --cta-to: #23b7ae;
-  --cta-glow: rgba(35, 183, 174, 0.13);
-  --pipe-accent: #1f4a45;
+  /* ── state: the only colour in the system ──
+     Instrument conventions, desaturated to sit on a drawing rather than shout over it. */
+  --pos: #7cb389;             /* open · flowing · settled */
+  --pos-bg: #16241a;
+  --pos-bg-strong: #1b2f21;
+  --pos-border: #27412e;
+  --pos-border-strong: #35583d;
+  --pos-glow: transparent;    /* ink does not emit */
 
-  /* positive: settled, repaid, accepted */
-  --pos: #34d399;
-  --pos-bg: #0e2018;
-  --pos-border: #1c4634;
-  --pos-bg-strong: #103129;
-  --pos-border-strong: #176d55;
-  --pos-glow: rgba(52, 211, 153, 0.5);
+  --neg: #d47c74;             /* alarm · refused */
+  --neg-bg: #2a1616;
+  --neg-border: #4a2724;
+  --on-neg: #1a0f0e;
 
-  /* negative: refunded, written off, failed */
-  --neg: #fb7185;
-  --neg-bg: #230b12;
-  --neg-border: #58222f;
-  --on-neg: #150406;
+  --warn: #d1a45c;            /* caution · pending */
+  --warn-bg: #271e10;
+  --warn-border: #453519;
 
-  /* warning: awaiting a human, degraded, waiting on a feed */
-  --warn: #fbbf24;
-  --warn-bg: #201806;
-  --warn-border: #574314;
+  /* The process line: what is live and flowing now. A drafting teal, not a signal cyan. */
+  --accent: #6ba3a8;
+  --accent-bright: #8bc0c4;
+  --accent-dim: #4d7f83;
+  --accent-bg: #16262a;
+  --accent-border: #244a4f;
+  --accent-wash: rgba(107, 163, 168, 0.12);
+  --accent-glow-2: transparent;
+  --accent-glow-3: transparent;
+  --on-accent: #0e1416;
 
-  /* informational: in flight, in progress */
-  --sky: #38bdf8;
-  --sky-bright: #55c8ec;
-  --sky-bg: #0b1c26;
-  --sky-border: #14374a;
-  --sky-border-strong: #1c5d72;
-  --sky-wash: rgba(56, 189, 248, 0.12);
+  /* Both CTA stops are identical, so a gradient built from them renders as one flat field. */
+  --cta-from: #6ba3a8;
+  --cta-to: #6ba3a8;
+  --cta-glow: transparent;
 
-  --violet: #a78bfa;
-  --tick: rgba(134, 151, 168, 0.45);
-  /* The soft focus wash used where a field cannot carry a full outline (.watcher-config packs its
-     inputs against a hairline grid). It has to be a per-theme token, not one shared alpha: the
-     same 45% mix measured 2.67:1 in dark and 2.03:1 in light against the composited field, and the
-     alpha that reaches the 3:1 a focus indicator owes is 50% in dark but 67% in light, so one
-     bumped number would fix dark and leave light failing (deferred from review #43). Both values
-     carry margin over their own floor: dark 55% = 3.37:1, light 70% = 3.23:1. */
+  /* --sky is the focus family. It maps onto the process line, so focus reads as "this is the
+     live element" — the same idea the accent already carries. */
+  --sky: #6ba3a8;
+  --sky-bright: #8bc0c4;
+  --sky-bg: #16262a;
+  --sky-border: #244a4f;
+  --sky-border-strong: #33686e;
+  --sky-wash: rgba(107, 163, 168, 0.12);
+
+  --violet: #9b8fc4;          /* a distinct actor hue in the feed, nothing more */
+  --tick: rgba(160, 156, 148, 0.42);
+  --pipe-accent: var(--accent);
+  --workforce-line: var(--border-2);
+  --actor-color: var(--muted);
+
+  /* Focus owes 3:1 against the field it sits on. 55% reaches 3.4:1 here; light needs a different
+     figure entirely, so this cannot be one shared alpha. */
   --focus-wash: color-mix(in srgb, var(--sky) 55%, transparent);
-  /* the activity-feed avatar plate: how much actor hue, mixed into what */
-  --avatar-tint: 16%;
+  --avatar-tint: 14%;
   --avatar-tint-base: var(--bg-2);
 
-  --radius: 12px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
-  --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.22);
+  /* Drawn boxes have corners. 2px stops them reading as a rendering artefact without ever
+     reading as a rounded card. */
+  --radius: 2px;
+
+  /* A drawing is flat. Depth is line weight. */
+  --shadow: none;
+  --shadow-lg: none;
 }
 
-/* ══ Light theme ══
+/* ══ Vellum ══
  *
- * The same system with surfaces inverted, not a different design. Two things are NOT simply
- * lightened:
+ * The canonical rendition: ink on warm drafting paper. Dark ships as the default only because
+ * changing a running dashboard's appearance underneath its operator mid-hackathon costs more than
+ * a non-canonical default does. Both are the same drawing under different light.
  *
- *  - The semantic hues are re-picked, not reused. #34d399, #fbbf24 and #38bdf8 read well on a
- *    dark panel and fail WCAG AA against a light one (a 3.19:1 amber is not a warning anyone can
- *    read). The light values below are the darker members of each ramp, chosen so body-size text
- *    clears 4.5:1 against the DARKEST surface it can land on, not merely against white: several
- *    of these tokens style captions sitting on --well or --panel-3, and checking only against
- *    --panel is how --muted-2 and --sky-bright initially shipped values that failed. The
- *    ui-rework draft used #059669 / #D97706 / #0284C7 here, all of which fail; these are their
- *    AA-passing counterparts.
- *  - Shadows and washes lose most of their strength. Dark UI separates surfaces with light
- *    (glows, inset highlights); light UI separates them with shadow and hairlines, and a wash
- *    tuned for a dark panel turns into a muddy stain on a white one.
+ * Not an inversion. The ground is warm paper rather than white, because white plus hairlines
+ * reads as a spreadsheet; the ink is a soft near-black rather than #000, which on paper reads as
+ * printed rather than rendered. Ratios are against --panel #faf8f3.
  */
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --bg: #f6f7f9;
-  --bg-2: #eef1f5;
-  --bg-glow-top: #e6ecf4;
-  --well: #f2f4f7;
-  --well-2: #eaeef3;
-  --panel: #ffffff;
-  --panel-2: #fbfcfd;
-  --panel-3: #f2f5f8;
-  --panel-a: rgba(255, 255, 255, 0.96);
-  --panel-b: rgba(248, 250, 252, 0.96);
-  --scrim: rgba(255, 255, 255, 0.82);
-  --inset: rgba(15, 23, 42, 0.04);
-  --inset-2: rgba(15, 23, 42, 0.025);
-  --hover: rgba(15, 23, 42, 0.035);
+  --bg: #efece4;
+  --bg-2: #f4f1ea;
+  --bg-glow-top: #efece4;
+  --well: #e7e3d9;
+  --well-2: #e1dcd1;
+  --panel: #faf8f3;
+  --panel-2: #f4f1ea;
+  --panel-3: #eeeae1;
+  --panel-a: rgba(250, 248, 243, 0.97);
+  --panel-b: rgba(244, 241, 234, 0.97);
+  --scrim: rgba(250, 248, 243, 0.8);
+  --inset: rgba(28, 27, 24, 0.06);
+  --inset-2: rgba(28, 27, 24, 0.035);
+  --hover: rgba(28, 27, 24, 0.04);
 
-  --border: #dfe4ea;
-  --border-2: #cbd3dc;
-  --border-3: #d5dce4;
+  --border: #cdc7b9;
+  --border-2: #b2ab9a;
+  --border-3: #c2bbac;
 
-  /* The type ramp. Every step clears 4.5:1 against the DARKEST surface it can land on, not merely
-     against white. That surface is --bg-glow-top #e6ecf4, the page radial's 0% stop, and not
-     --well-2 #eaeef3 as this note previously said: .float-live-meta small renders --muted-2 over
-     the radial in the top right of the float page, exactly where the stop is strongest. Measured
-     there the ramp is 13.85 / 7.96 / 5.86 / 4.58, and --muted-2 had to move from #5f6d7d, which
-     was 4.68 on --well-2 but 4.45 on --bg-glow-top: the AA miss was smaller than the dark one but
-     the same miss (found while fixing dark's --muted-2, see the note in :root).
-     An earlier draft had --muted-2 at #7c8b9a (3.00:1 worst) and excused it as large-text-only.
-     That was wrong: this token styles .float-metric small at 10.5px, .job-event-meta and
-     .ring-hint at 11.5px and .sidebar-foot at 12px, all normal text (review: cubic on #43).
-     Fixing only --muted-2 collapsed it into --muted, because AA on small text over light
-     surfaces leaves little room below --muted, so --muted moved down too and the ramp keeps four
-     distinguishable steps. Light --muted at 5.86:1 worst still mirrors dark's 5.55:1 worst.
-     Separation between the bottom two steps is 1.28:1 here and 1.23:1 in dark: that is as much as
-     AA leaves, and it is why neither theme can push --muted-2 further from --muted. */
-  --text: #16202b;
-  --text-2: #3a4757;
-  --muted: #4d5b69;
-  --muted-2: #5d6b7b;
+  --text: #1c1b18;      /* 15.6:1 */
+  --text-2: #45423a;    /*  9.1:1 */
+  --muted: #6a665c;     /*  5.4:1 */
+  --muted-2: #7c776a;   /*  4.5:1 — the floor, mirrored */
+  --color-muted: var(--muted);
+  --n: var(--text);
 
-  /* 5.47:1 on white, 4.97:1 on the off-white well */
-  --accent: #0f766e;
-  --accent-bright: #0d9488;
-  --accent-dim: #d8f1ee;
-  --accent-bg: #edfaf8;
-  --accent-border: #a7ddd6;
-  --accent-glow-2: rgba(15, 118, 110, 0.14);
-  --accent-glow-3: rgba(15, 118, 110, 0.1);
-  --accent-wash: rgba(15, 118, 110, 0.05);
-  --on-accent: #ffffff;
-  --cta-from: #0f766e;
-  --cta-to: #12897f;
-  --cta-glow: rgba(15, 118, 110, 0.18);
-  --pipe-accent: #9ed3cc;
+  --pos: #3f7a4e;
+  --pos-bg: #e6efe4;
+  --pos-bg-strong: #d9e8d8;
+  --pos-border: #bcd2ba;
+  --pos-border-strong: #96b795;
+  --pos-glow: transparent;
 
-  /* 5.48:1 on white; the draft's #059669 was 3.77:1 */
-  --pos: #047857;
-  --pos-bg: #ecfdf5;
-  --pos-border: #a7e3cb;
-  --pos-bg-strong: #d6f5e6;
-  --pos-border-strong: #5cc79b;
-  --pos-glow: rgba(4, 120, 87, 0.24);
-
-  /* 6.29:1 on white */
-  --neg: #be123c;
-  --neg-bg: #fff1f3;
-  --neg-border: #f3c0cb;
+  --neg: #a4443c;
+  --neg-bg: #f4e4e1;
+  --neg-border: #ddbdb8;
   --on-neg: #ffffff;
 
-  /* 5.02:1 on white; the draft's #D97706 was 3.19:1 */
-  --warn: #b45309;
-  --warn-bg: #fffbeb;
-  --warn-border: #f0d59a;
+  --warn: #8a6320;
+  --warn-bg: #f6ecd8;
+  --warn-border: #ddc79a;
 
-  /* 5.93:1 on white; the draft's #0284C7 was 4.10:1 */
-  --sky: #0369a1;
-  /* 6.86:1 on --sky-bg, the only surface it is used on. #0284c7 measured 3.82:1 there and this
-     token is NOT decorative: .permission-chip renders 10px label text in it (review: cubic on
-     #43). Darker also preserves the dark theme's semantics, where -bright means more emphasis. */
-  --sky-bright: #075985;
-  --sky-bg: #f0f8ff;
-  --sky-border: #b3d8ee;
-  --sky-border-strong: #6ab2da;
-  --sky-wash: rgba(3, 105, 161, 0.06);
+  --accent: #35696e;
+  --accent-bright: #27565b;
+  --accent-dim: #6b9498;
+  --accent-bg: #e2eced;
+  --accent-border: #b6cdcf;
+  --accent-wash: rgba(53, 105, 110, 0.1);
+  --accent-glow-2: transparent;
+  --accent-glow-3: transparent;
+  --on-accent: #ffffff;
 
-  --violet: #6d28d9;
-  --tick: rgba(92, 107, 122, 0.4);
-  /* 70%, not dark's 55%: --sky is darker here but the field it washes is near white, so the same
-     alpha buys far less separation. 3.23:1 against the composited field (see the dark note). */
+  --cta-from: #35696e;
+  --cta-to: #35696e;
+  --cta-glow: transparent;
+
+  --sky: #35696e;
+  --sky-bright: #27565b;
+  --sky-bg: #e2eced;
+  --sky-border: #b6cdcf;
+  --sky-border-strong: #7ba3a7;
+  --sky-wash: rgba(53, 105, 110, 0.1);
+
+  --violet: #5d4f8c;
+  --tick: rgba(70, 66, 58, 0.34);
+  --pipe-accent: var(--accent);
+  --workforce-line: var(--border-2);
+  --actor-color: var(--muted);
+
+  /* Light needs a heavier mix than dark to clear 3:1 on the same composited field: 70% against
+     55%. One shared alpha fixes one theme and fails the other. */
   --focus-wash: color-mix(in srgb, var(--sky) 70%, transparent);
-  /* less hue, and over --panel not --bg-2: a light plate must stay lighter than its glyph */
   --avatar-tint: 12%;
-  --avatar-tint-base: var(--panel);
+  --avatar-tint-base: var(--bg-2);
 
-  --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 20px rgba(15, 23, 42, 0.06);
-  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.09);
+  --radius: 2px;
+  --shadow: none;
+  --shadow-lg: none;
 }
+
 
 * { box-sizing: border-box; }
 html, body { padding: 0; margin: 0; }
