@@ -51,6 +51,13 @@ func (w *BuildMonitor) Handle(ctx context.Context, assignment envelope.Envelope,
 	if err := assignment.Decode(&a); err != nil {
 		return err
 	}
+	// INJECTION BOUNDARY. a.Scope is interpreted here as a repository identifier and handed to
+	// source.Snapshot — i.e. as more than display text. This is only safe because the scope's
+	// worker kind is DETERMINISTIC: the LLM scoper (brain/scoper_llm.go) sets the scope TEXT
+	// only and leaves workerKind fixed, so a model-authored scope is routed to the DD worker
+	// (report text + a no-op compliance screen), never here. If anyone makes workerKind
+	// model-selectable, model output could reach this line as a repository — validate/allowlist
+	// `repository` before that change, or an untrusted string becomes a fetch target.
 	repository := strings.TrimSpace(a.Scope)
 	if repository == "" {
 		return fmt.Errorf("build-monitor assignment has no repository")
