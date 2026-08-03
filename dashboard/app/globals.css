@@ -673,7 +673,6 @@ table.t { width: 100%; border-collapse: collapse; }
   min-width: 3px;
   border-radius: inherit;
   background: var(--accent-bright);
-  transition: width 0.45s ease;
 }
 .utilization-track i { z-index: 1; width: 1px; height: 6px; background: var(--tick); }
 .float-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
@@ -1050,9 +1049,24 @@ table.t { width: 100%; border-collapse: collapse; }
   background: var(--panel-2);
   padding: 18px 20px;
 }
-/* The deep-linked request. A heavier left rule rather than a tinted border: the accent now equals
-   the focus ring, so tinting the edge made "you were sent here" and "this has focus" identical. */
-.approval.is-linked { box-shadow: inset 3px 0 0 var(--accent); }
+/* The deep-linked request, marked with registration marks rather than a coloured rail down one
+   edge. The rail was the more obvious move and the wrong one: a thick accent border on one side
+   of a card is the single most recognisable tell of a generated interface, which is the register
+   this project refuses. Corner marks are what a drawing actually uses to say "this sheet, here",
+   they cannot be confused with the focus ring (an offset outline, different geometry), and the
+   direction contract names registration marks as part of this world. */
+.approval.is-linked { position: relative; }
+.approval.is-linked::before,
+.approval.is-linked::after {
+  content: "";
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-color: var(--accent);
+  border-style: solid;
+}
+.approval.is-linked::before { top: -1px; left: -1px; border-width: 2px 0 0 2px; }
+.approval.is-linked::after { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; }
 .approval:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 .approval.is-expired { opacity: 0.72; }
 
@@ -1579,7 +1593,7 @@ table.t { width: 100%; border-collapse: collapse; }
 /* budget bar */
 .job-budget { display: grid; gap: 8px; }
 .job-budget-bar { height: 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border); overflow: hidden; }
-.job-budget-fill { height: 100%; background: var(--accent); transition: width 0.4s ease; }
+.job-budget-fill { height: 100%; background: var(--accent); }
 .job-budget-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; font-size: 13px; font-variant-numeric: tabular-nums; }
 
 .job-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
@@ -1626,9 +1640,8 @@ table.t { width: 100%; border-collapse: collapse; }
   .job-row { flex-direction: column; align-items: flex-start; gap: 2px; }
   .job-row-value { text-align: left; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .job-budget-fill { transition: none; }
-}
+/* The budget fill no longer transitions at all, so there is nothing left for a reduced-motion
+   guard to switch off. */
 
 /* ── F1 Live Money Graph + F2 Score Ring (V10/V11, PRD §8) ── */
 .mg {
