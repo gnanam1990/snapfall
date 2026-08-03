@@ -1,22 +1,30 @@
 /**
  * The landing page: what Snapfall is, to someone who has never seen it.
  *
- * This route used to be the operator dashboard, which meant a first-time visitor -- on the
- * deployed site, a judge -- arrived at an instrument panel reading "no daemon connected" on four
- * surfaces, with no sentence anywhere saying what the product does. The evidence was strong and
- * there was no front door.
+ * "/" used to be the operator dashboard, so a first-time visitor -- on the deployed site, a judge
+ * -- arrived at an instrument panel reading "no daemon connected" on four surfaces, with no
+ * sentence anywhere saying what the product does. Strong evidence, no front door.
  *
- * The direction contract's STORY clause is exactly this page's brief: "The visitor sees money
- * enter escrow, an advance drawn against it under a cap they can see, spending reduce it, and a
- * waterfall repay the pool before the operator." So the money path is drawn, once, whole. The
- * dashboard surfaces are the instruments on that path; this is the sheet they sit on.
+ * THE FIRST VERSION OF THIS PAGE WAS BUILT IN THE WRONG MODE. It inherited the dashboard's
+ * restraint -- muted hairlines, 9.5px annotation lettering, a lot of air -- onto a surface whose
+ * job is to make a stranger care in ten seconds. That produced a 1700px whitepaper: one thin
+ * strip of drawing adrift in prose, its labels set at annotation scale, and the most compelling
+ * thing the product owns (a real escrow split, pool paid first) written out as body text
+ * underneath the picture instead of being ON it.
  *
- * A server component with no client JavaScript and no API call, because the one visitor who
- * matters most arrives at a deployment with no daemon behind it.
+ * So: the drawing is the hero and it carries the figures. The viewBox is deliberately small (660
+ * units across a ~860px column, so everything scales UP about 1.3x) because on this page the
+ * lettering has to read across a room, not reward a lean-in. The prose around it is cut to what
+ * a stranger needs and nothing more; the detail lives one click away on /audit.
  *
- * Nothing here is a claim the product cannot support. The settlement figures are read from a real
- * transaction on Arc testnet, linked; the honest gaps live on /audit and this page points at them
- * rather than talking around them.
+ * The direction contract's STORY clause is still the brief -- "the visitor sees money enter
+ * escrow, an advance drawn against it under a cap they can see, spending reduce it, and a
+ * waterfall repay the pool before the operator" -- and the path is drawn as a LOOP rather than a
+ * left-to-right flow, because the loop is the product: the pool funds the work before the
+ * customer has paid, and the same escrow locked at the start is what repays it at the end.
+ *
+ * Server component, no client JavaScript, no API call: the visitor who matters most arrives at a
+ * deployment with no daemon behind it. Every figure is from the settlement linked at the bottom.
  */
 
 import Link from 'next/link';
@@ -30,7 +38,7 @@ export const metadata = {
 
 const EXPLORER = deployment.network.explorerUrl.replace(/\/$/, '');
 
-/** The settlement whose log ordering is the product's central claim. See /audit. */
+/** One real settlement on Arc testnet. Its log ordering is the product's central claim. */
 const PROOF = {
   hash: '0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b',
   escrow: '1.00',
@@ -39,99 +47,100 @@ const PROOF = {
 };
 
 /**
- * The money path, drawn once.
+ * The money path, drawn once, carrying the real numbers.
  *
- * Deliberately the whole loop rather than a linear flow, because the loop is the product: the
- * pool funds the work before the customer has paid, and the same escrow that was locked at the
- * start is what repays it at the end. A left-to-right arrow would hide that.
+ * The figures are not decoration here: putting 0.561 on the leg that reaches the pool and 0.439
+ * on the leg that reaches the operator is what makes "repaid first" a fact the eye can check
+ * rather than a sentence to be believed.
  */
 function MoneyPath() {
   return (
     <svg
       className="lp-svg"
-      viewBox="0 0 880 300"
+      viewBox="0 0 700 320"
       role="img"
-      aria-label="The money path. A customer funds an escrow on chain. The capital pool advances working capital against that escrow, under a cap. Agents spend the advance to do the work. When the customer accepts, one transaction repays the pool in full first, and the operator receives what remains."
+      aria-label={`The money path. A customer locks ${PROOF.escrow} USDC in escrow on chain. The capital pool advances working capital against it, capped at 10 percent per operator. Agents spend the advance to do the work. When the customer accepts, one transaction pays the pool ${PROOF.pool} USDC first, and the operator receives the remaining ${PROOF.operator}.`}
     >
       {/* the pool, above: it funds the work before anyone has been paid */}
-      <rect x="330" y="18" width="200" height="62" className="lp-wall" />
-      <text x="430" y="44" textAnchor="middle" className="lp-name">
+      <rect x="205" y="8" width="250" height="60" className="lp-wall" />
+      <text x="330" y="34" textAnchor="middle" className="lp-name">
         capital pool
       </text>
-      <text x="430" y="62" textAnchor="middle" className="lp-note">
-        capped at 10% per operator, 80% pool-wide
+      <text x="330" y="54" textAnchor="middle" className="lp-note">
+        capped at 10% per operator
       </text>
 
-      {/* the advance, drawn downward into the work */}
+      {/* the advance, down into the work */}
       <g className="lp-pipe">
-        <path d="M400 80 L400 132" />
-        <path d="M400 132 l-4 -8 l8 0 z" className="lp-head" />
-        <text x="392" y="112" textAnchor="end" className="lp-label">
+        <path d="M270 68 L270 126" />
+        <path d="M270 126 l-5 -10 l10 0 z" className="lp-head" />
+        <text x="262" y="102" textAnchor="end" className="lp-label">
           advance
         </text>
       </g>
 
-      {/* the repayment, drawn upward: first leg of the waterfall */}
-      <g className="lp-pipe">
-        <path d="M700 210 L700 50 L534 50" />
-        <path d="M534 50 l8 -4 l0 8 z" className="lp-head" />
-        <text x="710" y="128" className="lp-label">
-          1 · pool repaid first
-        </text>
-      </g>
-
       {/* the customer, and the escrow they lock */}
-      <text x="16" y="164" className="lp-name">
-        customer
+      <text x="14" y="150" className="lp-label">
+        customer pays
       </text>
-      <g className="lp-pipe">
-        <path d="M16 178 L148 178" />
-        <path d="M148 178 l-8 -4 l0 8 z" className="lp-head" />
-        <text x="20" y="196" className="lp-label">
-          pays into escrow
-        </text>
-      </g>
-
-      <rect x="152" y="144" width="92" height="70" className="lp-wall" />
-      <rect x="153" y="145" width="90" height="68" className="lp-fill" />
-      <text x="198" y="184" textAnchor="middle" className="lp-name">
+      <rect x="14" y="160" width="118" height="86" className="lp-wall" />
+      <rect x="15" y="161" width="116" height="84" className="lp-fill" />
+      <text x="73" y="186" textAnchor="middle" className="lp-name">
         escrow
       </text>
-      <text x="198" y="234" textAnchor="middle" className="lp-note">
-        held on chain
+      <text x="73" y="230" textAnchor="middle" className="lp-fig">
+        {PROOF.escrow}
+      </text>
+      <text x="73" y="264" textAnchor="middle" className="lp-note">
+        locked on chain
       </text>
 
-      {/* the work: agents spending the advance */}
-      <rect x="330" y="144" width="200" height="70" className="lp-wall" />
-      <text x="430" y="174" textAnchor="middle" className="lp-name">
+      {/* the work: agents spending the advance, never the escrow */}
+      <rect x="205" y="160" width="250" height="86" className="lp-wall" />
+      <text x="330" y="196" textAnchor="middle" className="lp-name">
         agents do the work
       </text>
-      <text x="430" y="194" textAnchor="middle" className="lp-note">
+      <text x="330" y="220" textAnchor="middle" className="lp-note">
         spending the advance, not the escrow
       </text>
 
       <g className="lp-pipe">
-        <path d="M244 178 L326 178" />
-        <path d="M326 178 l-8 -4 l0 8 z" className="lp-head" />
+        <path d="M132 203 L201 203" />
+        <path d="M201 203 l-10 -5 l0 10 z" className="lp-head" />
       </g>
       <g className="lp-pipe">
-        <path d="M530 178 L696 178" />
-        <path d="M696 178 l-8 -4 l0 8 z" className="lp-head" />
-        <text x="613" y="170" textAnchor="middle" className="lp-label">
-          customer accepts
+        <path d="M455 203 L521 203" />
+        <path d="M521 203 l-10 -5 l0 10 z" className="lp-head" />
+        <text x="488" y="193" textAnchor="middle" className="lp-label">
+          accepts
         </text>
       </g>
 
-      {/* the operator's leg, dimmed: whatever survives leg one */}
+      {/* leg one: the pool, made whole first. Full weight. */}
+      <g className="lp-pipe">
+        <path d="M525 203 L525 38 L459 38" />
+        <path d="M459 38 l10 -5 l0 10 z" className="lp-head" />
+        <text x="537" y="96" className="lp-fig">
+          {PROOF.pool}
+        </text>
+        <text x="537" y="116" className="lp-label">
+          1 · pool repaid first
+        </text>
+      </g>
+
+      {/* leg two: whatever survives leg one. Dimmed, because the order is the point. */}
       <g className="lp-pipe lp-pipe-dim">
-        <path d="M700 210 L700 262 L806 262" />
-        <path d="M806 262 l-8 -4 l0 8 z" className="lp-head" />
-        <text x="710" y="282" className="lp-label">
+        <path d="M525 203 L525 288 L656 288" />
+        <path d="M656 288 l-10 -5 l0 10 z" className="lp-head" />
+        <text x="537" y="258" className="lp-fig">
+          {PROOF.operator}
+        </text>
+        <text x="537" y="278" className="lp-label">
           2 · operator, second
         </text>
       </g>
 
-      <text x="700" y="228" textAnchor="middle" className="lp-note">
+      <text x="515" y="243" textAnchor="end" className="lp-note">
         one transaction
       </text>
     </svg>
@@ -145,11 +154,9 @@ export default function LandingPage() {
         <p className="lp-brand">Snapfall</p>
         <h1 className="lp-title">The AI workforce that finances itself.</h1>
         <p className="lp-lede">
-          Agents borrow working capital against work they have not been paid for yet, spend it to
-          do the job, and repay it automatically the moment the customer accepts. Every movement
-          settles on chain, so someone who does not trust the operator can still check it.
+          Agents borrow working capital against work they have not been paid for yet, and repay it
+          automatically the moment the customer accepts.
         </p>
-        <p className="lp-tag">capital in a snap, settlement in a waterfall</p>
         <div className="lp-actions">
           <Link className="lp-cta" href="/overview">
             Open the dashboard <span aria-hidden="true">→</span>
@@ -162,42 +169,18 @@ export default function LandingPage() {
 
       <section className="lp-figure" aria-labelledby="lp-path-title">
         <h2 className="lp-h2" id="lp-path-title">
-          How the money moves
+          One job, from escrow to settlement
         </h2>
         <MoneyPath />
-      </section>
-
-      <section className="lp-proof" aria-labelledby="lp-proof-title">
-        <h2 className="lp-h2" id="lp-proof-title">
-          The claim, and how to check it
-        </h2>
-        <p className="lp-body">
-          The pool is repaid in full <strong>before</strong> the operator receives anything, in the
-          same transaction. That is not a promise about intent — it is contract control flow, and
-          it is visible in the logs of a settlement already on {deployment.network.name}.
+        <p className="lp-caption">
+          Real figures, from one settlement on {deployment.network.name}. The pool is paid at log
+          index 12 and the operator at log index 15 — same transaction, pool lower, so it cannot
+          have been paid second. That ordering is <code>JobVault.acceptDelivery</code> calling{' '}
+          <code>repayAdvance</code> before it transfers to the operator, in frozen code.{' '}
+          <a className="lp-ref" href={`${EXPLORER}/tx/${PROOF.hash}`} target="_blank" rel="noreferrer">
+            Check the transaction <span aria-hidden="true">↗</span>
+          </a>
         </p>
-        <ol className="lp-legs">
-          <li>
-            <span className="lp-leg-i">log 12</span>
-            <span className="lp-leg-to">capital pool</span>
-            <span className="lp-leg-amt">{PROOF.pool} USDC</span>
-          </li>
-          <li>
-            <span className="lp-leg-i">log 15</span>
-            <span className="lp-leg-to">operator</span>
-            <span className="lp-leg-amt">{PROOF.operator} USDC</span>
-          </li>
-        </ol>
-        <p className="lp-body">
-          {PROOF.escrow} USDC of escrow, divided. The pool is paid at the lower log index, so it
-          cannot have been paid second. <code>JobVault.acceptDelivery</code> calls{' '}
-          <code>repayAdvance</code> before it transfers to the operator, and the contracts are
-          frozen.
-        </p>
-        <a className="lp-ref" href={`${EXPLORER}/tx/${PROOF.hash}`} target="_blank" rel="noreferrer">
-          <code>{`${PROOF.hash.slice(0, 16)}…${PROOF.hash.slice(-8)}`}</code>
-          <span aria-hidden="true"> ↗</span>
-        </a>
       </section>
 
       <section className="lp-honest" aria-labelledby="lp-honest-title">
@@ -206,9 +189,9 @@ export default function LandingPage() {
         </h2>
         <p className="lp-body">
           No agent purchase has settled through the x402 payment path, no end-to-end run has been
-          logged, and compliance screening is a labelled stub that fabricates no result. Those are
-          listed in full, with the rest, on the audit page — a product about verifiability should
-          be easiest to check where it is weakest.
+          logged, and compliance screening is a labelled stub that fabricates no result. A product
+          about verifiability should be easiest to check where it is weakest, so the full list is
+          on the audit page beside the evidence.
         </p>
         <Link className="lp-alt" href="/audit">
           Read the gaps

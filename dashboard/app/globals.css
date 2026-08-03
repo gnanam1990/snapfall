@@ -2205,11 +2205,11 @@ table.t { width: 100%; border-collapse: collapse; }
 .app:has(> .main:only-child) { grid-template-columns: 1fr; }
 .app:has(> .main:only-child) .main { max-width: none; padding: 0; }
 
-.lp { max-width: 920px; margin: 0 auto; padding: 72px 30px 80px; }
+.lp { max-width: 920px; margin: 0 auto; padding: 64px 30px 72px; }
 .lp-header { border-bottom: 1px solid var(--border); padding-bottom: 40px; }
 .lp-brand { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.14em; color: var(--accent); }
 .lp-title { margin: 18px 0 0; font-size: clamp(30px, 5vw, 46px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 600; max-width: 16ch; }
-.lp-lede { margin: 20px 0 0; font-size: 15px; line-height: 1.65; color: var(--text-2); max-width: 64ch; }
+.lp-lede { margin: 18px 0 0; font-size: 17px; line-height: 1.6; color: var(--text-2); max-width: 52ch; }
 /* The product's own two words. Set as annotation lettering, not as a slogan. */
 .lp-tag { margin: 22px 0 0; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.16em; color: var(--muted-2); }
 
@@ -2228,19 +2228,27 @@ table.t { width: 100%; border-collapse: collapse; }
 .lp-body { margin: 0 0 14px; font-size: 14px; line-height: 1.65; color: var(--text-2); max-width: 66ch; }
 .lp-body code, .lp-ref code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12.5px; color: var(--text); }
 
-.lp-figure, .lp-proof, .lp-honest { margin-top: 56px; }
+.lp-figure { margin-top: 44px; }
+.lp-honest { margin-top: 52px; }
+/* The caption sits under the drawing and does the explaining the drawing cannot. */
+.lp-caption { margin: 8px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted); max-width: 74ch; }
+.lp-caption code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; color: var(--text-2); }
 .lp-svg { width: 100%; height: auto; display: block; overflow: visible; }
-.lp-wall { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
+.lp-wall { fill: none; stroke: var(--text-2); stroke-width: 1.5; }
 .lp-fill { fill: var(--accent-wash); stroke: none; }
-.lp-pipe path { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
+.lp-pipe path { fill: none; stroke: var(--text-2); stroke-width: 1.5; }
 .lp-pipe .lp-head { fill: var(--text-2); stroke: none; }
 /* Order carried by weight, not hue: the operator's leg is whatever survives the pool's. */
 .lp-pipe-dim path { stroke: var(--border-2); }
 .lp-pipe-dim .lp-head { fill: var(--border-2); }
 .lp-pipe-dim text { fill: var(--muted-2); }
-.lp-name { fill: var(--text); font-size: 13px; font-weight: 600; }
-.lp-note { fill: var(--muted-2); font-size: 10px; letter-spacing: 0.06em; }
-.lp-label { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+.lp-name { fill: var(--text); font-size: 16px; font-weight: 600; }
+.lp-note { fill: var(--muted); font-size: 11px; letter-spacing: 0.04em; }
+.lp-label { fill: var(--muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+/* The money, on the drawing. This is the page's largest lettering after the headline, because
+   the split IS the argument and it should be readable before any prose is. */
+.lp-fig { fill: var(--text); font-size: 26px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.lp-pipe-dim .lp-fig { fill: var(--text-2); }
 
 /* The two settlement legs. Numbered, because the order IS the evidence. */
 .lp-legs { list-style: none; margin: 0 0 16px; padding: 0; }
