@@ -2193,3 +2193,70 @@ table.t { width: 100%; border-collapse: collapse; }
 .vessel-facts dd.is-absent .vessel-val { font-variant-numeric: normal; }
 .vessel-src { font-size: 10px; line-height: 1.4; color: var(--muted-2); text-align: right; }
 .v-callout text { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+
+/* ══ Landing ══
+ *
+ * The sheet the instruments sit on. Same world -- flat, hairlines, 2px, semantic colour only --
+ * but given room, because this reader is being told what the product is rather than operating it.
+ *
+ * .app is a 224px + 1fr grid for the dashboard. Sidebar returns null on "/" and on the portal, so
+ * without this the landing would sit behind an empty 224px gutter.
+ */
+.app:has(> .main:only-child) { grid-template-columns: 1fr; }
+.app:has(> .main:only-child) .main { max-width: none; padding: 0; }
+
+.lp { max-width: 920px; margin: 0 auto; padding: 72px 30px 80px; }
+.lp-header { border-bottom: 1px solid var(--border); padding-bottom: 40px; }
+.lp-brand { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.14em; color: var(--accent); }
+.lp-title { margin: 18px 0 0; font-size: clamp(30px, 5vw, 46px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 600; max-width: 16ch; }
+.lp-lede { margin: 20px 0 0; font-size: 15px; line-height: 1.65; color: var(--text-2); max-width: 64ch; }
+/* The product's own two words. Set as annotation lettering, not as a slogan. */
+.lp-tag { margin: 22px 0 0; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.16em; color: var(--muted-2); }
+
+.lp-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 32px; }
+.lp-cta {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 10px 22px;
+  border: 1px solid var(--accent); border-radius: var(--radius);
+  background: var(--accent); color: var(--on-accent); font-size: 13.5px; font-weight: 600;
+}
+.lp-cta:hover { background: var(--accent-bright); border-color: var(--accent-bright); }
+.lp-cta:focus-visible, .lp-alt:focus-visible, .lp-ref:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+.lp-alt { color: var(--accent); font-size: 13px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.lp-alt:hover { color: var(--accent-bright); }
+
+.lp-h2 { margin: 0 0 18px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+.lp-body { margin: 0 0 14px; font-size: 14px; line-height: 1.65; color: var(--text-2); max-width: 66ch; }
+.lp-body code, .lp-ref code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12.5px; color: var(--text); }
+
+.lp-figure, .lp-proof, .lp-honest { margin-top: 56px; }
+.lp-svg { width: 100%; height: auto; display: block; overflow: visible; }
+.lp-wall { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
+.lp-fill { fill: var(--accent-wash); stroke: none; }
+.lp-pipe path { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
+.lp-pipe .lp-head { fill: var(--text-2); stroke: none; }
+/* Order carried by weight, not hue: the operator's leg is whatever survives the pool's. */
+.lp-pipe-dim path { stroke: var(--border-2); }
+.lp-pipe-dim .lp-head { fill: var(--border-2); }
+.lp-pipe-dim text { fill: var(--muted-2); }
+.lp-name { fill: var(--text); font-size: 13px; font-weight: 600; }
+.lp-note { fill: var(--muted-2); font-size: 10px; letter-spacing: 0.06em; }
+.lp-label { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+
+/* The two settlement legs. Numbered, because the order IS the evidence. */
+.lp-legs { list-style: none; margin: 0 0 16px; padding: 0; }
+.lp-legs li { display: grid; grid-template-columns: 78px 1fr auto; gap: 14px; align-items: baseline; padding: 12px 0; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.lp-leg-i { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.lp-leg-to { font-size: 14px; font-weight: 600; }
+.lp-leg-amt { font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
+.lp-ref { display: inline-block; color: var(--accent); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.lp-ref:hover { color: var(--accent-bright); }
+
+.lp-honest { border-top: 1px solid var(--border); padding-top: 40px; }
+.lp-foot { display: flex; flex-wrap: wrap; gap: 20px; align-items: baseline; margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted-2); }
+.lp-foot a { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+.lp-foot a:hover { color: var(--text); }
+@media (max-width: 640px) {
+  .lp { padding: 48px 20px 60px; }
+  .lp-legs li { grid-template-columns: 1fr auto; }
+  .lp-leg-i { grid-column: 1 / -1; }
+}

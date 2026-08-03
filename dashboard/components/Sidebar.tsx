@@ -7,7 +7,7 @@ import Logo from '@/components/Logo';
 import NavIcon from '@/components/NavIcon';
 
 const NAV: { href: string; label: string; pill?: string }[] = [
-  { href: '/', label: 'Overview' },
+  { href: '/overview', label: 'Overview' },
   { href: '/jobs', label: 'Jobs' },
   { href: '/workforce', label: 'Workforce' },
   { href: '/approvals', label: 'Approvals' },
@@ -18,9 +18,11 @@ const NAV: { href: string; label: string; pill?: string }[] = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  // The customer portal (V9) is a magic-link surface for a different principal — it must
-  // never show the owner's navigation. The portal page renders full-bleed over the grid.
-  if (pathname?.startsWith('/portal')) return null;
+  // Two surfaces are not the owner's dashboard and must not carry its navigation.
+  // The customer portal (V9) is a magic-link surface for a different principal. The landing
+  // page at "/" is for someone who does not yet know what this is; showing them an operator
+  // nav before the product has been explained is the wrong first move. Both render full-bleed.
+  if (pathname === '/' || pathname?.startsWith('/portal')) return null;
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -29,7 +31,7 @@ export default function Sidebar() {
       </div>
       <nav>
         {NAV.map((n) => {
-          const active = n.href === '/' ? pathname === '/' : pathname.startsWith(n.href);
+          const active = pathname.startsWith(n.href);
           return (
             <Link
               key={n.href}

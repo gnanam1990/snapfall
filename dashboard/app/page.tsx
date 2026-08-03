@@ -1,293 +1,228 @@
-'use client';
+/**
+ * The landing page: what Snapfall is, to someone who has never seen it.
+ *
+ * This route used to be the operator dashboard, which meant a first-time visitor -- on the
+ * deployed site, a judge -- arrived at an instrument panel reading "no daemon connected" on four
+ * surfaces, with no sentence anywhere saying what the product does. The evidence was strong and
+ * there was no front door.
+ *
+ * The direction contract's STORY clause is exactly this page's brief: "The visitor sees money
+ * enter escrow, an advance drawn against it under a cap they can see, spending reduce it, and a
+ * waterfall repay the pool before the operator." So the money path is drawn, once, whole. The
+ * dashboard surfaces are the instruments on that path; this is the sheet they sit on.
+ *
+ * A server component with no client JavaScript and no API call, because the one visitor who
+ * matters most arrives at a deployment with no daemon behind it.
+ *
+ * Nothing here is a claim the product cannot support. The settlement figures are read from a real
+ * transaction on Arc testnet, linked; the honest gaps live on /audit and this page points at them
+ * rather than talking around them.
+ */
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
-import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage, FloatSnapshot } from '@/lib/types';
-import type { ActivityMessage } from '@/lib/activity';
-import { humanizeLegacyEvent, humanizeStreamEvent } from '@/lib/activity';
-import { formatUsdc, formatUsdcExact, formatBps } from '@/lib/format';
-import { useEventStream } from '@/lib/useEventStream';
-import PoolVessel from '@/components/PoolVessel';
-import MoneyGraph from '@/components/MoneyGraph';
-import Card, { CardHeader, CardBody } from '@/components/Card';
-import TeamActivityFeed from '@/components/TeamActivityFeed';
-import WorkforceStrip from '@/components/WorkforceStrip';
-import AdvancesTable from '@/components/AdvancesTable';
-import ActiveJobs from '@/components/ActiveJobs';
+import deployment from '../../deployments/arc-testnet.json';
+
+export const metadata = {
+  title: 'Snapfall · the self-financing AI workforce',
+  description:
+    'Agents that borrow working capital against work they have not been paid for yet, and repay it automatically when the customer accepts.',
+};
+
+const EXPLORER = deployment.network.explorerUrl.replace(/\/$/, '');
+
+/** The settlement whose log ordering is the product's central claim. See /audit. */
+const PROOF = {
+  hash: '0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b',
+  escrow: '1.00',
+  pool: '0.561',
+  operator: '0.439',
+};
 
 /**
- * Pending approvals, as the first viewport's one coloured region and its primary action.
+ * The money path, drawn once.
  *
- * The contract asks for two things the stat tile could not do: that this be the single place
- * colour appears, and that the primary action sit with it. Colour is --warn, because a purchase
- * held for a decision is caution, not alarm -- and it appears ONLY when something is actually
- * waiting, so the colour means "you have work" rather than decorating a zero.
- *
- * The action is a link to /approvals rather than an inline approve/refuse pair, deliberately.
- * Deciding binds to the intentHash the owner was shown, needs the reason field the worker adapts
- * on, and has to handle STALE_VIEW, expiry and double-submit. That path exists once, on the
- * approvals surface, and is tested there. A second implementation of an irreversible money action
- * on a different surface is how the two drift apart, and the cost of getting it wrong is a
- * payment. So the primary action here is to go and decide, and the deciding stays in one place.
+ * Deliberately the whole loop rather than a linear flow, because the loop is the product: the
+ * pool funds the work before the customer has paid, and the same escrow that was locked at the
+ * start is what repays it at the end. A left-to-right arrow would hide that.
  */
-function PendingApprovals({
-  count,
-  daemonConnected,
-}: {
-  count: number | null;
-  daemonConnected: boolean;
-}) {
-  if (!daemonConnected) {
-    return (
-      <section className="pending is-quiet mt">
-        <p className="pending-body">
-          Purchases an agent may not make alone arrive here. No daemon is connected, so none can:
-          this is not a quiet queue.
-        </p>
-      </section>
-    );
-  }
-  if (!count) {
-    return (
-      <section className="pending is-quiet mt">
-        <p className="pending-body">Nothing is waiting on you. Escalations appear here.</p>
-      </section>
-    );
-  }
+function MoneyPath() {
   return (
-    <section className="pending is-waiting mt" aria-labelledby="pending-title">
-      <span className="pending-count" aria-hidden="true">
-        {count}
-      </span>
-      <div className="pending-text">
-        <h2 className="pending-title" id="pending-title">
-          {count === 1 ? 'A purchase is waiting on you' : `${count} purchases are waiting on you`}
-        </h2>
-        <p className="pending-body">
-          An agent has reached a spend it may not make alone. The line is shut until you answer.
-        </p>
-      </div>
-      <Link className="pending-action" href="/approvals">
-        Review and decide <span aria-hidden="true">→</span>
-      </Link>
-    </section>
+    <svg
+      className="lp-svg"
+      viewBox="0 0 880 300"
+      role="img"
+      aria-label="The money path. A customer funds an escrow on chain. The capital pool advances working capital against that escrow, under a cap. Agents spend the advance to do the work. When the customer accepts, one transaction repays the pool in full first, and the operator receives what remains."
+    >
+      {/* the pool, above: it funds the work before anyone has been paid */}
+      <rect x="330" y="18" width="200" height="62" className="lp-wall" />
+      <text x="430" y="44" textAnchor="middle" className="lp-name">
+        capital pool
+      </text>
+      <text x="430" y="62" textAnchor="middle" className="lp-note">
+        capped at 10% per operator, 80% pool-wide
+      </text>
+
+      {/* the advance, drawn downward into the work */}
+      <g className="lp-pipe">
+        <path d="M400 80 L400 132" />
+        <path d="M400 132 l-4 -8 l8 0 z" className="lp-head" />
+        <text x="392" y="112" textAnchor="end" className="lp-label">
+          advance
+        </text>
+      </g>
+
+      {/* the repayment, drawn upward: first leg of the waterfall */}
+      <g className="lp-pipe">
+        <path d="M700 210 L700 50 L534 50" />
+        <path d="M534 50 l8 -4 l0 8 z" className="lp-head" />
+        <text x="710" y="128" className="lp-label">
+          1 · pool repaid first
+        </text>
+      </g>
+
+      {/* the customer, and the escrow they lock */}
+      <text x="16" y="164" className="lp-name">
+        customer
+      </text>
+      <g className="lp-pipe">
+        <path d="M16 178 L148 178" />
+        <path d="M148 178 l-8 -4 l0 8 z" className="lp-head" />
+        <text x="20" y="196" className="lp-label">
+          pays into escrow
+        </text>
+      </g>
+
+      <rect x="152" y="144" width="92" height="70" className="lp-wall" />
+      <rect x="153" y="145" width="90" height="68" className="lp-fill" />
+      <text x="198" y="184" textAnchor="middle" className="lp-name">
+        escrow
+      </text>
+      <text x="198" y="234" textAnchor="middle" className="lp-note">
+        held on chain
+      </text>
+
+      {/* the work: agents spending the advance */}
+      <rect x="330" y="144" width="200" height="70" className="lp-wall" />
+      <text x="430" y="174" textAnchor="middle" className="lp-name">
+        agents do the work
+      </text>
+      <text x="430" y="194" textAnchor="middle" className="lp-note">
+        spending the advance, not the escrow
+      </text>
+
+      <g className="lp-pipe">
+        <path d="M244 178 L326 178" />
+        <path d="M326 178 l-8 -4 l0 8 z" className="lp-head" />
+      </g>
+      <g className="lp-pipe">
+        <path d="M530 178 L696 178" />
+        <path d="M696 178 l-8 -4 l0 8 z" className="lp-head" />
+        <text x="613" y="170" textAnchor="middle" className="lp-label">
+          customer accepts
+        </text>
+      </g>
+
+      {/* the operator's leg, dimmed: whatever survives leg one */}
+      <g className="lp-pipe lp-pipe-dim">
+        <path d="M700 210 L700 262 L806 262" />
+        <path d="M806 262 l-8 -4 l0 8 z" className="lp-head" />
+        <text x="710" y="282" className="lp-label">
+          2 · operator, second
+        </text>
+      </g>
+
+      <text x="700" y="228" textAnchor="middle" className="lp-note">
+        one transaction
+      </text>
+    </svg>
   );
 }
 
-export default function OverviewPage() {
-  const [snap, setSnap] = useState<OverviewSnapshot | null>(null);
-  const [pool, setPool] = useState<PoolStats | null>(null);
-  const [advances, setAdvances] = useState<OpenAdvance[] | null>(null);
-  const [activity, setActivity] = useState<ActivityMessage[]>([]);
-  const [demo, setDemo] = useState(false);
-  // Treasury and the pool stats are chain reads, served by /api/float — the same verifiable
-  // source the Float page uses, independent of the SSE daemon stream. This is deliberate: a
-  // visitor can re-run a balanceOf/pool read, but cannot check a daemon's assertion, and it
-  // means the daemon-less public deploy shows real numbers instead of dashes. The SSE stream
-  // still supplies the agent feed, workforce, advances, active jobs and approvals.
-  const [float, setFloat] = useState<FloatSnapshot | null>(null);
-
-  const onMessage = useCallback((msg: StreamMessage) => {
-    if (msg.kind === 'snapshot') {
-      setDemo(msg.demo === true);
-      setSnap(msg.snapshot);
-      setPool(msg.snapshot.pool);
-      setAdvances(msg.snapshot.openAdvances);
-      const recent = (msg.snapshot.recentEvents ?? []).map((e) => humanizeLegacyEvent(e, msg.demo === true));
-      setActivity((previous) => {
-        const ids = new Set(recent.map((item) => item.id));
-        return [...recent, ...previous.filter((item) => !ids.has(item.id))].slice(0, 30);
-      });
-    } else {
-      const next = humanizeStreamEvent(msg);
-      setActivity((prev) => [next, ...prev.filter((item) => item.id !== next.id)].slice(0, 30));
-      const aggregates = msg.aggregates;
-      if (aggregates?.pool) setPool(aggregates.pool);
-      if (aggregates?.openAdvances) setAdvances(aggregates.openAdvances);
-      if (aggregates && (aggregates.activeJobs || aggregates.pendingApprovals !== undefined)) {
-        setSnap((s) =>
-          s
-            ? {
-                ...s,
-                activeJobs: aggregates.activeJobs ?? s.activeJobs,
-                pendingApprovals: aggregates.pendingApprovals ?? s.pendingApprovals,
-              }
-            : s,
-        );
-      }
-    }
-  }, []);
-
-  const status = useEventStream('/api/events/stream', onMessage);
-
-  // Poll the chain-read snapshot. Independent of the daemon stream, so it populates on the
-  // public deploy too. A failed/unavailable read leaves the last value (or null → dashes),
-  // never a fabricated number.
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const res = await fetch('/api/float', { cache: 'no-store' });
-        if (!res.ok) return;
-        const data = (await res.json()) as FloatSnapshot;
-        if (alive) setFloat(data);
-      } catch {
-        /* keep last known values */
-      }
-    };
-    void load();
-    const timer = setInterval(load, 15_000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, []);
-
-  // Treasury + pool stats, sourced from the chain read (float), rendered identically whether or
-  // not a daemon is connected. formatUsdc/formatBps dash any absent field, so a pending or
-  // unavailable read shows a dash, never a wrong or fabricated value.
-  const treasuryAndPool = (
-    <>
-      <PoolVessel
-        tvlUsdc={float ? formatUsdc(float.totalAssetsUsdc) : null}
-        utilizationBps={float?.utilizationBps ?? null}
-        orgRateBps={float?.orgRateBps ?? null}
-        // formatUsdcExact returns the dash glyph for null, not null, so passing it straight
-        // through would render "— USDC" as if it were a value and lose the absent styling.
-        // feesAccruedUsdc IS null on the live endpoint today, so this is the real case.
-        feesAccruedUsdc={float?.feesAccruedUsdc ? formatUsdcExact(float.feesAccruedUsdc) : null}
-        reserveUsdc={float?.reserveUsdc ? formatUsdcExact(float.reserveUsdc) : null}
-      />
-      {/*
-        The stat-tile grid that used to sit here is GONE, not restyled.
-        The direction contract's THESIS names "the stat-tile grid and the hero-metric template"
-        as precisely what this world refuses, and it shipped anyway, directly under the vessel,
-        for the whole redesign. Two of its four tiles (Pool TVL, Utilization) only restated
-        figures the vessel already draws; the other two have moved onto the drawing as facts that
-        name their source. Restyling it would have laundered the refusal rather than honoured it.
-
-        What remains here is the one thing the FIRST VIEWPORT clause asks for and the tiles could
-        not give: pending approvals as the single place colour appears, carrying the action.
-      */}
-      <PendingApprovals
-        count={snap?.pendingApprovals ?? null}
-        daemonConnected={snap?.daemonConnected !== false}
-      />
-    </>
-  );
-
-  if (!snap) {
-    return (
-      <>
-        <div className="topbar">
-          <h1 className="page-title">Overview</h1>
-        </div>
-        {treasuryAndPool}
-        <div className="loading mt">Connecting to the daemon event stream…</div>
-      </>
-    );
-  }
-
-  // No daemon is wired to this deployment (SNAPFALL_OWNER_API_URL unset, demo replay off).
-  // Treasury and the pool stats above ARE shown — they are chain reads, verifiable from any
-  // node. What needs the daemon is the agent feed, workforce and approvals; rather than
-  // fabricate those, this says so and points at the rest of the verifiable evidence.
-  if (snap.daemonConnected === false) {
-    return (
-      <>
-        <div className="topbar">
-          <div>
-            <h1 className="page-title">Overview</h1>
-            <p className="page-sub">One founder, a workforce that finances itself.</p>
-          </div>
-        </div>
-        {treasuryAndPool}
-        <Card className="mt">
-          <CardHeader title="No daemon connected — showing on-chain data only" />
-          <CardBody>
-            <p>
-              The treasury and pool figures above are read live from Arc testnet. The live agent
-              feed, workforce and approvals come from the owner’s daemon, which does not run on this
-              public site — so they are omitted rather than fabricated. Everything Snapfall shows is
-              meant to be verifiable.
-            </p>
-            <p className="mt">More on-chain evidence:</p>
-            <ul className="disconnected-links mt">
-              <li>
-                <Link href="/float">Float</Link> — live pool, advance rate and history, read
-                directly from Arc testnet.
-              </li>
-              <li>
-                <a
-                  href="https://github.com/gnanam1990/snapfall/blob/main/docs/addresses.md"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  docs/addresses.md
-                </a>{' '}
-                — the deployed contract addresses and the actual settlement transactions, each
-                verifiable on the explorer.
-              </li>
-            </ul>
-          </CardBody>
-        </Card>
-      </>
-    );
-  }
-
+export default function LandingPage() {
   return (
-    <>
-      <div className="topbar">
-        <div>
-          <h1 className="page-title">Overview</h1>
-          <p className="page-sub">One founder, a workforce that finances itself.</p>
+    <div className="lp">
+      <header className="lp-header">
+        <p className="lp-brand">Snapfall</p>
+        <h1 className="lp-title">The AI workforce that finances itself.</h1>
+        <p className="lp-lede">
+          Agents borrow working capital against work they have not been paid for yet, spend it to
+          do the job, and repay it automatically the moment the customer accepts. Every movement
+          settles on chain, so someone who does not trust the operator can still check it.
+        </p>
+        <p className="lp-tag">capital in a snap, settlement in a waterfall</p>
+        <div className="lp-actions">
+          <Link className="lp-cta" href="/overview">
+            Open the dashboard <span aria-hidden="true">→</span>
+          </Link>
+          <Link className="lp-alt" href="/audit">
+            See what can be verified
+          </Link>
         </div>
-        {status === 'live' ? (
-          <span className="badge-live">{demo ? 'demo replay' : 'live'} · updates in &lt;2s</span>
-        ) : (
-          <span className="badge-live badge-reconnecting">reconnecting…</span>
-        )}
-      </div>
+      </header>
 
-      {treasuryAndPool}
+      <section className="lp-figure" aria-labelledby="lp-path-title">
+        <h2 className="lp-h2" id="lp-path-title">
+          How the money moves
+        </h2>
+        <MoneyPath />
+      </section>
 
-      <div className="mt">
-        <MoneyGraph
-          latest={activity[0] ?? null}
-          treasuryUsdc={float?.treasuryUsdc ?? null}
-          pool={pool}
-          jobPriceUsdc={snap.activeJobs?.[0]?.priceUsdc ?? null}
-          live={status === 'live'}
-        />
-      </div>
+      <section className="lp-proof" aria-labelledby="lp-proof-title">
+        <h2 className="lp-h2" id="lp-proof-title">
+          The claim, and how to check it
+        </h2>
+        <p className="lp-body">
+          The pool is repaid in full <strong>before</strong> the operator receives anything, in the
+          same transaction. That is not a promise about intent — it is contract control flow, and
+          it is visible in the logs of a settlement already on {deployment.network.name}.
+        </p>
+        <ol className="lp-legs">
+          <li>
+            <span className="lp-leg-i">log 12</span>
+            <span className="lp-leg-to">capital pool</span>
+            <span className="lp-leg-amt">{PROOF.pool} USDC</span>
+          </li>
+          <li>
+            <span className="lp-leg-i">log 15</span>
+            <span className="lp-leg-to">operator</span>
+            <span className="lp-leg-amt">{PROOF.operator} USDC</span>
+          </li>
+        </ol>
+        <p className="lp-body">
+          {PROOF.escrow} USDC of escrow, divided. The pool is paid at the lower log index, so it
+          cannot have been paid second. <code>JobVault.acceptDelivery</code> calls{' '}
+          <code>repayAdvance</code> before it transfers to the operator, and the contracts are
+          frozen.
+        </p>
+        <a className="lp-ref" href={`${EXPLORER}/tx/${PROOF.hash}`} target="_blank" rel="noreferrer">
+          <code>{`${PROOF.hash.slice(0, 16)}…${PROOF.hash.slice(-8)}`}</code>
+          <span aria-hidden="true"> ↗</span>
+        </a>
+      </section>
 
-      <div className="activity-layout mt">
-        <TeamActivityFeed messages={activity} live={status === 'live'} />
-        {/* The right rail is three plain surfaces with a kicker, which is exactly what the Card
-            primitives express. Adopting them turns each kicker from a styled <p> into a real <h3>
-            inside a header row, so the rail becomes three headings a screen reader can jump between
-            instead of three anonymous divs. Titles and bodies are unchanged. */}
-        <div className="grid" style={{ gap: 16, alignContent: 'start' }}>
-          <Card>
-            <CardHeader title="Workforce" />
-            <CardBody>
-              <WorkforceStrip agents={snap.workforce ?? []} />
-            </CardBody>
-          </Card>
-          <Card>
-            <CardHeader title="Open advances" />
-            <CardBody>
-              {advances === null ? <div className="empty">Awaiting chain indexer.</div> : <AdvancesTable advances={advances} />}
-            </CardBody>
-          </Card>
-          <Card>
-            <CardHeader title="Active jobs" />
-            <CardBody>
-              <ActiveJobs jobs={snap.activeJobs ?? []} />
-            </CardBody>
-          </Card>
-        </div>
-      </div>
-    </>
+      <section className="lp-honest" aria-labelledby="lp-honest-title">
+        <h2 className="lp-h2" id="lp-honest-title">
+          What is not proven yet
+        </h2>
+        <p className="lp-body">
+          No agent purchase has settled through the x402 payment path, no end-to-end run has been
+          logged, and compliance screening is a labelled stub that fabricates no result. Those are
+          listed in full, with the rest, on the audit page — a product about verifiability should
+          be easiest to check where it is weakest.
+        </p>
+        <Link className="lp-alt" href="/audit">
+          Read the gaps
+        </Link>
+      </section>
+
+      <footer className="lp-foot">
+        <span>
+          {deployment.network.name} · chain {deployment.network.chainId}
+        </span>
+        <Link href="/overview">Dashboard</Link>
+        <Link href="/float">Pool</Link>
+        <Link href="/audit">Audit</Link>
+      </footer>
+    </div>
   );
 }
