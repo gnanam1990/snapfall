@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatBps, formatUsdcExact, isSafeExplorerUrl, relativeTime } from '@/lib/format';
+import { rateProvenance, mayClaimOnChain } from '@/lib/rateProvenance';
 import { useEventStream } from '@/lib/useEventStream';
 import Badge from '@/components/Badge';
 import type {
@@ -58,6 +59,12 @@ function MetricModule({
 }
 
 function RateEngine({ snapshot, fallbackRateBps }: { snapshot: FloatSnapshot; fallbackRateBps: number | null }) {
+  // Provenance, not just value. snapshot.orgRateBps is an eth_call against FloatPool.advanceRate;
+  // fallbackRateBps is the daemon's own assertion off the H2 stream (page.tsx:349), which under
+  // SNAPFALL_DEMO_STREAM is the hardcoded 5000 in lib/mockData.ts. Both land in `rate`, so the
+  // proof note below has to know which one it is before claiming the figure came from the chain.
+  // The decision is a tested function rather than a ternary here: see lib/rateProvenance.test.ts.
+  const provenance = rateProvenance(snapshot.orgRateBps, fallbackRateBps);
   const rate = snapshot.orgRateBps ?? fallbackRateBps;
   const accepted = snapshot.acceptedJobs;
   const writtenOff = snapshot.writtenOffJobs;
@@ -90,9 +97,14 @@ function RateEngine({ snapshot, fallbackRateBps }: { snapshot: FloatSnapshot; fa
         <div className="rate-current">
           <span>Advance rate</span>
           <strong>{rate === null ? '—' : formatBps(rate)}</strong>
-          <div className={`rate-delta${delta !== null && delta < 0 ? ' is-negative' : ''}`}>
+          <div
+            className={`rate-delta${
+              rate === null ? ' is-absent' : delta !== null && delta < 0 ? ' is-negative' : ''
+            }`}
+          >
+            {/* delta is null exactly when rate is; branching on it lets the compiler narrow. */}
             {delta === null ? (
-              'Organization unavailable'
+              'No organisation configured'
             ) : delta === 0 ? (
               'At the protocol base rate'
             ) : (
@@ -136,13 +148,33 @@ function RateEngine({ snapshot, fallbackRateBps }: { snapshot: FloatSnapshot; fa
             <div className="rate-scale-label base"><strong>50%</strong><span>base</span></div>
             <div className="rate-scale-label cap"><strong>85%</strong><span>cap</span></div>
           </div>
+          {/* The scale, its line and all three bounds render unconditionally, so without this the
+              absent case is a fully drawn gauge with no needle and nothing saying why. */}
+          {rate === null ? (
+            <p className="rate-scale-note">No rate to plot until an organisation is resolved.</p>
+          ) : null}
         </div>
       </div>
 
-      <p className="rate-proof-note">
-        <span aria-hidden="true">✓</span>
-        Rate is computed entirely on-chain. No oracle, no manual credit score.
-      </p>
+      {/* The check mark is a provenance claim, so it may only appear over a figure actually read
+          from the chain. Rendering it unconditionally meant it also vouched for the daemon's
+          asserted rate -- and, under the demo stream, for a hardcoded constant. */}
+      {rate === null ? (
+        <p className="rate-proof-note is-absent">
+          No organisation is configured, so no rate has been read for one. The advance rate is per
+          organisation, resolved against FloatPool.
+        </p>
+      ) : mayClaimOnChain(provenance) ? (
+        <p className="rate-proof-note">
+          <span aria-hidden="true">✓</span>
+          Rate is computed entirely on-chain. No oracle, no manual credit score.
+        </p>
+      ) : (
+        <p className="rate-proof-note is-absent">
+          This figure is the local daemon&apos;s, not a chain read. Configure an organisation to
+          resolve the rate against FloatPool and verify it independently.
+        </p>
+      )}
     </section>
   );
 }

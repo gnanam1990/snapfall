@@ -204,8 +204,11 @@ test('a failing advance or rate read degrades to null instead of blanking the va
   assert.equal(snap.customerPaymentUsdc, '25000000', 'the vault read still shows');
   assert.equal(snap.advance, null);
   assert.equal(snap.orgRateBps, null);
-  // With the advance unknown we must not claim the operator keeps everything as fact...
-  assert.equal(snap.operatorNetUsdc, '25000000');
+  // With the advance unknown we must not claim the operator keeps everything as fact -- which is
+  // what asserting the full escrow here used to do, contradicting this very comment. A failed
+  // pool read is not evidence of no advance, so the payout is unknowable and must dash.
+  assert.equal(snap.advanceRead, 'unavailable');
+  assert.equal(snap.operatorNetUsdc, null);
 });
 
 test('malformed input and short returns fail closed', async () => {

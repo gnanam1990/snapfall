@@ -19,10 +19,11 @@ import Link from 'next/link';
 import type { StreamMessage } from '@/lib/types';
 import type { ActivityMessage } from '@/lib/activity';
 import { humanizeStreamEvent } from '@/lib/activity';
-import { formatUsdc, formatBps, relativeTime } from '@/lib/format';
+import { formatUsdcExact, formatBps, relativeTime } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import type { JobSnapshot } from '@/lib/jobChain';
 import { belongsToJob, expenseRows } from '@/lib/jobTimeline';
+import SettlementWaterfall from '@/components/SettlementWaterfall';
 
 /** Lifecycle order as JobVault declares it; the alt terminals sit outside the happy path. */
 const HAPPY_PATH = ['Created', 'Funded', 'InProgress', 'Delivered', 'Accepted'] as const;
@@ -37,9 +38,17 @@ function Row({ label, children, mono }: { label: string; children: React.ReactNo
   );
 }
 
-function Hash({ value }: { value: string }) {
+/**
+ * A truncated hash whose full value is actually reachable.
+ *
+ * This used to put the value in a `title` on a static span: keyboard-unreachable, touch-
+ * unreachable and inconsistently exposed to screen readers, so the middle of every hash was
+ * recoverable by no one. The full value now sits in the accessible name, and the element is
+ * focusable so it can be reached by keyboard too.
+ */
+function Hash({ value, label }: { value: string; label: string }) {
   return (
-    <span className="mono" title={value}>
+    <span className="mono job-hashv" tabIndex={0} title={value} aria-label={`${label}: ${value}`}>
       {value.slice(0, 10)}…{value.slice(-8)}
     </span>
   );
@@ -64,7 +73,7 @@ function ExpenseRows({ timeline, total }: { timeline: ActivityMessage[]; total: 
     <div className="card mt">
       <div className="job-expense-head">
         <p className="card-title">Expenses</p>
-        {total ? <span className="stat-sub">{formatUsdc(total)} on chain</span> : null}
+        {total ? <span className="stat-sub">{formatUsdcExact(total)} on chain</span> : null}
       </div>
       <ol className="job-expenses">
         {rows.map((row) => (
@@ -72,11 +81,11 @@ function ExpenseRows({ timeline, total }: { timeline: ActivityMessage[]; total: 
             <span className="job-expense-text">{row.text}</span>
             <span className="job-expense-meta">
               {row.amountUsdc ? (
-                <span className="job-expense-amount">{formatUsdc(row.amountUsdc)}</span>
+                <span className="job-expense-amount">{formatUsdcExact(row.amountUsdc)}</span>
               ) : null}
               <span>{relativeTime(row.at)}</span>
               {row.explorerUrl ? (
-                <a className="feed-link" href={row.explorerUrl} target="_blank" rel="noreferrer noopener">
+                <a className="job-txlink" href={row.explorerUrl} target="_blank" rel="noreferrer noopener">
                   transaction
                 </a>
               ) : null}
@@ -144,7 +153,7 @@ function AcceptLink({ jobId }: { jobId: string }) {
           {busy ? 'Minting…' : link ? 'Mint a new link' : 'Mint customer link'}
         </button>
       </div>
-      <p className="stat-sub" style={{ margin: '6px 0 0' }}>
+      <p className="stat-sub">
         Shown once, and minting again rotates any link already issued for this job.
       </p>
       {error ? <p className="job-link-error">{error}</p> : null}
@@ -216,14 +225,14 @@ export default function JobDetailPage() {
   if (missing) {
     return (
       <>
-        <div className="topbar">
-          <div>
-            <h1 className="page-title">Job not found</h1>
-            <p className="page-sub">The vault has no record of this job id.</p>
+        <div className="page-header">
+          <div className="page-header-text">
+            <h1>Job not found</h1>
+            <p className="page-header-sub">The vault has no record of this job id.</p>
           </div>
         </div>
         <div className="card">
-          <p className="stat-sub mono" style={{ marginTop: 0 }}>{jobId}</p>
+          <p className="stat-sub mono">{jobId}</p>
           <p className="stat-sub">
             A job exists on chain only after <code>createJob</code>. If you just seeded a run, check{' '}
             <code>.demo/current.json</code> for this take&apos;s job id. <Link href="/jobs">Back to jobs</Link>
@@ -236,12 +245,14 @@ export default function JobDetailPage() {
   if (error) {
     return (
       <>
-        <div className="topbar">
-          <h1 className="page-title">Job detail</h1>
+        <div className="page-header">
+          <div className="page-header-text">
+            <h1>Job detail</h1>
+          </div>
         </div>
         <div className="card">
           <p className="card-title">Could not read the chain</p>
-          <p className="stat-sub" style={{ marginBottom: 12 }}>{error}</p>
+          <p className="stat-sub">{error}</p>
           <button className="activity-filter is-active" onClick={() => void load()}>
             Retry
           </button>
@@ -253,8 +264,10 @@ export default function JobDetailPage() {
   if (!job) {
     return (
       <>
-        <div className="topbar">
-          <h1 className="page-title">Job detail</h1>
+        <div className="page-header">
+          <div className="page-header-text">
+            <h1>Job detail</h1>
+          </div>
         </div>
         <div className="loading">Reading the job from the vault…</div>
       </>
@@ -266,10 +279,10 @@ export default function JobDetailPage() {
 
   return (
     <>
-      <div className="topbar">
-        <div>
-          <h1 className="page-title">Job detail</h1>
-          <p className="page-sub mono">{job.jobId}</p>
+      <div className="page-header">
+        <div className="page-header-text">
+          <h1>Job detail</h1>
+          <p className="page-header-sub mono">{job.jobId}</p>
         </div>
         {status === 'live' ? (
           <span className="badge-live">live · chain-read on every event</span>
@@ -291,9 +304,22 @@ export default function JobDetailPage() {
             {HAPPY_PATH.map((stage, i) => {
               const state = i < stageIndex ? 'done' : i === stageIndex ? 'current' : 'ahead';
               return (
-                <li key={stage} className={`job-stage is-${state}`}>
-                  <span className="job-stage-dot" />
+                <li
+                  key={stage}
+                  className={`job-stage is-${state}`}
+                  aria-current={state === 'current' ? 'step' : undefined}
+                >
+                  <span className="job-stage-dot" aria-hidden="true" />
                   <span className="job-stage-name">{stage}</span>
+                  {/* The done/current/ahead distinction was background-colour only, which is a
+                      1.4.1 failure and invisible to AT. Stated in text instead. */}
+                  <span className="job-stage-state">
+                    {state === 'done'
+                      ? ' (done)'
+                      : state === 'current'
+                        ? ' (current stage)'
+                        : ' (not reached)'}
+                  </span>
                 </li>
               );
             })}
@@ -302,7 +328,7 @@ export default function JobDetailPage() {
         <div className="job-grid mt">
           <Row label="Customer" mono>{job.customer}</Row>
           <Row label="Operator" mono>{job.operator}</Row>
-          <Row label="Terms hash">{job.termsHash ? <Hash value={job.termsHash} /> : '—'}</Row>
+          <Row label="Terms hash">{job.termsHash ? <Hash value={job.termsHash} label="Terms hash" /> : '—'}</Row>
           <Row label="Deadline">{job.deadline ? new Date(job.deadline).toLocaleString() : '—'}</Row>
         </div>
       </div>
@@ -314,15 +340,19 @@ export default function JobDetailPage() {
           {drawn && advance ? (
             <>
               <div className="job-figure">
-                {formatUsdc(advance.principalUsdc)} <span className="u">USDC</span>
-                <span className={`job-chip ${advance.open ? 'is-open' : 'is-repaid'}`}>
-                  {advance.open ? 'Open' : 'Repaid'}
+                {formatUsdcExact(advance.principalUsdc)} <span className="u">USDC</span>
+                {/* openAdvanceOf returns a bool, not the three-state status, and
+                    FloatPool.writeOff only flips the status without clearing the struct -- so
+                    "not open" covers both repaid and written off. Saying "Repaid" claimed the
+                    pool was made whole in the one case where it ate the loss. */}
+                <span className={`job-chip ${advance.open ? 'is-open' : 'is-closed'}`}>
+                  {advance.open ? 'Open' : 'Closed'}
                 </span>
               </div>
               <div className="job-grid mt">
-                <Row label="Fee (200 bps)">{formatUsdc(advance.feeUsdc)} USDC</Row>
+                <Row label="Fee (200 bps)">{formatUsdcExact(advance.feeUsdc)} USDC</Row>
                 <Row label="Owed to the pool">
-                  <b>{formatUsdc(advance.repaymentUsdc)} USDC</b>
+                  <b>{formatUsdcExact(advance.repaymentUsdc)} USDC</b>
                 </Row>
                 <Row label="Rate at draw">
                   {job.orgRateBps === null ? '—' : formatBps(job.orgRateBps)}
@@ -338,10 +368,18 @@ export default function JobDetailPage() {
               <div className="job-figure job-figure-muted">no advance drawn</div>
               <p className="stat-sub">
                 {job.orgRateBps === null
-                  ? 'The org rate is unavailable, so the available advance cannot be shown.'
-                  : `At the org's current ${formatBps(job.orgRateBps)} rate this job could draw ${formatUsdc(
-                      ((BigInt(job.customerPaymentUsdc ?? '0') * BigInt(job.orgRateBps)) / 10_000n).toString(),
-                    )} USDC.`}
+                  ? 'No advance rate has been read for this org, so this job’s advance cannot be priced.'
+                  : job.status !== 'Funded'
+                    ? `An advance can only be drawn while a job is Funded, and this one is ${job.status ?? 'in an unknown state'}.`
+                    : // Deliberately "priced at", not "could draw". requestAdvance also checks
+                      // the 10% org exposure cap, the 80% utilisation cap, available liquidity
+                      // and the pool floor, and this page fetches none of them: it makes three
+                      // eth_calls and holds no pool state. On the demo's own 100 USDC pool a
+                      // 12.50 advance reverts CapExceeded, so the old wording was not merely
+                      // unproven but false.
+                      `At the org’s current ${formatBps(job.orgRateBps)} rate this job’s advance would be priced at ${formatUsdcExact(
+                        ((BigInt(job.customerPaymentUsdc ?? '0') * BigInt(job.orgRateBps)) / 10_000n).toString(),
+                      )} USDC. Whether the pool can fund it also depends on its caps and liquidity, shown on Float.`}
               </p>
             </>
           )}
@@ -350,28 +388,30 @@ export default function JobDetailPage() {
         {/* settlement */}
         <div className="card">
           <p className="card-title">Settlement</p>
-          <div className="job-grid">
-            <Row label="Customer payment (escrow)">
-              {job.customerPaymentUsdc === null ? '—' : `${formatUsdc(job.customerPaymentUsdc)} USDC`}
-            </Row>
-            <Row label="Repaid to the pool first">
-              {drawn && advance ? `${formatUsdc(advance.repaymentUsdc)} USDC` : '0.00 USDC'}
-            </Row>
-            <Row label="Operator receives">
-              <b>{job.operatorNetUsdc === null ? '—' : `${formatUsdc(job.operatorNetUsdc)} USDC`}</b>
-            </Row>
+          <SettlementWaterfall
+            escrowUsdc={job.customerPaymentUsdc}
+            repaymentUsdc={drawn && advance ? advance.repaymentUsdc : '0'}
+            operatorNetUsdc={job.operatorNetUsdc}
+            settled={job.status === 'Accepted'}
+            unavailable={job.advanceRead === 'unavailable'}
+            terminal={job.status && TERMINAL_ALT.has(job.status) ? job.status : null}
+          />
+          <div className="job-grid mt">
             <Row label="Delivery hash">
-              {job.deliveryHash ? <Hash value={job.deliveryHash} /> : <span className="stat-sub">not submitted</span>}
+              {job.deliveryHash ? (
+                <Hash value={job.deliveryHash} label="Delivery hash" />
+              ) : (
+                <span className="stat-sub">not submitted</span>
+              )}
             </Row>
           </div>
-          <p className="stat-sub">
-            {job.status === 'Accepted'
-              ? 'Settled. Both transfers happened in one transaction, pool first.'
-              : 'Figures are what settlement would pay out at the current chain state.'}
-          </p>
           <div className="job-links">
-            <a href={job.explorer.jobVault} target="_blank" rel="noreferrer">JobVault on the explorer ↗</a>
-            <a href={job.explorer.floatPool} target="_blank" rel="noreferrer">FloatPool on the explorer ↗</a>
+            <a href={job.explorer.jobVault} target="_blank" rel="noreferrer">
+              JobVault on the explorer <span aria-hidden="true">&#8599;</span>
+            </a>
+            <a href={job.explorer.floatPool} target="_blank" rel="noreferrer">
+              FloatPool on the explorer <span aria-hidden="true">&#8599;</span>
+            </a>
           </div>
         </div>
       </div>
@@ -380,21 +420,38 @@ export default function JobDetailPage() {
       <div className="card mt">
         <p className="card-title">Operating budget</p>
         <div className="job-budget">
-          <div className="job-budget-bar">
+          {/* A null budgetUsedBps is not 0%: `?? 0` drew an empty bar meaning "nothing spent"
+              directly above a legend reading a dash. Unknown is drawn as unknown. */}
+          {job.budgetUsedBps === null ? (
             <div
-              className="job-budget-fill"
-              style={{ width: `${Math.min(100, (job.budgetUsedBps ?? 0) / 100)}%` }}
+              className="job-budget-bar is-unknown"
+              role="img"
+              aria-label="Budget use is unknown: the chain read did not return it"
             />
-          </div>
+          ) : (
+            <div
+              className="job-budget-bar"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.min(100, Math.round(job.budgetUsedBps / 100))}
+              aria-label="Share of the operating budget already spent on chain"
+            >
+              <div
+                className="job-budget-fill"
+                style={{ width: `${Math.min(100, job.budgetUsedBps / 100)}%` }}
+              />
+            </div>
+          )}
           <div className="job-budget-legend">
             <span>
-              <b>{job.onchainExpensesUsdc === null ? '—' : formatUsdc(job.onchainExpensesUsdc)}</b> spent
+              <b>{job.onchainExpensesUsdc === null ? '—' : formatUsdcExact(job.onchainExpensesUsdc)}</b> spent
             </span>
             <span>
-              {job.budgetRemainingUsdc === null ? '—' : formatUsdc(job.budgetRemainingUsdc)} remaining
+              {job.budgetRemainingUsdc === null ? '—' : formatUsdcExact(job.budgetRemainingUsdc)} remaining
             </span>
             <span className="stat-sub">
-              of {job.maxOperatingBudgetUsdc === null ? '—' : formatUsdc(job.maxOperatingBudgetUsdc)} USDC
+              of {job.maxOperatingBudgetUsdc === null ? '—' : formatUsdcExact(job.maxOperatingBudgetUsdc)} USDC
             </span>
           </div>
         </div>
@@ -412,7 +469,7 @@ export default function JobDetailPage() {
       <div className="card mt">
         <p className="card-title">Timeline</p>
         {timeline.length === 0 ? (
-          <p className="stat-sub" style={{ margin: 0 }}>
+          <p className="stat-sub">
             Waiting for events on this job. The chain figures above are already current.
           </p>
         ) : (
@@ -425,7 +482,7 @@ export default function JobDetailPage() {
                     <span className="job-event-actor">{item.actor}</span>
                     <span className="job-event-text">{item.text}</span>
                     {item.amountUsdc ? (
-                      <span className="job-event-amount">{formatUsdc(item.amountUsdc)}</span>
+                      <span className="job-event-amount">{formatUsdcExact(item.amountUsdc)}</span>
                     ) : null}
                   </div>
                   <div className="job-event-meta">
@@ -436,7 +493,7 @@ export default function JobDetailPage() {
                       <>
                         <span>·</span>
                         <a
-                          className="feed-link"
+                          className="job-txlink"
                           href={item.explorerUrl}
                           target="_blank"
                           rel="noreferrer noopener"

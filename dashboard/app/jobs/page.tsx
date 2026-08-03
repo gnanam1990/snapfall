@@ -1,21 +1,44 @@
 'use client';
 
 /**
- * V7 — the jobs index. A live list of the jobs the daemon is running, each linking to its
- * detail page. The list rides the H2 snapshot (the daemon knows which jobs exist and their
- * business state); the detail page is where chain state becomes authoritative.
+ * V7 — the jobs index, drawn as a schedule.
+ *
+ * What this surface may honestly show is narrower than it looks, and the redesign is mostly about
+ * admitting that. docs/handshakes/h2-overview-aggregates.contract.json is explicit:
+ *
+ *   "activeJob": ["jobId", "priceUsdc"]
+ *   "daemonOmits": { "JobSummary": ["vaultJobId", "customer", "title", "state"] }
+ *
+ * So against a real daemon the wire carries a chain entity id and a funded amount, and nothing
+ * else. customer and state live in the daemon's own `jobs` table, title only in Brain's per-job
+ * memory, and none of the three is in chain_job_financials -- which is the projection this list is
+ * built from. The contract's comment says the dashboard "renders a dash" for them. It did not: it
+ * rendered empty <div>s and a `class="badge undefined"` pill with no text, so three of the four
+ * visible columns were silently blank against the only deployment that matters.
+ *
+ * The old subtitle promised "Lifecycle, budget, advance and settlement — per job". Of those, only
+ * the advance is actually reachable here, by joining openAdvances on jobId -- both sides are
+ * chain_job_financials.job_id, so the join is sound. Budget and settlement exist only on the
+ * detail page, behind a per-job chain read. The subtitle now says what the row can source.
+ *
+ * The list is also NOT live, despite what the old badge claimed. computeAggregates runs once, for
+ * the opening snapshot; neither daemon nor chain event frames carry an `aggregates` block, so
+ * nothing here updates after connect. Saying "updates in <2s" over a list that never changes is a
+ * latency claim the surface cannot keep.
  */
 
 import { useCallback, useState } from 'react';
 import Link from 'next/link';
-import type { JobSummary, StreamMessage } from '@/lib/types';
-import { formatUsdc } from '@/lib/format';
+import type { JobSummary, OpenAdvance, StreamMessage } from '@/lib/types';
+import { formatUsdcExact } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import Badge from '@/components/Badge';
 
 /**
  * Only a bytes32 JobVault entity can be read from the contracts. The daemon keeps that id
  * separate from the business job id (jobs.vault_job_id), so prefer it and fall back to the
- * business id only when it happens to be bytes32 itself.
+ * business id only when it happens to be bytes32 itself -- which, under a real daemon, is the
+ * usual case: chain_job_financials.job_id IS the vault entity.
  */
 const isVaultJobID = (id: string | null | undefined): id is string =>
   typeof id === 'string' && /^0x[0-9a-fA-F]{64}$/.test(id);
@@ -23,83 +46,174 @@ const isVaultJobID = (id: string | null | undefined): id is string =>
 const vaultIDOf = (job: JobSummary): string | null =>
   isVaultJobID(job.vaultJobId) ? job.vaultJobId : isVaultJobID(job.jobId) ? job.jobId : null;
 
+const shortHash = (id: string) => (id.length > 18 ? `${id.slice(0, 10)}…${id.slice(-6)}` : id);
+
 export default function JobsPage() {
   const [jobs, setJobs] = useState<JobSummary[] | null>(null);
+  const [advances, setAdvances] = useState<OpenAdvance[]>([]);
+  const [demo, setDemo] = useState(false);
+  /** False on the public, daemon-less deploy. Ignoring it is how this page claimed "0 jobs". */
+  const [daemonConnected, setDaemonConnected] = useState<boolean | null>(null);
 
   const onMessage = useCallback((msg: StreamMessage) => {
     if (msg.kind === 'snapshot') {
+      setDemo(msg.demo === true);
+      setDaemonConnected(msg.snapshot.daemonConnected !== false);
       setJobs(msg.snapshot.activeJobs ?? []);
+      setAdvances(msg.snapshot.openAdvances ?? []);
       return;
     }
+    // Event frames carry no aggregates against a real daemon, so this only fires under the demo
+    // replay. Merge rather than replace: the aggregate shape is the two-field chain projection,
+    // and assigning it wholesale used to wipe customer/title/state off rows that had them.
     const next = msg.aggregates?.activeJobs;
-    if (next) setJobs(next);
+    if (next) {
+      setJobs((prev) => {
+        if (!prev) return next;
+        const byId = new Map(prev.map((j) => [j.jobId, j]));
+        return next.map((j) => ({ ...(byId.get(j.jobId) ?? {}), ...j }) as JobSummary);
+      });
+    }
+    if (msg.aggregates?.openAdvances) setAdvances(msg.aggregates.openAdvances);
   }, []);
 
   const status = useEventStream('/api/events/stream', onMessage);
+  const noDaemon = daemonConnected === false;
 
   return (
     <>
-      <div className="topbar">
-        <div>
-          <h1 className="page-title">Jobs</h1>
-          <p className="page-sub">Lifecycle, budget, advance and settlement — per job.</p>
+      <div className="page-header">
+        <div className="page-header-text">
+          <h1>Jobs</h1>
+          <p className="page-header-sub">
+            Every job the chain projection has seen funded, with the advance drawn against it.
+            Budget and settlement are per job, on the detail page.
+          </p>
         </div>
-        {status === 'live' ? (
-          <span className="badge-live">live · updates in &lt;2s</span>
-        ) : (
-          <span className="badge-live badge-reconnecting">reconnecting…</span>
-        )}
+        <span className="page-header-aside">
+          {noDaemon ? (
+            <span className="status-badge Cancelled">no daemon</span>
+          ) : demo ? (
+            <span className="status-badge AwaitingFunding">demo replay</span>
+          ) : status === 'live' ? (
+            // Not "updates in <2s": nothing re-sends this list after the opening snapshot.
+            <span className="status-badge Funded">connected · list as at connect</span>
+          ) : (
+            <span className="status-badge AwaitingFunding">connecting…</span>
+          )}
+        </span>
       </div>
 
-      <div className="card">
-        {jobs === null ? (
-          <div className="loading" style={{ padding: '24px 0' }}>Connecting to the daemon event stream…</div>
-        ) : jobs.length === 0 ? (
-          <p className="stat-sub" style={{ margin: 0 }}>
-            No active jobs. Seed a demo run with <code>./scripts/seed_demo</code>, which creates and funds
-            one on chain.
+      {noDaemon ? (
+        <div className="card">
+          <p className="card-title">No daemon connected</p>
+          <p>
+            The job list comes from the owner’s daemon, which does not run on this public site. It
+            is left empty rather than filled with examples. The pool and advance figures on{' '}
+            <Link className="jobs-open" href="/float">
+              Float
+            </Link>{' '}
+            are read straight from Arc testnet and do not need a daemon.
           </p>
-        ) : (
-          <table className="t">
-            <thead>
-              <tr>
-                <th>Customer / job</th>
-                <th>Price</th>
-                <th>State</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((job) => (
-                <tr key={job.jobId}>
-                  <td>
-                    <div>{job.customer}</div>
-                    <div className="mono">{job.title}</div>
-                  </td>
-                  <td>{formatUsdc(job.priceUsdc)}</td>
-                  <td>
-                    <span className={`badge ${job.state}`}>{job.state}</span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    {vaultIDOf(job) ? (
-                      <Link className="feed-link" href={`/jobs/${vaultIDOf(job)}`}>
-                        detail →
-                      </Link>
-                    ) : (
-                      <span
-                        className="stat-sub"
-                        title="This job has no bytes32 vault entity yet, so there is nothing to read from the contracts"
-                      >
-                        no chain identity yet
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+        </div>
+      ) : jobs === null ? (
+        <div className="card">
+          <p className="stat-sub">Waiting for the first snapshot from the daemon event stream…</p>
+        </div>
+      ) : jobs.length === 0 ? (
+        <div className="card">
+          <p className="stat-sub">
+            The daemon is connected and has no funded jobs in its chain projection. A job appears
+            here once its escrow is funded on chain.
+          </p>
+        </div>
+      ) : (
+        <ul className="jobs-list">
+          {jobs.map((job) => {
+            const vault = vaultIDOf(job);
+            // Both sides are chain_job_financials.job_id, so this join is sound.
+            const advance = advances.find((a) => a.jobId === job.jobId);
+            return (
+              <li key={job.jobId} className="jobs-row">
+                <div className="jobs-line">
+                  <div className="jobs-ident">
+                    <h2 className="jobs-title">
+                      {job.title || (vault ? shortHash(vault) : job.jobId)}
+                    </h2>
+                    <p className="jobs-origin">
+                      {job.customer || (
+                        <span className="is-absent">
+                          customer is daemon-side and not in this projection
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="jobs-amount">
+                    <span className="jobs-figure">{formatUsdcExact(job.priceUsdc)}</span>
+                    <span className="jobs-unit">USDC</span>
+                  </div>
+                </div>
+
+                <p className="jobs-source">escrowed price · indexer projection of JobVault</p>
+
+                <dl className="jobs-facts">
+                  <div>
+                    <dt>lifecycle</dt>
+                    <dd>
+                      {job.state ? (
+                        <Badge kind={job.state} />
+                      ) : (
+                        <span className="is-absent">not carried by the chain projection</span>
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>advance drawn</dt>
+                    <dd>
+                      {advance ? (
+                        <>
+                          {formatUsdcExact(advance.principalUsdc)} USDC{' '}
+                          <span className="jobs-sub">
+                            + {formatUsdcExact(advance.feeUsdc)} fee · {advance.status}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="is-absent">none open</span>
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>chain identity</dt>
+                    <dd className="jobs-hash">
+                      {vault ? (
+                        shortHash(vault)
+                      ) : (
+                        <span className="is-absent">no vault entity yet</span>
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+
+                {vault ? (
+                  <Link
+                    className="jobs-open"
+                    href={`/jobs/${vault}`}
+                    // Every row renders the same words, so the name has to carry the job.
+                    aria-label={`Open the detail page for ${job.title || shortHash(vault)}`}
+                  >
+                    Open job detail <span aria-hidden="true">→</span>
+                  </Link>
+                ) : (
+                  <p className="jobs-blocked">
+                    This job has no bytes32 vault entity yet, so there is nothing to read from the
+                    contracts and no detail page to open.
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </>
   );
 }

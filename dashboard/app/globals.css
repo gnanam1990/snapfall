@@ -1,242 +1,244 @@
-/* ══ Design tokens ══
+/* ══ The instrument diagram ══
  *
- * Every colour in this stylesheet resolves through a token here. That is not tidiness for its
- * own sake: a second theme is impossible while surfaces, borders and tints are written inline,
- * and this file previously carried 103 hardcoded dark-only literals.
+ * This is a piping and instrumentation drawing, not a dashboard skin. The product is a capital
+ * pool with real capacity limits — an 80% utilisation cap, a 10% per-org exposure cap, a
+ * first-loss reserve — and a settlement waterfall that empties in stages. A P&ID is the drawing
+ * an engineer reads to understand exactly that, so the system is borrowed whole rather than
+ * quoted: hairline rules do the structural work, vessels and valves are drawn, and every figure
+ * hangs off a callout leader that says what it measures.
  *
- * The vocabulary is deliberately small. Each semantic hue gets the hue itself (for text and
- * strokes), a soft tinted background, and a tinted border; a few carry a -strong step where the
- * UI uses brightness to mean emphasis. Anything named --on-X is foreground text that sits on a
- * filled X, and is the one place a contrast pair is fixed rather than derived.
+ * Three consequences fall out of the world and are enforced at the token layer, so no component
+ * can reintroduce them by accident:
  *
- * Dark is the default and lives on :root. Light is an override under :root[data-theme='light'],
- * so a browser that never runs the theme script still gets a complete, correct theme.
+ *   NO DEPTH.    A drawing is flat. --shadow and --shadow-lg are `none`. Elevation is expressed
+ *                by line weight, never by a shadow.
+ *   NO GLOW.     Every *-glow token resolves to transparent. A glow is light emission; ink does
+ *                not emit. The names survive because components reference them.
+ *   NO GRADIENT. Not one gradient declaration survives in this stylesheet; the CTA stops are
+ *                also identical, so even a reintroduced one would render flat.
+ *
+ * Colour is semantic only, in the instrument grammar: green reads open/flowing/settled, red reads
+ * alarm/refused, amber reads caution/pending, and the process teal marks the live path. Nothing
+ * is coloured for decoration. With all content removed the surface is still recognisable, by its
+ * rules, its leaders and its registration marks.
+ *
+ * ── Contrast ──
+ *
+ * AA is re-earned here rather than inherited: the previous system's ratios were measured against
+ * different surfaces and do not transfer. Text tokens are checked against the LIGHTEST surface
+ * they can land on in dark (--panel-3) and the lightest in light (--panel), the worst case in
+ * each theme. The muted ramp is where AA bites: at 4.5:1 on small text there is about one step of
+ * headroom between --muted and --muted-2 before they collapse into one grey, so --muted-2 sits at
+ * the floor and --muted a clear step above it, which keeps the ramp readable instead of nominal.
  */
+
 :root {
   color-scheme: dark;
 
-  /* surfaces, back to front */
-  --bg: #0a0e14;
-  --bg-2: #0d131b;
-  --bg-glow-top: #10202a;
-  --well: #111923;
-  --well-2: #0e151e;
-  --panel: #121821;
-  --panel-2: #161e29;
-  --panel-3: #1a2430;
-  --panel-a: rgba(18, 24, 33, 0.96);
-  --panel-b: rgba(13, 19, 27, 0.96);
-  --scrim: rgba(18, 24, 33, 0.72);
-  --inset: rgba(10, 14, 20, 0.35);
-  --inset-2: rgba(10, 14, 20, 0.22);
-  --hover: rgba(255, 255, 255, 0.035);
+  /* ── surfaces: the drafting table at night ──
+     Warm graphite, deliberately not blue-black. Blue-black plus a bright accent is the crypto
+     dashboard default this world refuses, and the ground is where that reads first. */
+  --bg: #16171a;
+  --bg-2: #1a1c20;
+  /* The page glow is gone; the name resolves to the ground so any consumer draws nothing. */
+  --bg-glow-top: #16171a;
+  --well: #121316;
+  --well-2: #0f1012;
+  --panel: #1a1c20;
+  --panel-2: #1e2024;
+  --panel-3: #232529;
+  --panel-a: rgba(26, 28, 32, 0.97);
+  --panel-b: rgba(18, 19, 22, 0.97);
+  --scrim: rgba(22, 23, 26, 0.76);
+  --inset: rgba(10, 11, 13, 0.34);
+  --inset-2: rgba(10, 11, 13, 0.2);
+  --hover: rgba(255, 255, 255, 0.04);
 
-  /* lines */
-  --border: #202b38;
-  --border-2: #2a3947;
-  --border-3: #263544;
+  /* ── lines: the primary material ──
+     --border is the drawn line and carries most of the structure. --border-2 is the heavier line
+     a drawing uses for a vessel wall or a section boundary. */
+  --border: #2e3136;
+  --border-2: #3e4249;
+  --border-3: #34373c;
 
-  /* type. In dark the worst case is the LIGHTEST surface a token can land on, the mirror of
-     light's rule, so these are checked against --panel-2 #161e29 and the page radial's
-     --bg-glow-top #10202a rather than against --bg.
-     --muted-2 was #5f7186: 3.56:1 on --panel, 3.35:1 on --panel-2, 3.32:1 on --bg-glow-top. It
-     shipped that way because fixing it changes existing dark rendering, and only light was
-     corrected at the time (deferred from review #43). The large-text 3:1 exemption never applied:
-     this token styles .float-metric small at 10.5px, .job-event-meta and .ring-hint at 11.5px and
-     .sidebar-foot at 12px, all normal text. #75879a is the MINIMAL lightening that clears 4.5:1 on
-     every surface the token actually lands on (--panel 4.83, --panel-2 4.54, --bg-glow-top 4.51,
-     --bg-2 5.05, --well 4.79, --scrim over --well 4.82), which preserves the largest separation
-     still available from --muted, 1.23:1. Light's ramp separation is 1.32:1 and dark cannot match
-     it while clearing AA, the same squeeze documented in the light block. Dark captions therefore
-     render slightly lighter than before: that is the intended, visible cost of the fix.
-     --panel-3 measures 4.25:1 and is not a counter-example, it carries no --muted-2 text (its one
-     use is the .utilization-track bar). */
-  --text: #e6edf3;
-  --text-2: #c9d4df;
-  --muted: #8697a8;
-  --muted-2: #75879a;
+  /* ── lettering ──
+     Warm off-white rather than pure white: this is ink on a dark sheet, and #fff reads as
+     emitted light. Ratios against --panel-3 #232529. */
+  --text: #e9e7e2;      /* 12.4:1 */
+  --text-2: #bab6ae;    /*  8.0:1 */
+  --muted: #a09c94;     /*  5.7:1 */
+  /* Measured, not asserted. #8d8981 claimed 4.5 and delivered 4.41 on --panel-3, the lightest
+     surface it can land on in dark, so it cleared AA nowhere that mattered. */
+  --muted-2: #918d85;   /*  4.64 --panel-3 · 4.93 --panel-2 · 5.16 --panel · 5.42 --bg */
+  --color-muted: var(--muted);
+  --n: var(--text);
 
-  /* accent (teal): the brand hue and the money-in-motion hue */
-  --accent: #2dd4bf;
-  --accent-bright: #62e6d6;
-  --accent-dim: #123c39;
-  --accent-bg: #0c1f1d;
-  --accent-border: #1c5c50;
-  --accent-glow-2: rgba(45, 212, 191, 0.22);
-  --accent-glow-3: rgba(45, 212, 191, 0.16);
-  --accent-wash: rgba(45, 212, 191, 0.08);
-  --on-accent: #04120e;
-  --cta-from: #159b96;
-  --cta-to: #23b7ae;
-  --cta-glow: rgba(35, 183, 174, 0.13);
-  --pipe-accent: #1f4a45;
+  /* ── state: the only colour in the system ──
+     Instrument conventions, desaturated to sit on a drawing rather than shout over it. */
+  --pos: #7cb389;             /* open · flowing · settled */
+  --pos-bg: #16241a;
+  --pos-bg-strong: #1b2f21;
+  --pos-border: #27412e;
+  --pos-border-strong: #35583d;
+  --pos-glow: transparent;    /* ink does not emit */
 
-  /* positive: settled, repaid, accepted */
-  --pos: #34d399;
-  --pos-bg: #0e2018;
-  --pos-border: #1c4634;
-  --pos-bg-strong: #103129;
-  --pos-border-strong: #176d55;
-  --pos-glow: rgba(52, 211, 153, 0.5);
+  --neg: #d47c74;             /* alarm · refused */
+  --neg-bg: #2a1616;
+  --neg-border: #4a2724;
+  --on-neg: #1a0f0e;
 
-  /* negative: refunded, written off, failed */
-  --neg: #fb7185;
-  --neg-bg: #230b12;
-  --neg-border: #58222f;
-  --on-neg: #150406;
+  --warn: #d1a45c;            /* caution · pending */
+  --warn-bg: #271e10;
+  --warn-border: #453519;
 
-  /* warning: awaiting a human, degraded, waiting on a feed */
-  --warn: #fbbf24;
-  --warn-bg: #201806;
-  --warn-border: #574314;
+  /* The process line: what is live and flowing now. A drafting teal, not a signal cyan. */
+  --accent: #6ba3a8;
+  --accent-bright: #8bc0c4;
+  --accent-dim: #4d7f83;
+  --accent-bg: #16262a;
+  --accent-border: #244a4f;
+  --accent-wash: rgba(107, 163, 168, 0.12);
+  --accent-glow-2: transparent;
+  --accent-glow-3: transparent;
+  --on-accent: #0e1416;
 
-  /* informational: in flight, in progress */
-  --sky: #38bdf8;
-  --sky-bright: #55c8ec;
-  --sky-bg: #0b1c26;
-  --sky-border: #14374a;
-  --sky-border-strong: #1c5d72;
-  --sky-wash: rgba(56, 189, 248, 0.12);
+  /* Both stops identical: belt and braces, since no gradient declaration remains anywhere. */
+  --cta-from: #6ba3a8;
+  --cta-to: #6ba3a8;
+  --cta-glow: transparent;
 
-  --violet: #a78bfa;
-  --tick: rgba(134, 151, 168, 0.45);
-  /* The soft focus wash used where a field cannot carry a full outline (.watcher-config packs its
-     inputs against a hairline grid). It has to be a per-theme token, not one shared alpha: the
-     same 45% mix measured 2.67:1 in dark and 2.03:1 in light against the composited field, and the
-     alpha that reaches the 3:1 a focus indicator owes is 50% in dark but 67% in light, so one
-     bumped number would fix dark and leave light failing (deferred from review #43). Both values
-     carry margin over their own floor: dark 55% = 3.37:1, light 70% = 3.23:1. */
+  /* --sky is the focus family. It maps onto the process line, so focus reads as "this is the
+     live element" — the same idea the accent already carries. */
+  --sky: #6ba3a8;
+  --sky-bright: #8bc0c4;
+  --sky-bg: #16262a;
+  --sky-border: #244a4f;
+  --sky-border-strong: #33686e;
+  --sky-wash: rgba(107, 163, 168, 0.12);
+
+  --violet: #9b8fc4;          /* a distinct actor hue in the feed, nothing more */
+  --tick: rgba(160, 156, 148, 0.42);
+  --pipe-accent: var(--accent);
+  --workforce-line: var(--border-2);
+  --actor-color: var(--muted);
+
+  /* Focus owes 3:1 against the field it sits on. 55% reaches 3.4:1 here; light needs a different
+     figure entirely, so this cannot be one shared alpha. */
   --focus-wash: color-mix(in srgb, var(--sky) 55%, transparent);
-  /* the activity-feed avatar plate: how much actor hue, mixed into what */
-  --avatar-tint: 16%;
+  --avatar-tint: 14%;
   --avatar-tint-base: var(--bg-2);
 
-  --radius: 12px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
-  --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.22);
+  /* Drawn boxes have corners. 2px stops them reading as a rendering artefact without ever
+     reading as a rounded card. */
+  --radius: 2px;
+
+  /* A drawing is flat. Depth is line weight. */
+  --shadow: none;
+  --shadow-lg: none;
 }
 
-/* ══ Light theme ══
+/* ══ Vellum ══
  *
- * The same system with surfaces inverted, not a different design. Two things are NOT simply
- * lightened:
+ * The canonical rendition: ink on warm drafting paper. Dark ships as the default only because
+ * changing a running dashboard's appearance underneath its operator mid-hackathon costs more than
+ * a non-canonical default does. Both are the same drawing under different light.
  *
- *  - The semantic hues are re-picked, not reused. #34d399, #fbbf24 and #38bdf8 read well on a
- *    dark panel and fail WCAG AA against a light one (a 3.19:1 amber is not a warning anyone can
- *    read). The light values below are the darker members of each ramp, chosen so body-size text
- *    clears 4.5:1 against the DARKEST surface it can land on, not merely against white: several
- *    of these tokens style captions sitting on --well or --panel-3, and checking only against
- *    --panel is how --muted-2 and --sky-bright initially shipped values that failed. The
- *    ui-rework draft used #059669 / #D97706 / #0284C7 here, all of which fail; these are their
- *    AA-passing counterparts.
- *  - Shadows and washes lose most of their strength. Dark UI separates surfaces with light
- *    (glows, inset highlights); light UI separates them with shadow and hairlines, and a wash
- *    tuned for a dark panel turns into a muddy stain on a white one.
+ * Not an inversion. The ground is warm paper rather than white, because white plus hairlines
+ * reads as a spreadsheet; the ink is a soft near-black rather than #000, which on paper reads as
+ * printed rather than rendered. Ratios are against --panel #faf8f3.
  */
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --bg: #f6f7f9;
-  --bg-2: #eef1f5;
-  --bg-glow-top: #e6ecf4;
-  --well: #f2f4f7;
-  --well-2: #eaeef3;
-  --panel: #ffffff;
-  --panel-2: #fbfcfd;
-  --panel-3: #f2f5f8;
-  --panel-a: rgba(255, 255, 255, 0.96);
-  --panel-b: rgba(248, 250, 252, 0.96);
-  --scrim: rgba(255, 255, 255, 0.82);
-  --inset: rgba(15, 23, 42, 0.04);
-  --inset-2: rgba(15, 23, 42, 0.025);
-  --hover: rgba(15, 23, 42, 0.035);
+  --bg: #efece4;
+  --bg-2: #f4f1ea;
+  --bg-glow-top: #efece4;
+  --well: #e7e3d9;
+  --well-2: #e1dcd1;
+  --panel: #faf8f3;
+  --panel-2: #f4f1ea;
+  --panel-3: #eeeae1;
+  --panel-a: rgba(250, 248, 243, 0.97);
+  --panel-b: rgba(244, 241, 234, 0.97);
+  --scrim: rgba(250, 248, 243, 0.8);
+  --inset: rgba(28, 27, 24, 0.06);
+  --inset-2: rgba(28, 27, 24, 0.035);
+  --hover: rgba(28, 27, 24, 0.04);
 
-  --border: #dfe4ea;
-  --border-2: #cbd3dc;
-  --border-3: #d5dce4;
+  --border: #cdc7b9;
+  --border-2: #b2ab9a;
+  --border-3: #c2bbac;
 
-  /* The type ramp. Every step clears 4.5:1 against the DARKEST surface it can land on, not merely
-     against white. That surface is --bg-glow-top #e6ecf4, the page radial's 0% stop, and not
-     --well-2 #eaeef3 as this note previously said: .float-live-meta small renders --muted-2 over
-     the radial in the top right of the float page, exactly where the stop is strongest. Measured
-     there the ramp is 13.85 / 7.96 / 5.86 / 4.58, and --muted-2 had to move from #5f6d7d, which
-     was 4.68 on --well-2 but 4.45 on --bg-glow-top: the AA miss was smaller than the dark one but
-     the same miss (found while fixing dark's --muted-2, see the note in :root).
-     An earlier draft had --muted-2 at #7c8b9a (3.00:1 worst) and excused it as large-text-only.
-     That was wrong: this token styles .float-metric small at 10.5px, .job-event-meta and
-     .ring-hint at 11.5px and .sidebar-foot at 12px, all normal text (review: cubic on #43).
-     Fixing only --muted-2 collapsed it into --muted, because AA on small text over light
-     surfaces leaves little room below --muted, so --muted moved down too and the ramp keeps four
-     distinguishable steps. Light --muted at 5.86:1 worst still mirrors dark's 5.55:1 worst.
-     Separation between the bottom two steps is 1.28:1 here and 1.23:1 in dark: that is as much as
-     AA leaves, and it is why neither theme can push --muted-2 further from --muted. */
-  --text: #16202b;
-  --text-2: #3a4757;
-  --muted: #4d5b69;
-  --muted-2: #5d6b7b;
+  --text: #1c1b18;      /* 15.6:1 */
+  --text-2: #45423a;    /*  9.1:1 */
+  --muted: #6a665c;     /*  5.4:1 */
+  /* Measured, not mirrored by eye. #7c776a claimed 4.5 and delivered 4.21 on --panel, 3.96 on
+     --panel-2 and 3.78 on --bg -- it cleared AA on nothing. These are the real ratios for the
+     surfaces this token actually lands on. It still does not clear 4.5 on --well-2 (4.00), so
+     --muted-2 must not be used on that surface; --muted is the token there. */
+  --muted-2: #6e695d;   /*  5.15 --panel · 4.85 --panel-2 · 4.63 --bg */
+  --color-muted: var(--muted);
+  --n: var(--text);
 
-  /* 5.47:1 on white, 4.97:1 on the off-white well */
-  --accent: #0f766e;
-  --accent-bright: #0d9488;
-  --accent-dim: #d8f1ee;
-  --accent-bg: #edfaf8;
-  --accent-border: #a7ddd6;
-  --accent-glow-2: rgba(15, 118, 110, 0.14);
-  --accent-glow-3: rgba(15, 118, 110, 0.1);
-  --accent-wash: rgba(15, 118, 110, 0.05);
-  --on-accent: #ffffff;
-  --cta-from: #0f766e;
-  --cta-to: #12897f;
-  --cta-glow: rgba(15, 118, 110, 0.18);
-  --pipe-accent: #9ed3cc;
+  --pos: #3a7048;      /* 4.97 on --pos-bg, 5.51 on --panel, 5.18 on --panel-2 */
+  --pos-bg: #e6efe4;
+  --pos-bg-strong: #d9e8d8;
+  --pos-border: #bcd2ba;
+  --pos-border-strong: #96b795;
+  --pos-glow: transparent;
 
-  /* 5.48:1 on white; the draft's #059669 was 3.77:1 */
-  --pos: #047857;
-  --pos-bg: #ecfdf5;
-  --pos-border: #a7e3cb;
-  --pos-bg-strong: #d6f5e6;
-  --pos-border-strong: #5cc79b;
-  --pos-glow: rgba(4, 120, 87, 0.24);
-
-  /* 6.29:1 on white */
-  --neg: #be123c;
-  --neg-bg: #fff1f3;
-  --neg-border: #f3c0cb;
+  --neg: #a4443c;
+  --neg-bg: #f4e4e1;
+  --neg-border: #ddbdb8;
   --on-neg: #ffffff;
 
-  /* 5.02:1 on white; the draft's #D97706 was 3.19:1 */
-  --warn: #b45309;
-  --warn-bg: #fffbeb;
-  --warn-border: #f0d59a;
+  --warn: #8a6320;
+  --warn-bg: #f6ecd8;
+  --warn-border: #ddc79a;
 
-  /* 5.93:1 on white; the draft's #0284C7 was 4.10:1 */
-  --sky: #0369a1;
-  /* 6.86:1 on --sky-bg, the only surface it is used on. #0284c7 measured 3.82:1 there and this
-     token is NOT decorative: .permission-chip renders 10px label text in it (review: cubic on
-     #43). Darker also preserves the dark theme's semantics, where -bright means more emphasis. */
-  --sky-bright: #075985;
-  --sky-bg: #f0f8ff;
-  --sky-border: #b3d8ee;
-  --sky-border-strong: #6ab2da;
-  --sky-wash: rgba(3, 105, 161, 0.06);
+  --accent: #35696e;
+  --accent-bright: #27565b;
+  --accent-dim: #6b9498;
+  --accent-bg: #e2eced;
+  --accent-border: #b6cdcf;
+  --accent-wash: rgba(53, 105, 110, 0.1);
+  --accent-glow-2: transparent;
+  --accent-glow-3: transparent;
+  --on-accent: #ffffff;
 
-  --violet: #6d28d9;
-  --tick: rgba(92, 107, 122, 0.4);
-  /* 70%, not dark's 55%: --sky is darker here but the field it washes is near white, so the same
-     alpha buys far less separation. 3.23:1 against the composited field (see the dark note). */
+  --cta-from: #35696e;
+  --cta-to: #35696e;
+  --cta-glow: transparent;
+
+  --sky: #35696e;
+  --sky-bright: #27565b;
+  --sky-bg: #e2eced;
+  --sky-border: #b6cdcf;
+  --sky-border-strong: #7ba3a7;
+  --sky-wash: rgba(53, 105, 110, 0.1);
+
+  --violet: #5d4f8c;
+  --tick: rgba(70, 66, 58, 0.34);
+  --pipe-accent: var(--accent);
+  --workforce-line: var(--border-2);
+  --actor-color: var(--muted);
+
+  /* Light needs a heavier mix than dark to clear 3:1 on the same composited field: 70% against
+     55%. One shared alpha fixes one theme and fails the other. */
   --focus-wash: color-mix(in srgb, var(--sky) 70%, transparent);
-  /* less hue, and over --panel not --bg-2: a light plate must stay lighter than its glyph */
   --avatar-tint: 12%;
-  --avatar-tint-base: var(--panel);
+  --avatar-tint-base: var(--bg-2);
 
-  --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 20px rgba(15, 23, 42, 0.06);
-  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.09);
+  --radius: 2px;
+  --shadow: none;
+  --shadow-lg: none;
 }
+
 
 * { box-sizing: border-box; }
 html, body { padding: 0; margin: 0; }
 body {
-  background: radial-gradient(1200px 600px at 80% -10%, var(--bg-glow-top) 0%, var(--bg) 55%);
+  background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -250,7 +252,7 @@ a { color: inherit; text-decoration: none; }
 /* ── sidebar ── */
 .sidebar {
   border-right: 1px solid var(--border);
-  background: linear-gradient(180deg, var(--bg-2), var(--bg));
+  background: var(--bg);
   padding: 20px 14px;
   display: flex;
   flex-direction: column;
@@ -265,13 +267,26 @@ a { color: inherit; text-decoration: none; }
 .brand-name { font-weight: 700; letter-spacing: -0.02em; font-size: 16px; }
 .nav-link {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 10px; border-radius: 9px; color: var(--muted);
+  padding: 8px 10px; border-radius: var(--radius); color: var(--muted);
   font-weight: 500; transition: background 0.12s, color 0.12s;
 }
+/* Icon and label travel together on the left; the pill stays pushed right by the flex
+   justification above. */
+.nav-label { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* Quieter than the lettering it labels, so the glyph reads as an annotation rather than
+   competing with the word. The active item takes the accent already carried by the rail. */
+.nav-icon { flex: none; display: block; color: var(--muted-2); transition: color 0.12s; }
+.nav-link:hover .nav-icon { color: var(--text-2); }
+.nav-link.active .nav-icon { color: var(--accent); }
 .nav-link:hover { background: var(--panel); color: var(--text); }
-.nav-link.active { background: var(--accent-dim); color: var(--accent); }
-.nav-link .pill { font-size: 11px; background: var(--neg); color: var(--on-neg); border-radius: 999px; padding: 0 7px; font-weight: 700; }
-.sidebar-foot { margin-top: auto; padding: 10px 8px 0; color: var(--muted-2); font-size: 12px; }
+.nav-link.active {
+  color: var(--text);
+  background: none;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.nav-link.active::after { content: ""; }
+.nav-link .pill { font-size: 11px; background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); border-radius: 999px; padding: 0 7px; font-weight: 700; }
+.sidebar-foot { margin-top: auto; padding: 12px 8px 4px; color: var(--muted-2); font-size: 11.5px; line-height: 1.5; min-width: 0; overflow-wrap: anywhere; border-top: 1px solid var(--border); }
 .dot-live { color: var(--pos); }
 
 /* ── main ── */
@@ -297,6 +312,41 @@ a { color: inherit; text-decoration: none; }
 /* ── cards & grid ── */
 .grid { display: grid; gap: 16px; }
 .cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+/* The gauge band.
+ *
+ * Four same-size cards in a row is the page structure the craft floor names as a default to
+ * refuse, and it was this page spine. An instrument panel does not read as four cards; it reads
+ * as ONE strip of gauges divided by rules. So inside a .cols-4 the card loses its box entirely
+ * and the grid gains the drawn frame: hairlines between readings, one border around the set.
+ * No JSX changes, because the markup was never the problem -- the container was. */
+.grid.cols-4 {
+  gap: 0;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.grid.cols-4 > .card {
+  border: 0;
+  background: none;
+  border-radius: 0;
+  padding: 14px 16px 15px;
+  border-left: 1px solid var(--border);
+}
+.grid.cols-4 > .card:first-child { border-left: 0; }
+.grid.cols-4 .stat-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+.grid.cols-4 .stat-value { font-size: 23px; margin-top: 10px; letter-spacing: -0.01em; }
+.grid.cols-4 .stat-sub { margin-top: 6px; font-size: 11.5px; }
+
+@media (max-width: 860px) {
+  .grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
+  .grid.cols-4 > .card:nth-child(3) { border-left: 0; }
+  .grid.cols-4 > .card:nth-child(n+3) { border-top: 1px solid var(--border); }
+}
 .cols-2 { grid-template-columns: 1.4fr 1fr; }
 .activity-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.75fr); gap: 16px; align-items: start; }
 @media (max-width: 900px) {
@@ -306,7 +356,7 @@ a { color: inherit; text-decoration: none; }
   .sidebar { position: static; height: auto; }
 }
 .card {
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px 18px;
@@ -324,9 +374,7 @@ a { color: inherit; text-decoration: none; }
 .hero {
   grid-column: 1 / -1;
   display: flex; align-items: center; justify-content: space-between;
-  background:
-    radial-gradient(600px 200px at 90% 0%, var(--sky-wash), transparent 60%),
-    linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   border: 1px solid var(--border-2);
   border-radius: 16px;
   padding: 22px 26px;
@@ -340,9 +388,7 @@ a { color: inherit; text-decoration: none; }
 /* ── humanized team activity ── */
 .activity {
   overflow: hidden;
-  background:
-    radial-gradient(600px 260px at 70% -20%, var(--accent-wash), transparent 62%),
-    linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -400,7 +446,7 @@ a { color: inherit; text-decoration: none; }
   top: 26px;
   bottom: 26px;
   width: 1px;
-  background: linear-gradient(var(--border-2), var(--border), transparent);
+  background: var(--border);
 }
 .activity-item {
   --actor-color: var(--accent);
@@ -590,9 +636,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 30px 34px 32px;
   border: 1px solid var(--border-2);
   border-radius: 16px;
-  background:
-    radial-gradient(760px 260px at 92% -20%, var(--sky-wash), transparent 62%),
-    linear-gradient(145deg, var(--well), var(--well-2));
+  background: var(--well-2);
   box-shadow: var(--shadow);
 }
 .float-capital-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
@@ -628,8 +672,7 @@ table.t { width: 100%; border-collapse: collapse; }
   inset: 0 auto 0 0;
   min-width: 3px;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--accent-bright));
-  box-shadow: 0 0 18px var(--accent-glow-2);
+  background: var(--accent-bright);
   transition: width 0.45s ease;
 }
 .utilization-track i { z-index: 1; width: 1px; height: 6px; background: var(--tick); }
@@ -643,7 +686,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 19px 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(145deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   box-shadow: var(--shadow);
 }
 .float-metric-symbol {
@@ -692,9 +735,7 @@ table.t { width: 100%; border-collapse: collapse; }
   min-width: 0;
   border: 1px solid var(--border-2);
   border-radius: 16px;
-  background:
-    radial-gradient(680px 240px at 74% -20%, var(--accent-wash), transparent 62%),
-    linear-gradient(145deg, var(--well), var(--well-2));
+  background: var(--well-2);
   box-shadow: var(--shadow);
 }
 .rate-engine { margin-top: 12px; padding: 26px 28px 0; overflow: hidden; }
@@ -719,13 +760,22 @@ table.t { width: 100%; border-collapse: collapse; }
   display: inline-flex;
   padding: 7px 10px;
   border: 1px solid var(--accent-border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--accent-bg);
   color: var(--pos);
   font-size: 11.5px;
   font-weight: 650;
 }
 .rate-delta.is-negative { border-color: var(--neg-border); background: var(--neg-bg); color: var(--neg); }
+/* An absent rate must not wear the accent field and the --pos lettering the delta pill uses for
+   a live, better-than-base figure. Green means settled and flowing here; nothing is flowing when
+   there is no organisation to read. Muted, unfilled, and no longer shouting a value it lacks. */
+.rate-delta.is-absent {
+  border-color: var(--border); background: none; color: var(--muted-2); font-weight: 500;
+}
+.rate-scale-note { margin: 14px 0 0; font-size: 11px; color: var(--muted-2); }
+/* No check mark in this state, so the note carries no badge and drops to the muted floor. */
+.rate-proof-note.is-absent { color: var(--muted-2); font-size: 12px; }
 .rate-derivation {
   min-width: 0;
   padding: 24px 26px;
@@ -762,7 +812,7 @@ table.t { width: 100%; border-collapse: collapse; }
   right: 20px;
   height: 3px;
   border-radius: 99px;
-  background: linear-gradient(90deg, var(--border-2), var(--accent), var(--border-2));
+  background: var(--border-2);
 }
 .rate-marker {
   position: absolute;
@@ -799,7 +849,7 @@ table.t { width: 100%; border-collapse: collapse; }
 }
 .rate-proof-note > span {
   width: 26px; height: 26px; display: grid; place-items: center;
-  border: 1px solid var(--accent); border-radius: 8px; color: var(--accent); font-weight: 800;
+  border: 1px solid var(--accent); border-radius: var(--radius); color: var(--accent); font-weight: 800;
 }
 .float-advances { margin-top: 12px; padding: 26px 28px 28px; }
 .float-advance-summary { margin: 4px 0 0; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -947,11 +997,11 @@ table.t { width: 100%; border-collapse: collapse; }
 .portal-shell {
   position: fixed; inset: 0; z-index: 50; overflow-y: auto;
   display: flex; align-items: flex-start; justify-content: center;
-  padding: 8vh 20px 60px; background: radial-gradient(1200px 600px at 50% -10%, var(--bg-2), var(--bg));
+  padding: 8vh 20px 60px; background: var(--bg);
 }
 .portal-card {
   width: 100%; max-width: 520px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 16px; padding: 34px 34px 30px;
+  border-radius: var(--radius); padding: 34px 34px 30px;
 }
 .portal-brand { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 14px; font-weight: 600; }
 .portal-title { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
@@ -964,7 +1014,7 @@ table.t { width: 100%; border-collapse: collapse; }
    there: 6.52:1 dark / 4.62:1 light against the fill, where --accent-border would drop it to
    4.18:1 / 3.64:1. Swapping it would weaken the primary CTA's edge, not fix it. */
 .portal-accept {
-  width: 100%; min-height: 46px; border-radius: 10px; border: 1px solid var(--accent-dim);
+  width: 100%; min-height: 46px; border-radius: var(--radius); border: 1px solid var(--accent-dim);
   background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 700; font-size: 15px; cursor: pointer;
 }
 .portal-accept:disabled { opacity: 0.6; cursor: default; }
@@ -982,27 +1032,107 @@ table.t { width: 100%; border-collapse: collapse; }
 .portal-disclaimer { margin: 18px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; font-style: italic; }
 
 /* ── V8 approvals inbox ── */
-.approval-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.approval-amount { text-align: right; white-space: nowrap; }
-.approval-purpose { margin: 12px 0 8px; color: var(--text); font-size: 14px; line-height: 1.5; }
-.approval-reason {
-  width: 100%; margin: 12px 0; padding: 10px 12px; min-height: 58px; resize: vertical;
-  background: var(--bg); color: var(--text); border: 1px solid var(--border-2); border-radius: 8px;
-  font: inherit; font-size: 13px;
+/* ══ Approvals ══
+ *
+ * The one surface the direction contract allows colour on, so the rules for it are stricter than
+ * anywhere else, not looser. Colour appears on exactly three things: the valve, the two decision
+ * controls, and a closed window. Everything else is ink.
+ *
+ * Approve and refuse are deliberately identical in size, weight, padding and border, and differ
+ * only in hue. PRODUCT.md principle 3 says refusing must be as easy and as legible as approving,
+ * and a "primary" style on either one would break that. Request-cheaper is separated by position
+ * rather than demoted by weight, because it is a different answer, not a lesser one.
+ */
+.approval-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.approval {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 18px 20px;
 }
-/* The only `outline: none` in this file used to substitute a border swap to --accent-dim, which
-   assumes that token is darker than the field. In light it is LIGHTER, so focusing dropped the
-   border from 1.41:1 to 1.10:1 against the field: focus made the indicator worse. It never
-   conformed in dark either (a 1.59:1 isoluminant nudge). A real ring, matching the pattern this
-   file already uses for .theme-toggle, at 5.39:1 light / 8.26:1 dark against the field.
-   --sky rather than --accent because approvals/page.tsx already paints the deep-linked card's
-   border with --accent (audit finding). */
+/* The deep-linked request. A heavier left rule rather than a tinted border: the accent now equals
+   the focus ring, so tinting the edge made "you were sent here" and "this has focus" identical. */
+.approval.is-linked { box-shadow: inset 3px 0 0 var(--accent); }
+.approval:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+.approval.is-expired { opacity: 0.72; }
+
+.approval-line { display: flex; align-items: flex-start; gap: 14px; }
+.approval-ident { min-width: 0; flex: 1; }
+.approval-resource {
+  margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--text);
+  overflow-wrap: anywhere;
+}
+.approval-origin { margin: 3px 0 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.approval-amount { text-align: right; white-space: nowrap; display: flex; align-items: baseline; gap: 5px; }
+.approval-figure { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.approval-unit { font-size: 11px; color: var(--muted); }
+/* Every figure names its source (PRODUCT principle 1). */
+.approval-source { margin: 10px 0 0; font-size: 11px; color: var(--muted-2); }
+.approval-purpose { margin: 12px 0 0; color: var(--text-2); font-size: 13.5px; line-height: 1.55; }
+
+.approval-facts { margin: 14px 0 0; display: grid; gap: 7px; }
+.approval-facts div { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); padding-top: 7px; }
+.approval-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.approval-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.approval-facts dd.is-expired { color: var(--neg); }
+.approval-hash { color: var(--muted-2); }
+
+/* The valve. Ink while it waits, and only then coloured by the answer it received. A pending
+   valve is not an alarm, so it is not painted like one -- the same rule the vessel thresholds
+   follow. */
+.valve { flex: none; color: var(--text-2); }
+.valve-dead { stroke: var(--border-2); stroke-dasharray: 2 3; }
+.approval.approved .valve { color: var(--pos); }
+.approval.rejected .valve { color: var(--neg); }
+.approval.alternative_requested .valve { color: var(--warn); }
+
+.approval-label { display: block; margin: 16px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.approval-reason {
+  width: 100%; padding: 10px 12px; min-height: 58px; resize: vertical;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border-2);
+  border-radius: var(--radius); font: inherit; font-size: 13px;
+}
+/* The UA default placeholder is roughly 54% of --text, which composites below 4.5:1 in light.
+   Stated explicitly so the hint is readable rather than inherited. */
+.approval-reason::placeholder { color: var(--muted-2); opacity: 1; }
 .approval-reason:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-.approval-result { margin: 12px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.approval-result.approved, .approval-result.alternative_requested { color: var(--pos); }
-.approval-result.rejected { color: var(--neg); }
-.approval-result.STALE_VIEW, .approval-result.APPROVAL_EXPIRED, .approval-result.ALREADY_DECIDED,
-.approval-result.UNREACHABLE, .approval-result.NO_DAEMON { color: var(--warn); }
+.approval-hint { margin: 6px 0 0; font-size: 11.5px; color: var(--muted-2); line-height: 1.5; }
+
+.approval-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.approval-action {
+  display: inline-flex; min-height: 34px; min-width: 104px;
+  align-items: center; justify-content: center;
+  padding: 6px 16px;
+  border: 1px solid var(--border-2); border-radius: var(--radius);
+  background: var(--bg-2); color: var(--text-2);
+  font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.approval-action.approve { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
+.approval-action.reject { color: var(--neg); border-color: var(--neg-border); background: var(--neg-bg); }
+/* Separated rather than demoted: a different answer, not a weaker one. */
+.approval-action.alternative { margin-left: auto; }
+.approval-action:hover:not(:disabled) { border-color: var(--muted-2); }
+.approval-action:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+/* The submit state had no styling at all, so a decision in flight looked identical to an idle
+   button and invited the second click. */
+.approval-action:disabled { opacity: 0.45; cursor: not-allowed; }
+/* The suggested action from a deep link. A dotted underline, not an outline: an inline outline
+   here outranked :focus-visible and made the two states indistinguishable. */
+.approval-action[data-suggested] { text-decoration: underline dotted; text-underline-offset: 4px; }
+
+.approval-note { margin: 12px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+.approval-note.is-expired, .approval-note.is-failure { color: var(--warn); }
+.approval-code { color: var(--muted-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* A decided request, kept on screen after it leaves the pending list. */
+.approval.is-settled { background: none; border-style: dashed; }
+
+/* The live region carries text for a screen reader and must not take layout. Not display:none,
+   which would stop it being announced at all. */
+.approval-announce {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
 
 /* ── A12 workforce manifest gallery ── */
 .workforce-page {
@@ -1036,9 +1166,7 @@ table.t { width: 100%; border-collapse: collapse; }
 .manifest-gallery {
   border: 1px solid var(--border);
   border-radius: 14px;
-  background:
-    radial-gradient(560px 220px at 8% -30%, var(--accent-wash), transparent 70%),
-    linear-gradient(180deg, var(--panel-a), var(--panel-b));
+  background: var(--panel-b);
   box-shadow: var(--shadow);
 }
 .workforce-active { padding: 18px 20px 20px; }
@@ -1075,7 +1203,6 @@ table.t { width: 100%; border-collapse: collapse; }
   display: inline-block;
   border-radius: 50%;
   background: currentcolor;
-  box-shadow: 0 0 8px color-mix(in srgb, currentcolor 65%, transparent);
 }
 .active-team-line {
   display: flex;
@@ -1097,7 +1224,7 @@ table.t { width: 100%; border-collapse: collapse; }
   padding: 11px;
   border: 1px solid var(--border-2);
   border-radius: 10px;
-  background: linear-gradient(145deg, var(--panel-a), var(--panel-b));
+  background: var(--panel-b);
 }
 .active-agent-icon,
 .manifest-icon {
@@ -1166,7 +1293,7 @@ table.t { width: 100%; border-collapse: collapse; }
   min-width: 0;
   border: 1px solid var(--border-2);
   border-radius: 12px;
-  background: linear-gradient(160deg, var(--well), var(--bg-2));
+  background: var(--bg-2);
 }
 .manifest-featured {
   padding: 16px;
@@ -1336,7 +1463,7 @@ table.t { width: 100%; border-collapse: collapse; }
   margin-top: 11px;
   border: 0;
   border-radius: 7px;
-  background: linear-gradient(90deg, var(--cta-from), var(--cta-to));
+  background: var(--cta-to);
   color: var(--on-accent);
   font: inherit;
   font-size: 12px;
@@ -1452,7 +1579,7 @@ table.t { width: 100%; border-collapse: collapse; }
 /* budget bar */
 .job-budget { display: grid; gap: 8px; }
 .job-budget-bar { height: 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border); overflow: hidden; }
-.job-budget-fill { height: 100%; background: linear-gradient(90deg, var(--sky), var(--accent)); transition: width 0.4s ease; }
+.job-budget-fill { height: 100%; background: var(--accent); transition: width 0.4s ease; }
 .job-budget-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; font-size: 13px; font-variant-numeric: tabular-nums; }
 
 .job-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
@@ -1460,7 +1587,7 @@ table.t { width: 100%; border-collapse: collapse; }
 
 /* per-job timeline */
 .job-timeline { list-style: none; margin: 0; padding: 0; position: relative; }
-.job-timeline::before { content: ""; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 1px; background: linear-gradient(var(--border-2), var(--border), transparent); }
+.job-timeline::before { content: ""; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 1px; background: var(--border); }
 .job-event { display: flex; gap: 12px; padding: 8px 0; position: relative; }
 .job-event-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); margin-top: 5px; flex: none; z-index: 1; }
 .job-event.tone-funding .job-event-dot { background: var(--accent); }
@@ -1506,7 +1633,7 @@ table.t { width: 100%; border-collapse: collapse; }
 /* ── F1 Live Money Graph + F2 Score Ring (V10/V11, PRD §8) ── */
 .mg {
   overflow: hidden;
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -1575,7 +1702,10 @@ table.t { width: 100%; border-collapse: collapse; }
 .mg-drop-fall-op { fill: var(--pos); }
 
 .mg-box { fill: var(--panel-2); stroke: var(--border-2); stroke-width: 1.5; }
-.mg-node .mg-box[style] { stroke: var(--n); filter: drop-shadow(0 0 8px color-mix(in srgb, var(--n) 32%, transparent)); }
+/* The glow that used to live here rendered an 8px drop-shadow on the largest element below the
+   vessel, in the first viewport, while the file header three hundred lines up asserts that no
+   glow exists anywhere. Ink does not emit. Emphasis is stroke weight. */
+.mg-node .mg-box[style] { stroke: var(--n); }
 .mg-name { fill: var(--muted); font-size: 13px; font-weight: 600; text-anchor: middle; }
 .mg-bal { fill: var(--text); font-size: 14px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
 
@@ -1614,7 +1744,7 @@ table.t { width: 100%; border-collapse: collapse; }
 }
 
 /* ── theme toggle ── */
-.sidebar-foot-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sidebar-foot-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .theme-toggle {
   width: 30px; height: 30px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
@@ -1650,7 +1780,7 @@ table.t { width: 100%; border-collapse: collapse; }
  * UI is built in, and the highlight would have needed a new white literal to express. Surfaces here
  * are flat fills separated by hairlines and one shadow token, with no gradient and no glow.
  *
- * .card-shell is a sibling of .card, not a replacement: .card keeps its gradient and its 12px
+ * .card-shell is a sibling of .card, not a replacement: .card keeps its own radius and border weight
  * radius for the pages that already use it, and nothing here restyles it.
  *
  * Contrast, computed rather than eyeballed, dark / light, worst case across the three surfaces a
@@ -1666,9 +1796,8 @@ table.t { width: 100%; border-collapse: collapse; }
 .card-shell {
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius);
   background: var(--panel);
-  box-shadow: var(--shadow);
 }
 /* A real header row, so a card's title is a landmark a screen reader can jump to and not a styled
    paragraph. 46px is the floor, not the height: a two-line title grows the row. */
@@ -1705,7 +1834,7 @@ table.t { width: 100%; border-collapse: collapse; }
    optional here. */
 .card-well {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--inset);
 }
 
@@ -1785,3 +1914,282 @@ table.t { width: 100%; border-collapse: collapse; }
 @media (prefers-reduced-motion: reduce) {
   .page-header h1, .page-header-sub, .page-header-aside { animation: none; }
 }
+
+/* ── the pool vessel ──
+ * The drawing is the hero. Strokes carry everything; no fill does structural work. */
+.vessel { margin: 0; display: grid; grid-template-columns: minmax(0,1fr) 190px; gap: 22px; align-items: center;
+  border: 1px solid var(--border); background: var(--panel); padding: 18px 20px; }
+.vessel-svg { width: 100%; height: auto; display: block; overflow: visible; }
+.v-wall { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
+.v-fill { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1; }
+.v-unknown line { stroke: var(--border-2); stroke-width: 1; stroke-dasharray: 3 5; }
+/* A cap is a threshold, not an alarm. Drawn as an ordinary annotation until the level actually
+   approaches it -- permanent red at 0% utilisation would make the colour decorative, which is the
+   one thing the semantic-colour rule forbids. */
+.v-threshold line { stroke: var(--border-2); stroke-width: 1; stroke-dasharray: 6 4; }
+.v-threshold text { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+.v-threshold.near line { stroke: var(--warn); }
+.v-threshold.near text { fill: var(--warn); }
+.v-threshold.at line { stroke: var(--neg); }
+.v-threshold.at text { fill: var(--neg); }
+.v-empty { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+.v-unknown text { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+.v-pipe path { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
+.v-pipe text { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+.v-pipe-dim path { stroke: var(--border-2); }
+.v-pipe-dim text { fill: var(--muted-2); }
+.v-callout line { stroke: var(--border-2); stroke-width: 1; }
+.vessel-read { border-left: 1px solid var(--border); padding-left: 20px; }
+.vessel-primary { display: flex; align-items: baseline; gap: 6px; }
+.vessel-figure { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.vessel-unit { font-size: 12px; color: var(--muted); }
+.vessel-source { margin: 6px 0 14px; font-size: 11px; color: var(--muted-2); line-height: 1.5; }
+.vessel-facts { margin: 0; display: grid; gap: 9px; }
+.vessel-facts div { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.vessel-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.vessel-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+/* An absent figure must not carry the same authority as a chain-read one. Same size, so the row
+   still aligns, but dropped to the muted floor so the eye reads it as a note, not a value. */
+.vessel-facts dd.is-absent { color: var(--muted-2); font-variant-numeric: normal; }
+.vessel-note { margin: 12px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted-2); border-top: 1px solid var(--border); padding-top: 10px; }
+@media (max-width: 820px) {
+  .vessel { grid-template-columns: 1fr; }
+  .vessel-read { border-left: 0; border-top: 1px solid var(--border); padding: 16px 0 0; }
+}
+
+.mb { margin-bottom: 12px; }
+
+/* ══ Jobs index ══
+ *
+ * A schedule of drawn rows rather than a table, for one reason: against a real daemon three of the
+ * four old columns are empty by contract, and a table cell has nowhere to say WHY it is empty. A
+ * row can. Each absent field states what it is waiting on, in the muted register, so a blank is
+ * never mistaken for a zero.
+ *
+ * Deliberately the same register as .approval-* rather than a third vocabulary: identity left,
+ * money right, a source line under it, then a dt/dd fact table over hairlines.
+ */
+.jobs-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.jobs-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 18px 20px;
+}
+.jobs-line { display: flex; align-items: flex-start; gap: 14px; }
+.jobs-ident { min-width: 0; flex: 1; }
+.jobs-title {
+  margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--text);
+  overflow-wrap: anywhere;
+}
+.jobs-origin { margin: 3px 0 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.jobs-amount { text-align: right; white-space: nowrap; display: flex; align-items: baseline; gap: 5px; }
+.jobs-figure { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.jobs-unit { font-size: 11px; color: var(--muted); }
+/* Every figure names its source (PRODUCT principle 1). */
+.jobs-source { margin: 10px 0 0; font-size: 11px; color: var(--muted-2); }
+
+.jobs-facts { margin: 14px 0 0; display: grid; gap: 7px; }
+.jobs-facts div { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; border-top: 1px solid var(--border); padding-top: 7px; }
+.jobs-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.jobs-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
+.jobs-hash { color: var(--muted-2); font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; }
+.jobs-sub { color: var(--muted-2); font-size: 11.5px; }
+
+/* An absent field is not a value. Muted, and tabular figures off so it can never be mistaken for
+   one -- the same treatment .vessel-facts dd.is-absent uses on the Overview. */
+.jobs-row .is-absent { color: var(--muted-2); font-variant-numeric: normal; font-size: 11.5px; }
+
+/* The surface's only navigation affordance previously used .feed-link, which has no rule anywhere
+   in this stylesheet, so it inherited `a { color: inherit; text-decoration: none }` and rendered as
+   plain body text. A link has to look like one. */
+.jobs-open {
+  display: inline-block; margin-top: 14px;
+  color: var(--accent); font-size: 12.5px; font-weight: 600;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.jobs-open:hover { color: var(--accent-bright); }
+.jobs-open:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
+/* Was a `title` tooltip on a non-focusable span: unreachable by keyboard, unreliable for AT. */
+.jobs-blocked { margin: 14px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--muted-2); }
+
+/* ══ Settlement waterfall (job detail) ══
+ *
+ * The escrow drawn as a column split in proportion to where it actually goes, so the reader sees
+ * that the pool is satisfied before the operator instead of subtracting two numbers. Order is
+ * carried by stroke weight, reusing PoolVessel .v-pipe / .v-pipe-dim: colour here would have to
+ * mean something, and "first" is not an alarm.
+ */
+.wf { margin: 12px 0 0; display: grid; gap: 12px; }
+.wf-svg { width: 100%; height: auto; display: block; overflow: visible; }
+/* The single fill in the system idiom: a wash with a real stroke doing the structural work. */
+.wf-pool { fill: var(--accent-wash); stroke: none; }
+.wf-split { stroke: var(--accent); stroke-width: 1.25; }
+.wf-callout line { stroke: var(--border-2); stroke-width: 1; }
+.wf-fig { fill: var(--text); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.wf-lab { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+.wf-note { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); }
+.wf-terminal { margin: 12px 0 0; font-size: 13px; line-height: 1.55; color: var(--text-2); }
+
+/* ══ Job detail, converted ══ */
+/* .stat-sub never reset its bottom margin, so four call sites patched the UA 1em by hand with
+   four different inline values. One rule instead. */
+.stat-sub { margin-bottom: 0; }
+/* A pill box in a 2px world. The dots stay round: a dot is a dot. */
+.job-chip { border-radius: var(--radius); }
+.job-chip.is-closed { color: var(--muted); border-color: var(--border-2); }
+.job-budget-bar { border-radius: var(--radius); }
+/* Unknown is not zero: an empty bar asserts nothing-spent, so unknown is hatched instead. */
+.job-budget-bar.is-unknown {
+  background-image: repeating-linear-gradient(
+    135deg, transparent, transparent 4px, var(--border-2) 4px, var(--border-2) 5px
+  );
+}
+/* The current stage used box-shadow with --accent-glow-3, which is transparent, so it rendered
+   nothing and left the rail colour-only. A drawn ring instead. */
+.job-stage.is-current .job-stage-dot { box-shadow: none; outline: 1.25px solid var(--accent); outline-offset: 2px; }
+/* Stated in text for AT; the visual state is already carried by the dot and the weight. */
+.job-stage-state { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* .feed-link had no rule anywhere in this file, so both call sites on this page rendered as
+   plain grey body text indistinguishable from the timestamp beside them. */
+.job-txlink { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.job-txlink:hover { color: var(--accent-bright); }
+.job-txlink:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
+/* Focusable so the full hash in the accessible name is reachable by keyboard. */
+.job-hashv:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
+
+/* ══ Customer portal, converted ══
+ *
+ * Same tokens and the same flat register as the owner surfaces, and deliberately none of the
+ * instrument vocabulary: this reader arrived from one link to accept one deliverable, and owes
+ * nobody a drafting language to do it.
+ */
+.portal-jobid { word-break: break-all; font-variant-numeric: tabular-nums; }
+.portal-receipt-title { margin: 0 0 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.portal-total { margin: 0; font-size: 15px; display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-variant-numeric: tabular-nums; }
+/* Absent is not zero, and on a receipt that distinction is the customer's money. */
+.portal-absent { color: var(--muted-2); font-size: 12.5px; font-variant-numeric: normal; }
+.portal-proof { margin: 14px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.portal-proof code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text-2); }
+.portal-accept:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
+/* ══ Audit ══
+ *
+ * A schedule of references, not a drawing: nothing here is flowing, so there is no instrument to
+ * draw. The one thing every row owes the reader is somewhere independent to follow it, which is
+ * why the reference link is the only coloured element on the page.
+ */
+.audit-lede { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 68ch; }
+.audit-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.audit-row { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; padding: 12px 0; border-top: 1px solid var(--border); }
+.audit-row:first-child { border-top: none; }
+.audit-row-main { min-width: 0; }
+.audit-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.audit-role { margin: 3px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; max-width: 56ch; }
+/* The reference out. This is the page's only accent, because following it is the page's point. */
+.audit-ref { display: inline-block; flex: none; color: var(--accent); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.audit-ref:hover { color: var(--accent-bright); }
+.audit-ref:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
+.audit-ref code { font-family: ui-monospace, "Cascadia Code", monospace; }
+.audit-inline { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+/* The two settlement legs, in log order. The order is the evidence, so it is numbered and the
+   rows are not reorderable by styling. */
+.audit-legs { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 0; counter-reset: leg; }
+.audit-leg { display: grid; grid-template-columns: 74px 96px auto 1fr; gap: 14px; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.audit-leg-index { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.audit-leg-to { font-size: 13px; font-weight: 600; }
+.audit-leg-amount { font-size: 15px; font-weight: 600; }
+.audit-unit { font-size: 10.5px; color: var(--muted); font-weight: 400; }
+.audit-leg-detail { font-size: 11.5px; color: var(--muted-2); text-align: right; }
+.audit-note { margin: 0 0 14px; font-size: 12.5px; line-height: 1.6; color: var(--text-2); max-width: 68ch; }
+.audit-note code, .audit-gap-detail code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text); }
+
+/* The gaps. Deliberately the same weight as the proofs above: an audit page that whispered its
+   absences and shouted its evidence would be doing the thing it exists to prevent. */
+.audit-gaps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.audit-gaps li { display: grid; gap: 3px; padding: 11px 0; border-top: 1px solid var(--border); }
+.audit-gap-claim { font-size: 13px; font-weight: 600; color: var(--text); }
+.audit-gap-detail { font-size: 12px; color: var(--muted); line-height: 1.55; max-width: 68ch; }
+@media (max-width: 640px) {
+  .audit-row { flex-direction: column; gap: 8px; }
+  .audit-leg { grid-template-columns: 1fr; gap: 2px; }
+  .audit-leg-detail { text-align: left; }
+}
+
+/* ══ Workforce, converted ══ */
+/* The role marks are drawn now, so the container is a box for an SVG rather than a type slot. */
+.active-agent-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--text-2); }
+.role-mark { display: block; }
+/* The section states an authority model, not a live roster, and says so at the muted floor so the
+   caveat is present without competing with the roles it qualifies. */
+.workforce-caveat { margin: 14px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); max-width: 68ch; }
+
+/* ══ Settings ══
+ *
+ * A configuration record, so it is set as one: label left, state right, hairlines between. The
+ * only colour is on whether a value is present, because that is the single fact each row carries.
+ */
+.settings-lede { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 68ch; }
+.settings-body { margin: 0 0 12px; font-size: 13px; line-height: 1.6; color: var(--text-2); max-width: 70ch; }
+.settings-body code, .settings-note code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text); }
+.settings-note { margin: 12px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); max-width: 70ch; }
+
+.settings-facts { margin: 0; display: grid; gap: 0; }
+.settings-facts div { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; padding: 9px 0; border-top: 1px solid var(--border); }
+.settings-facts div:first-child { border-top: none; }
+.settings-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.settings-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
+.settings-mono { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text-2); word-break: break-all; }
+
+.settings-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.settings-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 13px 0; border-top: 1px solid var(--border); }
+.settings-row:first-child { border-top: none; }
+.settings-row-main { min-width: 0; }
+.settings-key { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; color: var(--text); word-break: break-all; }
+/* Marks a row whose value is a credential, so the reason it is never printed is on screen. */
+.settings-secret { margin-left: 8px; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--warn); }
+.settings-enables { margin: 4px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); max-width: 62ch; }
+/* Not set is the ordinary case, not an alarm: most of these are optional overrides, and painting
+   them red would make the two that matter invisible among nine that do not. */
+.settings-state { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted-2); }
+.settings-state.is-set { color: var(--pos); }
+@media (max-width: 640px) {
+  .settings-row { flex-direction: column; gap: 6px; }
+  .settings-facts div { flex-direction: column; gap: 2px; }
+  .settings-facts dd { text-align: left; }
+}
+
+/* ══ Pending approvals, on the Overview ══
+ *
+ * The first viewport's one coloured region, per the direction contract. --warn because a purchase
+ * held for a decision is caution, not alarm, and the colour appears ONLY when something is
+ * actually waiting -- a coloured zero would make the hue decorative, which is the one thing the
+ * semantic-colour rule forbids.
+ */
+.pending { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2); padding: 16px 20px; }
+.pending.is-quiet { background: none; }
+.pending.is-waiting {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  border-color: var(--warn-border); background: var(--warn-bg);
+}
+.pending-count { flex: none; font-size: 30px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--warn); }
+.pending-text { flex: 1; min-width: 220px; }
+.pending-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.pending-body { margin: 3px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+.pending.is-quiet .pending-body { margin: 0; }
+/* The primary action of the first viewport. Sized as a real control, not a text link. */
+.pending-action {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 36px;
+  padding: 8px 16px; border: 1px solid var(--warn-border); border-radius: var(--radius);
+  color: var(--warn); font-size: 12.5px; font-weight: 600;
+}
+.pending-action:hover { border-color: var(--warn); }
+.pending-action:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
+/* Per-fact provenance on the vessel: the value, then where it came from. */
+.vessel-facts dd { display: grid; gap: 2px; justify-items: end; }
+.vessel-val { font-variant-numeric: tabular-nums; }
+.vessel-facts dd.is-absent .vessel-val { font-variant-numeric: normal; }
+.vessel-src { font-size: 10px; line-height: 1.4; color: var(--muted-2); text-align: right; }
+.v-callout text { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }

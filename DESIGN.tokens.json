@@ -1,0 +1,105 @@
+{
+  "$schema": "impeccable:design-tokens 1",
+  "source": "dashboard/app/globals.css",
+  "recordedFrom": "shipped artifact",
+  "contrastMethod": "WCAG 2.x relative luminance, recomputed from shipped hex values",
+  "world": "P&ID instrument diagram",
+  "radius": "2px",
+  "shadow": "none",
+  "themes": {
+    "dark": {
+      "worstCaseTextSurface": "--panel-3",
+      "surface": {
+        "--bg": "#16171a",
+        "--bg-2": "#1a1c20",
+        "--well": "#121316",
+        "--well-2": "#0f1012",
+        "--panel": "#1a1c20",
+        "--panel-2": "#1e2024",
+        "--panel-3": "#232529"
+      },
+      "line": { "--border": "#2e3136", "--border-2": "#3e4249", "--border-3": "#34373c" },
+      "text": {
+        "--text": { "hex": "#e9e7e2", "onPanel3": 12.42, "onPanel": 13.81, "onBg": 14.5 },
+        "--text-2": { "hex": "#bab6ae", "onPanel3": 7.59, "onPanel": 8.44, "onBg": 8.87 },
+        "--muted": { "hex": "#a09c94", "onPanel3": 5.61, "onPanel": 6.24, "onBg": 6.55 },
+        "--muted-2": {
+          "hex": "#918d85",
+          "onPanel3": 4.64,
+          "onPanel": 4.9,
+          "onBg": 5.14,
+          "note": "fails AA on --panel-3 by 0.09; annotation claiming 4.5 is wrong"
+        }
+      },
+      "state": {
+        "--pos": { "hex": "#7cb389", "onPanel3": 6.33, "onOwnBg": 6.66 },
+        "--neg": { "hex": "#d47c74", "onPanel3": 5.07, "onOwnBg": 5.66 },
+        "--warn": { "hex": "#d1a45c", "onPanel3": 6.71, "onOwnBg": 7.17 },
+        "--accent": { "hex": "#6ba3a8", "onPanel3": 5.43, "onOwnBg": 5.52 },
+        "--accent-bright": { "hex": "#8bc0c4", "onPanel3": 7.63 }
+      },
+      "focusWash": "color-mix(in srgb, var(--sky) 55%, transparent)"
+    },
+    "light": {
+      "worstCaseTextSurface": "--panel",
+      "surface": {
+        "--bg": "#efece4",
+        "--bg-2": "#f4f1ea",
+        "--well": "#e7e3d9",
+        "--well-2": "#e1dcd1",
+        "--panel": "#faf8f3",
+        "--panel-2": "#f4f1ea",
+        "--panel-3": "#eeeae1"
+      },
+      "line": { "--border": "#cdc7b9", "--border-2": "#b2ab9a", "--border-3": "#c2bbac" },
+      "text": {
+        "--text": { "hex": "#1c1b18", "onPanel": 16.23, "onPanel2": 15.27, "onBg": 14.59, "onWell2": 12.6 },
+        "--text-2": { "hex": "#45423a", "onPanel": 9.45, "onPanel2": 8.89, "onBg": 8.5, "onWell2": 7.34 },
+        "--muted": { "hex": "#6a665c", "onPanel": 5.39, "onPanel2": 5.08, "onBg": 4.85, "onWell2": 4.19 },
+        "--muted-2": {
+          "hex": "#6e695d",
+          "onPanel": 5.15,
+          "onPanel2": 4.85,
+          "onBg": 4.63,
+          "onWell2": 4.0,
+          "note": "corrected from #7c776a, which cleared AA on nothing; must not be used on --well-2"
+        }
+      },
+      "state": {
+        "--pos": { "hex": "#3a7048", "onPanel": 5.51, "onOwnBg": 4.97, "note": "corrected value" },
+        "--neg": { "hex": "#a4443c", "onPanel": 5.7, "onOwnBg": 4.91 },
+        "--warn": { "hex": "#8a6320", "onPanel": 5.09, "onOwnBg": 4.61 },
+        "--accent": { "hex": "#35696e", "onPanel": 5.82, "onOwnBg": 5.14 },
+        "--accent-bright": { "hex": "#27565b", "onPanel": 7.7 }
+      },
+      "focusWash": "color-mix(in srgb, var(--sky) 70%, transparent)"
+    }
+  },
+  "type": {
+    "face": "ui-sans-serif, system-ui (no display face shipped)",
+    "mono": "ui-monospace, Cascadia Code, monospace",
+    "body": "14px / 1.45",
+    "annotation": "9.5px / 0.07em / uppercase",
+    "fieldLabel": "10px / 0.08em / uppercase / --muted",
+    "figureRamp": ["30px/600", "22px/600", "13px/600", "12.5px"],
+    "tabular": "font-variant-numeric: tabular-nums on all money; switched off only for .is-absent"
+  },
+  "namedRules": [
+    "no depth, no glow, no gradient — enforced at the token layer",
+    "colour is semantic only; order is carried by line weight",
+    "no glyph sets its own colour; the row's state class paints currentColor",
+    "a cap is a threshold, not an alarm, until the level approaches it",
+    "absence states which absence it is, at the muted floor, tabular off",
+    "unknown is hatched, never zeroed",
+    "one prefix per surface; source order is the cascade"
+  ],
+  "openDefects": [
+    "app/page.tsx:94 stat-tile grid contradicts the THESIS; delete, do not restyle",
+    "no drawing frame, title block or registration marks",
+    "float/workforce partly unconverted: 12-16px radii and pill forms",
+    ".float-eyebrow and .workforce-eyebrow (6 call sites) are craft-floor refusals",
+    "app/workforce/page.tsx:102 typographic glyph icons '▣' '⊘' '›_'",
+    "27 hardcoded radii above 2px plus 29 pill/circle radii bypass --radius",
+    "--muted-2 dark corrected to #918d85 (4.64 on --panel-3) during the finish review"
+  ]
+}
