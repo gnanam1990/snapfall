@@ -9,18 +9,27 @@
  * Unpaid request  -> 402 + challenge on BOTH transports (header v2 + body v1).
  * Paid request    -> verifies the EIP-3009 authorization, then 200 + data + receipt.
  *
- * SETTLEMENT CAVEAT: this server verifies the buyer's signature and authorization
- * fields, but does NOT broadcast `transferWithAuthorization` on-chain — that is the
- * facilitator's job and needs a funded Arc testnet wallet we do not have yet. So the
- * loop below is cryptographically real end-to-end and financially a dry run. Wiring
- * settlement is the next step; see sidecar/README.md.
+ * SETTLEMENT CAVEAT, stated precisely because the short version hid the part that matters.
+ * This server verifies the buyer's EIP-3009 signature and authorization fields in full. It does
+ * NOT broadcast `transferWithAuthorization` until CIRCLE_API_KEY is configured, because that is
+ * the facilitator's job (V3). So with no key: the handshake is cryptographically real, no money
+ * moves, the receipt says NOT_BROADCAST -- and the resource is still handed over.
+ *
+ * That last clause is the one worth saying out loud. It is a deliberate local-demo concession,
+ * not an accident and not a claim that payment occurred: it is what lets `npm run demo:loop` and
+ * the spine run exercise the whole path with no Circle account. It is confined to loopback (see
+ * UNSETTLED_DELIVERY_OK) so a seller reachable from a network never gives goods away, and every
+ * such delivery is logged as UNSETTLED DELIVERY. Once a key exists, goods are released on a
+ * confirmed settlement only.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { verifyTypedData, type Address, type Hex } from 'viem';
+import { releaseDecision } from './release-policy.js';
 import {
   CircleFacilitator,
   settlementFor,
+  NOT_BROADCAST,
   type PaymentRequirements,
   type SettleOutcome,
 } from './facilitator.js';
@@ -42,6 +51,21 @@ const PORT = Number(process.env.PAID_API_PORT ?? 4021);
 const facilitator = new CircleFacilitator();
 // Loopback, matching service.ts. Overridable for a container, but never silently 0.0.0.0.
 const HOST = process.env.PAID_API_HOST ?? '127.0.0.1';
+
+/**
+ * Whether this seller may hand over a resource it could not confirm payment for.
+ *
+ * True only on loopback, and only because the alternative is worse for the two things that
+ * depend on it: `npm run demo:loop` proves the whole x402 handshake with no Circle account, and
+ * the spine run's beats 3 and 5 need a DELIVERED record before the run can reach the waterfall.
+ * Both are local demos of a payment path whose broadcast half is not wired yet (V3).
+ *
+ * It is a constant rather than an inline check so that the concession has a name, and so the one
+ * condition that makes it defensible -- nobody outside this machine can reach it -- is stated
+ * once, next to the binding it depends on.
+ */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
+const UNSETTLED_DELIVERY_OK = LOOPBACK_HOSTS.has(HOST);
 
 /** Arc testnet — docs.arc.io/arc/references/connect-to-arc (verified 19 Jul 2026). */
 const CHAIN_ID = Number(process.env.ARC_CHAIN_ID ?? 5042002);
@@ -456,32 +480,67 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // that the money lands. The authorization may still settle, so this is NOT a refusal of the
   // payment; it is a refusal to deliver before the payment is confirmed. The nonce stays spent
   // either way, so a settle that does land cannot be replayed for a second copy.
-  if (outcome.state !== 'settled' && facilitator.isConfigured()) {
-    if (outcome.state === 'rejected') {
+  //
+  // This guard used to read `outcome.state !== 'settled' && facilitator.isConfigured()`, and that
+  // second clause quietly disabled the whole paragraph above. With no CIRCLE_API_KEY the outcome
+  // is 'not-configured', isConfigured() is false, and the block was skipped -- so the seller
+  // handed the paid resource over and stamped the receipt NOT_BROADCAST. Goods for free, under a
+  // comment promising the opposite, in the DEFAULT configuration. Nothing was faked and no claim
+  // was false, but the protection this paragraph describes did not exist.
+  //
+  // Unsettled delivery is still wanted: it is what lets `npm run demo:loop` and the spine run's
+  // beats 3 and 5 work with no Circle account. But it is a LOCAL DEMO concession, not a property
+  // of a paid API, so it is now explicit, announced, and confined to loopback. A seller reachable
+  // from a network never gives away goods it could not confirm payment for -- see the HOST note
+  // above, where this process was once accidentally exposed on conference wifi.
+  const release = releaseDecision(outcome.state, UNSETTLED_DELIVERY_OK);
+  if (release !== 'deliver') {
+    if (release === 'refuse-unsettled') {
+      // No facilitator AND reachable beyond loopback. Refuse rather than give the goods away.
+      spentNonces.delete(nonce);
+      const why =
+        `settlement is impossible (no facilitator configured) and this seller is bound to ${HOST}, ` +
+        `not loopback, so the resource is withheld rather than given away`;
+      console.log(`[seller] 402 ${path} — ${why}`);
+      return sendChallenge(res, challenge, why);
+    } else if (outcome.state === 'rejected') {
       // Nothing moved, so the nonce is genuinely unused and the reservation is released --
       // keeping it would burn an authorization the buyer never got value for.
       spentNonces.delete(nonce);
       const why = `facilitator declined: ${outcome.reason}`;
       console.log(`[seller] 402 ${path} — ${why}`);
       return sendChallenge(res, challenge, why);
+    } else {
+      // UNKNOWN. The authorization may still land, so the nonce is held against THIS purchase:
+      // nobody else can spend it, and this buyer can re-present the identical request. The goods
+      // stay withheld until the settlement is confirmed.
+      //
+      // An `else` rather than a fall-through, because the loopback concession above must reach
+      // the delivery path below. Written as a fall-through first, it warned and then refused.
+      //
+      // Honest limitation: confirming it needs a settlement-status read this client does not have,
+      // because the shape of that call is one of the things V3 has to establish. Until then the
+      // reference below is what an operator reconciles by hand against the payee balance.
+      spentNonces.set(nonce, {
+        path, amount: payment.payload.authorization.value, payer: payment.payload.authorization.from,
+        state: 'pending', settlement: settlementFor(outcome), at: new Date().toISOString(),
+      });
+      const why =
+        `settlement unconfirmed (${settlementFor(outcome)}); this authorization is held for you, ` +
+        `reference ${nonce}. Reconcile against the payee balance before re-presenting it.`;
+      console.log(`[seller] 402 ${path} — ${why}`);
+      return sendChallenge(res, challenge, why);
     }
+  }
 
-    // UNKNOWN. The authorization may still land, so the nonce is held against THIS purchase:
-    // nobody else can spend it, and this buyer can re-present the identical request. The goods
-    // stay withheld until the settlement is confirmed.
-    //
-    // Honest limitation: confirming it needs a settlement-status read this client does not have,
-    // because the shape of that call is one of the things V3 has to establish. Until then the
-    // reference below is what an operator reconciles by hand against the payee balance.
-    spentNonces.set(nonce, {
-      path, amount: payment.payload.authorization.value, payer: payment.payload.authorization.from,
-      state: 'pending', settlement: settlementFor(outcome), at: new Date().toISOString(),
-    });
-    const why =
-      `settlement unconfirmed (${settlementFor(outcome)}); this authorization is held for you, ` +
-      `reference ${nonce}. Reconcile against the payee balance before re-presenting it.`;
-    console.log(`[seller] 402 ${path} — ${why}`);
-    return sendChallenge(res, challenge, why);
+  if (outcome.state === 'not-configured') {
+    // Deliberate, announced, and confined to loopback by UNSETTLED_DELIVERY_OK. Never silent:
+    // the whole defect was that this happened without anyone being told.
+    console.warn(
+      `[seller] UNSETTLED DELIVERY ${path} — no CIRCLE_API_KEY, so nothing was broadcast and no ` +
+        `money moved. Releasing the resource because this seller is bound to ${HOST}. The ` +
+        `authorization is cryptographically valid; the receipt says ${NOT_BROADCAST}.`,
+    );
   }
 
   console.log(

@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Snapfall x402 payment sidecar + paid demo API (PRD §6.2 owner C)",
-  "engines": { "node": ">=20" },
+  "description": "Snapfall x402 payment sidecar + paid demo API (PRD \u00a76.2 owner C)",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "seller": "tsx src/seller.ts",
     "buyer": "tsx src/buyer.ts",
@@ -20,7 +22,8 @@
     "test:facilitator-wiring": "tsx --test src/facilitator-wiring-test.ts",
     "verify:circle-facilitator-fixture": "tsx src/verify-circle-facilitator-fixture.ts",
     "capture:v1-fixture": "tsx src/capture-v1-fixture.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:release-policy": "tsx --test src/release-policy-test.ts"
   },
   "dependencies": {
     "viem": "^2.21.0"
