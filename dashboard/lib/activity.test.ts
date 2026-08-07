@@ -125,6 +125,30 @@ test('carries both waterfall legs from a chain settlement so the money graph nee
   assert.equal(message.amountUsdc, '12750000');
 });
 
+test('a chain JobFunded frame fills the escrow amount the money graph reads (#77)', () => {
+  // #77 claimed the money-graph nodes stay blank because balances are not derived from the
+  // relayed chain payloads, naming JobFunded.amountAtomic first. This drives the real relayed
+  // frame (the shape ownerapi's chain relay ships) through the humanizer and asserts amountUsdc
+  // IS populated from amountAtomic. MoneyGraph's 'fund' case sets escrow from atomic(amountUsdc),
+  // and beatFor(JobFunded)==='fund' is covered in moneyGraphBeats.test.ts — so a populated
+  // amountUsdc here is the escrow node filling. The described defect is not present.
+  const message = humanizeStreamEvent({
+    kind: 'event',
+    source: 'chain',
+    seq: 7,
+    event: {
+      kind: 'JobFunded',
+      jobId: 'job_demo_1',
+      actor: 'funding',
+      at: '2026-07-24T10:00:00Z',
+      payload: { amountAtomic: '25000000' },
+    },
+  });
+
+  assert.equal(message.amountUsdc, '25000000');
+  assert.equal(message.kind, 'JobFunded');
+});
+
 test('accepts the snake_case settlement spelling and omits the split when neither leg is present', () => {
   const snake = humanizeStreamEvent({
     kind: 'event',
