@@ -273,14 +273,15 @@ function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; 
 }
 
 /**
- * A registered, read-only worker that is real but not hired through the milestone flow. It is
- * NOT "coming soon" (the worker exists, is registered by kind, and dispatches — see
- * TestRouter_DispatchesReleaseScribeByKind) and NOT the Build Monitor card (it has no
- * repository+quote hire form, because it has no milestone hire path). Showing a hire button it
- * cannot honour would be the same defect as a "Coming soon" badge on a stub, so this card states
- * exactly what is true: registered, read-only, invoked by Brain.
+ * An operator tool: a real, registered worker with NO payment flow. It is not a job in the
+ * money-spine sense — there is no customer, no quote, and no escrow, because it reads the
+ * operator's own repo/configs/services and reports to the operator's own Brain. That is why it
+ * has no hire form: Build Monitor is hireable because it is a job (a repository AND a quote,
+ * through the settlement path); these have no payer. The label says "operator tool · no payment
+ * flow" plainly so the absent hire button reads as correct, not unfinished — the same honesty
+ * the "Coming soon" badge removal is about. Dispatch is real (TestRouter_DispatchesReleaseScribeByKind).
  */
-function RegisteredWorkerCard({ manifest }: { manifest: WorkerManifest }) {
+function OperatorToolCard({ manifest }: { manifest: WorkerManifest }) {
   return (
     <article className="manifest-card">
       <div className="manifest-card-head">
@@ -291,13 +292,13 @@ function RegisteredWorkerCard({ manifest }: { manifest: WorkerManifest }) {
             <p>{manifest.category}</p>
           </div>
         </div>
-        <span className="manifest-status is-active"><i />Registered · read-only</span>
+        <span className="manifest-status is-active"><i />Operator tool · no payment flow</span>
       </div>
       <p className="manifest-description">{manifest.description}</p>
       <div className="permission-row">
         {manifest.permissions.map((permission) => <PermissionChip key={permission} label={permission} />)}
       </div>
-      <p className="manifest-note">Invoked by Brain; reports evidence and authorizes nothing.</p>
+      <p className="manifest-note">No customer, quote, or escrow — invoked by Brain, reports evidence, authorizes nothing.</p>
     </article>
   );
 }
@@ -364,9 +365,9 @@ export default function WorkforcePage() {
     () => activations.find((activation) => activation.manifestId === 'build-monitor') ?? null,
     [activations],
   );
-  // Real, registered manifests other than Build Monitor render as read-only registered cards —
-  // not the milestone hire form, which is Build-Monitor-specific.
-  const registeredWorkers = useMemo(
+  // Real manifests other than Build Monitor are operator tools: no customer, quote, or escrow, so
+  // they render as no-payment-flow cards, not the money-spine hire form Build Monitor uses.
+  const operatorTools = useMemo(
     () => manifests.filter((manifest) => manifest.id !== 'build-monitor'),
     [manifests],
   );
@@ -404,8 +405,8 @@ export default function WorkforcePage() {
         </div>
         <div className="manifest-grid">
           <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} />
-          {registeredWorkers.map((manifest) => (
-            <RegisteredWorkerCard key={manifest.id} manifest={manifest} />
+          {operatorTools.map((manifest) => (
+            <OperatorToolCard key={manifest.id} manifest={manifest} />
           ))}
           {COMING_SOON_WORKERS.map((worker, index) => (
             <ComingSoonCard key={worker.id} worker={worker} index={index} />
