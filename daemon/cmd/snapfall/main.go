@@ -510,6 +510,14 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		Category:    "Documentation",
 		Description: "Reads committed git history over a revision range and derives release notes for Brain.",
 		Permissions: []string{"Read-only repo", "No payments", "No shell"},
+	}, {
+		// Operator tool, same read-only posture. Lints committed configuration for least-privilege
+		// alignment — NOT entity/sanctions screening, which stays the labeled StubCompliance stub.
+		ID:          worker.ComplianceScoutKind,
+		Name:        "Compliance Scout",
+		Category:    "Security & compliance",
+		Description: "Scans committed manifests/configs for least-privilege policy alignment and reports findings to Brain.",
+		Permissions: []string{"Read-only repo", "No payments", "No shell"},
 	}}
 	api.HireWorker = buildMonitorHire(br)
 	api.ListWorkerActivations = buildMonitorActivations(br)
@@ -777,6 +785,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		return nil, nil, nil, err
 	}
 	if err := br.RegisterWorker(worker.NewReleaseScribe(worker.GitLogSource{})); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := br.RegisterWorker(worker.NewComplianceScout(worker.ManifestPolicySource{})); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := br.RegisterQAWorker(qa.Worker{}); err != nil {
