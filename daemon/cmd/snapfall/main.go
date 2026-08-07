@@ -501,6 +501,15 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		Description:   "Watches committed repository milestones and reports completion evidence to Brain.",
 		Permissions:   []string{"Read-only repo", "No payments", "No shell"},
 		ChecklistPath: ".snapfall/milestone.json",
+	}, {
+		// Same read-only posture as Build Monitor (the isolation is enforced by AT-16 over the
+		// worker package's import graph, not by these labels). No ChecklistPath: the scribe reads
+		// git history over a revision range, it does not measure a milestone artifact list.
+		ID:          worker.ReleaseScribeKind,
+		Name:        "Release Scribe",
+		Category:    "Documentation",
+		Description: "Reads committed git history over a revision range and derives release notes for Brain.",
+		Permissions: []string{"Read-only repo", "No payments", "No shell"},
 	}}
 	api.HireWorker = buildMonitorHire(br)
 	api.ListWorkerActivations = buildMonitorActivations(br)
@@ -765,6 +774,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		return nil, nil, nil, err
 	}
 	if err := br.RegisterWorker(worker.NewBuildMonitor(worker.GitChecklistSource{})); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := br.RegisterWorker(worker.NewReleaseScribe(worker.GitLogSource{})); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := br.RegisterQAWorker(qa.Worker{}); err != nil {

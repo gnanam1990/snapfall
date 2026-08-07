@@ -28,13 +28,20 @@ export const BUILD_MONITOR_MANIFEST: WorkerManifest = {
   checklistPath: '.snapfall/milestone.json',
 };
 
+export const RELEASE_SCRIBE_MANIFEST: WorkerManifest = {
+  id: 'release-scribe',
+  name: 'Release Scribe',
+  category: 'Documentation',
+  description: 'Reads committed git history over a revision range and derives release notes for Brain.',
+  permissions: ['Read-only repo', 'No payments', 'No shell'],
+};
+
+// The committed fallback catalogue, used when no daemon has answered /api/workforce (the public
+// deploy). Keep in step with cmd/snapfall/main.go's WorkerCatalog: a manifest here that the
+// daemon does not register would claim a worker that cannot be dispatched.
+export const CATALOG_MANIFESTS: WorkerManifest[] = [BUILD_MONITOR_MANIFEST, RELEASE_SCRIBE_MANIFEST];
+
 export const COMING_SOON_WORKERS = [
-  {
-    id: 'release-scribe',
-    name: 'Release Scribe',
-    category: 'Documentation',
-    description: 'Produces release notes and change summaries from verified milestones.',
-  },
   {
     id: 'compliance-scout',
     name: 'Compliance Scout',

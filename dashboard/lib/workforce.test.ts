@@ -3,12 +3,34 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { POST } from '../app/api/workforce/[id]/hire/route';
-import { BUILD_MONITOR_MANIFEST, activationLabel, validHireInput } from './workforce';
+import {
+  BUILD_MONITOR_MANIFEST,
+  CATALOG_MANIFESTS,
+  COMING_SOON_WORKERS,
+  RELEASE_SCRIBE_MANIFEST,
+  activationLabel,
+  validHireInput,
+} from './workforce';
 
 test('build-monitor catalog projection keeps the bounded permissions visible', () => {
   assert.equal(BUILD_MONITOR_MANIFEST.id, 'build-monitor');
   assert.deepEqual(BUILD_MONITOR_MANIFEST.permissions, ['Read-only repo', 'No payments', 'No shell']);
   assert.equal(BUILD_MONITOR_MANIFEST.checklistPath, '.snapfall/milestone.json');
+});
+
+test('release-scribe is a real registered manifest, not a coming-soon stub', () => {
+  // It moved out of COMING_SOON_WORKERS into the real catalogue when the worker landed.
+  assert.equal(RELEASE_SCRIBE_MANIFEST.id, 'release-scribe');
+  assert.deepEqual(RELEASE_SCRIBE_MANIFEST.permissions, ['Read-only repo', 'No payments', 'No shell']);
+  // Read-only worker: no checklistPath (that is Build Monitor's milestone input, not a range).
+  assert.equal(RELEASE_SCRIBE_MANIFEST.checklistPath, undefined);
+  assert.ok(CATALOG_MANIFESTS.some((m) => m.id === 'release-scribe'), 'must be in the committed fallback catalogue');
+  // String() widens the literal id union so this stays a real runtime check rather than a
+  // type error — the union no longer containing 'release-scribe' is itself proof of the move.
+  assert.ok(
+    !COMING_SOON_WORKERS.map((w) => String(w.id)).includes('release-scribe'),
+    'release-scribe must no longer be advertised as coming soon',
+  );
 });
 
 test('hire input requires a repository and positive two-decimal quote', () => {

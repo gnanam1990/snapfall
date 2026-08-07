@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import {
   BUILD_MONITOR_MANIFEST,
+  CATALOG_MANIFESTS,
   COMING_SOON_WORKERS,
   activationLabel,
   validHireInput,
@@ -271,6 +272,36 @@ function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; 
   );
 }
 
+/**
+ * A registered, read-only worker that is real but not hired through the milestone flow. It is
+ * NOT "coming soon" (the worker exists, is registered by kind, and dispatches — see
+ * TestRouter_DispatchesReleaseScribeByKind) and NOT the Build Monitor card (it has no
+ * repository+quote hire form, because it has no milestone hire path). Showing a hire button it
+ * cannot honour would be the same defect as a "Coming soon" badge on a stub, so this card states
+ * exactly what is true: registered, read-only, invoked by Brain.
+ */
+function RegisteredWorkerCard({ manifest }: { manifest: WorkerManifest }) {
+  return (
+    <article className="manifest-card">
+      <div className="manifest-card-head">
+        <div className="manifest-identity">
+          <span className="manifest-icon" aria-hidden="true">✎</span>
+          <div>
+            <h3>{manifest.name}</h3>
+            <p>{manifest.category}</p>
+          </div>
+        </div>
+        <span className="manifest-status is-active"><i />Registered · read-only</span>
+      </div>
+      <p className="manifest-description">{manifest.description}</p>
+      <div className="permission-row">
+        {manifest.permissions.map((permission) => <PermissionChip key={permission} label={permission} />)}
+      </div>
+      <p className="manifest-note">Invoked by Brain; reports evidence and authorizes nothing.</p>
+    </article>
+  );
+}
+
 function ComingSoonCard({ worker, index }: { worker: (typeof COMING_SOON_WORKERS)[number]; index: number }) {
   const glyphs = ['✎', '⌕', '◉'];
   return (
@@ -291,7 +322,7 @@ function ComingSoonCard({ worker, index }: { worker: (typeof COMING_SOON_WORKERS
 }
 
 export default function WorkforcePage() {
-  const [manifests, setManifests] = useState<WorkerManifest[]>([BUILD_MONITOR_MANIFEST]);
+  const [manifests, setManifests] = useState<WorkerManifest[]>(CATALOG_MANIFESTS);
   const [activations, setActivations] = useState<WorkerActivation[]>([]);
   /**
    * True while nothing has been read from the daemon. The catch below deliberately keeps the
@@ -333,6 +364,12 @@ export default function WorkforcePage() {
     () => activations.find((activation) => activation.manifestId === 'build-monitor') ?? null,
     [activations],
   );
+  // Real, registered manifests other than Build Monitor render as read-only registered cards —
+  // not the milestone hire form, which is Build-Monitor-specific.
+  const registeredWorkers = useMemo(
+    () => manifests.filter((manifest) => manifest.id !== 'build-monitor'),
+    [manifests],
+  );
 
   return (
     <div className="workforce-page">
@@ -367,6 +404,9 @@ export default function WorkforcePage() {
         </div>
         <div className="manifest-grid">
           <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} />
+          {registeredWorkers.map((manifest) => (
+            <RegisteredWorkerCard key={manifest.id} manifest={manifest} />
+          ))}
           {COMING_SOON_WORKERS.map((worker, index) => (
             <ComingSoonCard key={worker.id} worker={worker} index={index} />
           ))}
