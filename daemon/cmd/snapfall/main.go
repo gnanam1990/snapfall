@@ -798,8 +798,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	}
 	fund := funding.New()
 	br := brain.New(log, st, mem, fund)
-	// SNAPFALL_SCOPER_MODEL unset ⇒ deterministic StubScoper (the default the demo/spine rely
-	// on); set ⇒ a local Ollama scoper that still falls back to the stub on any failure.
+	// ANTHROPIC_API_KEY unset ⇒ deterministic StubScoper (the default the demo/spine rely on);
+	// set ⇒ a Claude-backed scoper (model via SNAPFALL_SCOPER_MODEL, default claude-haiku-4-5) that
+	// sends only the request text to Anthropic and still falls back to the stub on any failure.
 	br.SetScoper(brain.NewScoper(log))
 	// The G8 adaptive DD worker with its scripted source plan: the \$0.04 profile primary
 	// (auto-approves under DemoPolicy) with the \$0.06 benchmark as the cheaper fallback.
