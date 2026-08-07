@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
+	"github.com/gnanam1990/snapfall/daemon/internal/events"
 	"github.com/gnanam1990/snapfall/daemon/internal/policy"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
@@ -54,6 +55,55 @@ func do(t *testing.T, h http.Handler, method, path, body string) (*httptest.Resp
 	var out map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
 	return w, out
+}
+
+// A heartbeat is liveness for the Day-1 dummy worker, not owner-facing activity. It must stay
+// STORED (the event log keeps it; the bus subscriber in main.go still logs it) but must never be
+// RELAYED over H2: at one per second it evicts money and chain events from the dashboard's 30-item
+// feed (#78). The cut is at the relay, not the store — this asserts both halves.
+func TestStreamStoresButDoesNotRelayHeartbeats(t *testing.T) {
+	s, _ := newAPI(t)
+	s.pollEvery = 5 * time.Millisecond
+
+	ctx := context.Background()
+	if _, err := s.st.Append(ctx, store.Event{
+		Kind: events.KindWorkerHeartbeat, EntityID: "research", Actor: "agent/research",
+		Payload: map[string]any{"role": "research", "beat": 1},
+	}); err != nil {
+		t.Fatalf("append heartbeat: %v", err)
+	}
+	if _, err := s.st.Append(ctx, store.Event{
+		Kind: "job.draft.created", EntityID: "job_x", Actor: "brain",
+		Payload: map[string]any{"title": "assess Acme"},
+	}); err != nil {
+		t.Fatalf("append daemon event: %v", err)
+	}
+
+	// Stored regardless of the relay decision: the liveness record stays on the log.
+	var stored int
+	if err := s.st.DB().QueryRow(
+		`SELECT COUNT(*) FROM events WHERE kind = ?`, events.KindWorkerHeartbeat).Scan(&stored); err != nil {
+		t.Fatalf("count stored heartbeats: %v", err)
+	}
+	if stored != 1 {
+		t.Fatalf("stored heartbeats = %d, want 1 (heartbeats must not be dropped from the store)", stored)
+	}
+
+	// handleStream loops on a ticker until the request context ends; a short deadline gives it a
+	// few polls, then returns.
+	reqCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events/stream", nil).WithContext(reqCtx)
+	w := httptest.NewRecorder()
+	s.handleStream(w, req)
+
+	body := w.Body.String()
+	if strings.Contains(body, events.KindWorkerHeartbeat) {
+		t.Errorf("heartbeat reached the H2 stream; it must be stored but never relayed (#78):\n%s", body)
+	}
+	if !strings.Contains(body, "job.draft.created") {
+		t.Errorf("ordinary daemon event was not relayed — the heartbeat filter is too broad:\n%s", body)
+	}
 }
 
 // GET /approvals renders the pending request with the intentHash the decision must echo.
