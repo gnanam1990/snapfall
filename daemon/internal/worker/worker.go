@@ -96,6 +96,9 @@ type Assignment struct {
 	BounceReasons []string `json:"bounce_reasons,omitempty"`
 	// Draft carries the deliverable under review when the assignee is the QA worker.
 	Draft *envelope.Deliverable `json:"draft,omitempty"`
+	// Range is the git revision range the Release-Scribe summarizes (e.g. "v1..HEAD").
+	// Worker-specific like BounceReasons/Draft above; other workers ignore it.
+	Range string `json:"range,omitempty"`
 }
 
 // StubDD is the scripted due-diligence worker for the Sun-26 exit gate. Real source

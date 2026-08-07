@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import {
   BUILD_MONITOR_MANIFEST,
+  CATALOG_MANIFESTS,
   COMING_SOON_WORKERS,
   activationLabel,
   validHireInput,
@@ -271,6 +272,37 @@ function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; 
   );
 }
 
+/**
+ * An operator tool: a real, registered worker with NO payment flow. It is not a job in the
+ * money-spine sense — there is no customer, no quote, and no escrow, because it reads the
+ * operator's own repo/configs/services and reports to the operator's own Brain. That is why it
+ * has no hire form: Build Monitor is hireable because it is a job (a repository AND a quote,
+ * through the settlement path); these have no payer. The label says "operator tool · no payment
+ * flow" plainly so the absent hire button reads as correct, not unfinished — the same honesty
+ * the "Coming soon" badge removal is about. Dispatch is real (TestRouter_DispatchesReleaseScribeByKind).
+ */
+function OperatorToolCard({ manifest }: { manifest: WorkerManifest }) {
+  return (
+    <article className="manifest-card">
+      <div className="manifest-card-head">
+        <div className="manifest-identity">
+          <span className="manifest-icon" aria-hidden="true">✎</span>
+          <div>
+            <h3>{manifest.name}</h3>
+            <p>{manifest.category}</p>
+          </div>
+        </div>
+        <span className="manifest-status is-active"><i />Operator tool · no payment flow</span>
+      </div>
+      <p className="manifest-description">{manifest.description}</p>
+      <div className="permission-row">
+        {manifest.permissions.map((permission) => <PermissionChip key={permission} label={permission} />)}
+      </div>
+      <p className="manifest-note">No customer, quote, or escrow — invoked by Brain, reports evidence, authorizes nothing.</p>
+    </article>
+  );
+}
+
 function ComingSoonCard({ worker, index }: { worker: (typeof COMING_SOON_WORKERS)[number]; index: number }) {
   const glyphs = ['✎', '⌕', '◉'];
   return (
@@ -291,7 +323,7 @@ function ComingSoonCard({ worker, index }: { worker: (typeof COMING_SOON_WORKERS
 }
 
 export default function WorkforcePage() {
-  const [manifests, setManifests] = useState<WorkerManifest[]>([BUILD_MONITOR_MANIFEST]);
+  const [manifests, setManifests] = useState<WorkerManifest[]>(CATALOG_MANIFESTS);
   const [activations, setActivations] = useState<WorkerActivation[]>([]);
   /**
    * True while nothing has been read from the daemon. The catch below deliberately keeps the
@@ -333,6 +365,12 @@ export default function WorkforcePage() {
     () => activations.find((activation) => activation.manifestId === 'build-monitor') ?? null,
     [activations],
   );
+  // Real manifests other than Build Monitor are operator tools: no customer, quote, or escrow, so
+  // they render as no-payment-flow cards, not the money-spine hire form Build Monitor uses.
+  const operatorTools = useMemo(
+    () => manifests.filter((manifest) => manifest.id !== 'build-monitor'),
+    [manifests],
+  );
 
   return (
     <div className="workforce-page">
@@ -367,6 +405,9 @@ export default function WorkforcePage() {
         </div>
         <div className="manifest-grid">
           <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} />
+          {operatorTools.map((manifest) => (
+            <OperatorToolCard key={manifest.id} manifest={manifest} />
+          ))}
           {COMING_SOON_WORKERS.map((worker, index) => (
             <ComingSoonCard key={worker.id} worker={worker} index={index} />
           ))}
