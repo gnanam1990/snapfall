@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
+import { GET } from '../app/api/workforce/route';
 import { POST } from '../app/api/workforce/[id]/hire/route';
 import {
   BUILD_MONITOR_MANIFEST,
@@ -60,6 +62,65 @@ test('nothing is pending — all three former Coming-soon workers have shipped',
   for (const id of ['release-scribe', 'compliance-scout', 'incident-watch']) {
     assert.ok(CATALOG_MANIFESTS.some((m) => m.id === id), `${id} must be a real registered manifest`);
   }
+});
+
+// The bug this fixes: the no-daemon route hardcoded [build-monitor], overwriting the page's
+// four-worker catalogue, so the public deploy showed one worker instead of four. The route must
+// serve the SAME committed catalogue the page initialises from.
+test('the no-daemon route serves the full committed catalogue, not just build-monitor', async () => {
+  const prev = process.env.SNAPFALL_OWNER_API_URL;
+  delete process.env.SNAPFALL_OWNER_API_URL; // force the local-catalogue branch (public deploy)
+  try {
+    const res = await GET();
+    const body = (await res.json()) as { manifests: Array<{ id: string }>; source?: string };
+    assert.equal(body.source, 'local-catalog');
+    const ids = body.manifests.map((m) => m.id).sort();
+    assert.deepEqual(ids, CATALOG_MANIFESTS.map((m) => m.id).sort(), 'route must serve the committed catalogue verbatim');
+    for (const id of ['release-scribe', 'compliance-scout', 'incident-watch']) {
+      assert.ok(ids.includes(id), `${id} must render on the public deploy with no daemon`);
+    }
+  } finally {
+    if (prev !== undefined) process.env.SNAPFALL_OWNER_API_URL = prev;
+  }
+});
+
+// Cross-language drift guard (the compliance-scout-class defect, applied to ourselves): the
+// dashboard's committed catalogue and the daemon's WorkerCatalog are two definitions in two
+// languages and WILL drift. This reads the Go source and fails when they disagree — the same idiom
+// moneyGraphBeats.test.ts uses to pin the beat mapping to the daemon's real event kinds.
+test('the dashboard catalogue matches the daemon WorkerCatalog (no cross-language drift)', () => {
+  const daemonRoot = path.resolve(process.cwd(), '..', 'daemon');
+  const mainGo = readFileSync(path.join(daemonRoot, 'cmd', 'snapfall', 'main.go'), 'utf8');
+
+  // Bound the WorkerCatalog literal: from its assignment to the HireWorker assignment that follows.
+  const start = mainGo.indexOf('api.WorkerCatalog = []ownerapi.WorkerManifest{');
+  assert.ok(start >= 0, 'WorkerCatalog literal not found in main.go — the guard itself is broken');
+  const end = mainGo.indexOf('api.HireWorker', start);
+  assert.ok(end > start, 'could not bound the WorkerCatalog literal');
+  const block = mainGo.slice(start, end);
+
+  // Each entry names its id as `ID: worker.XxxKind`; resolve each constant to its string value.
+  const kindConsts = [...block.matchAll(/ID:\s*worker\.(\w+)/g)].map((m) => m[1]);
+  assert.ok(kindConsts.length > 0, 'no `ID: worker.XxxKind` entries parsed from WorkerCatalog');
+
+  const workerDir = path.join(daemonRoot, 'internal', 'worker');
+  const workerSrc = readdirSync(workerDir)
+    .filter((f) => f.endsWith('.go') && !f.endsWith('_test.go'))
+    .map((f) => readFileSync(path.join(workerDir, f), 'utf8'))
+    .join('\n');
+  const daemonIds = kindConsts
+    .map((name) => {
+      const m = workerSrc.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]+)"`));
+      assert.ok(m, `Kind constant ${name} has no string value in internal/worker`);
+      return m![1];
+    })
+    .sort();
+
+  assert.deepEqual(
+    CATALOG_MANIFESTS.map((m) => m.id).sort(),
+    daemonIds,
+    'dashboard CATALOG_MANIFESTS and daemon WorkerCatalog have drifted — a worker exists in one catalogue but not the other. Update both.',
+  );
 });
 
 test('hire input requires a repository and positive two-decimal quote', () => {

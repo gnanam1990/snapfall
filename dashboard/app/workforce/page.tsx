@@ -144,7 +144,7 @@ function ActiveTeam() {
   );
 }
 
-function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; activation: WorkerActivation | null }) {
+function BuildMonitorCard({ manifest, activation, catalogOnly }: { manifest: WorkerManifest; activation: WorkerActivation | null; catalogOnly: boolean }) {
   const [repository, setRepository] = useState(activation?.repository ?? '');
   const [quoteUsdc, setQuoteUsdc] = useState(activation?.quoteUsdc ?? '25.00');
   const [submitting, setSubmitting] = useState(false);
@@ -160,7 +160,7 @@ function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; 
   }, [activation]);
 
   async function hire() {
-    if (!valid || submitting) return;
+    if (catalogOnly || !valid || submitting) return; // no daemon → the POST would 502; don't fire it
     setSubmitting(true);
     setError('');
     const fallback = 'Build Monitor could not be activated.';
@@ -234,7 +234,7 @@ function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; 
             onChange={(event) => setRepository(event.target.value)}
             placeholder="/path/to/repository"
             autoComplete="off"
-            disabled={Boolean(activeResult)}
+            disabled={catalogOnly || Boolean(activeResult)}
           />
         </label>
         <div className="watcher-readonly">
@@ -249,17 +249,32 @@ function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; 
               value={quoteUsdc}
               onChange={(event) => setQuoteUsdc(event.target.value)}
               aria-label="Milestone quote in USDC"
-              disabled={Boolean(activeResult)}
+              disabled={catalogOnly || Boolean(activeResult)}
             />
             <b>USDC</b>
           </div>
         </label>
-        <button className="watcher-activate" type="button" onClick={hire} disabled={!valid || submitting || Boolean(activeResult)}>
-          {activeResult ? `✓ ${activationLabel(activeResult.state)}` : submitting ? 'Activating…' : 'Activate watcher'}
+        <button
+          className="watcher-activate"
+          type="button"
+          onClick={hire}
+          disabled={catalogOnly || !valid || submitting || Boolean(activeResult)}
+        >
+          {catalogOnly
+            ? 'Needs a connected daemon'
+            : activeResult
+              ? `✓ ${activationLabel(activeResult.state)}`
+              : submitting
+                ? 'Activating…'
+                : 'Activate watcher'}
         </button>
         <div className="watcher-feedback" aria-live="polite">
           {error ? <p className="is-error">{error}</p> : null}
-          {activeResult ? (
+          {catalogOnly ? (
+            // Same honesty as the missing operator-tool cards: a visitor clicking Activate and
+            // getting a 502 reads as "broken", not "quiet". Say why it is disabled instead.
+            <p>Activation needs a connected daemon. This public catalogue shows what Build Monitor is, not a running instance.</p>
+          ) : activeResult ? (
             <p className="is-success">
               Build Monitor: {activationLabel(activeResult.state).toLowerCase()}. <code>{activeResult.jobId}</code>
             </p>
@@ -281,7 +296,7 @@ function BuildMonitorCard({ manifest, activation }: { manifest: WorkerManifest; 
  * flow" plainly so the absent hire button reads as correct, not unfinished — the same honesty
  * the "Coming soon" badge removal is about. Dispatch is real (TestRouter_DispatchesReleaseScribeByKind).
  */
-function OperatorToolCard({ manifest }: { manifest: WorkerManifest }) {
+function OperatorToolCard({ manifest, catalogOnly }: { manifest: WorkerManifest; catalogOnly: boolean }) {
   return (
     <article className="manifest-card">
       <div className="manifest-card-head">
@@ -292,13 +307,21 @@ function OperatorToolCard({ manifest }: { manifest: WorkerManifest }) {
             <p>{manifest.category}</p>
           </div>
         </div>
+        {/* The status describes the tool's nature (no payment flow), which is true with or without a
+            daemon, so it stays. The NOTE below is where honesty about a running instance lives. */}
         <span className="manifest-status is-active"><i />Operator tool · no payment flow</span>
       </div>
       <p className="manifest-description">{manifest.description}</p>
       <div className="permission-row">
         {manifest.permissions.map((permission) => <PermissionChip key={permission} label={permission} />)}
       </div>
-      <p className="manifest-note">No customer, quote, or escrow — invoked by Brain, reports evidence, authorizes nothing.</p>
+      {/* "Invoked by Brain" would imply a running Brain. On the public deploy there is no daemon, so
+          say what is actually true there instead of implying something is executing. */}
+      <p className="manifest-note">
+        {catalogOnly
+          ? 'Catalogue entry — registered with Brain when a daemon runs; nothing is executing on this page.'
+          : 'No customer, quote, or escrow — invoked by Brain, reports evidence, authorizes nothing.'}
+      </p>
     </article>
   );
 }
@@ -386,9 +409,9 @@ export default function WorkforcePage() {
           </span>
         </div>
         <div className="manifest-grid">
-          <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} />
+          <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} catalogOnly={catalogOnly} />
           {operatorTools.map((manifest) => (
-            <OperatorToolCard key={manifest.id} manifest={manifest} />
+            <OperatorToolCard key={manifest.id} manifest={manifest} catalogOnly={catalogOnly} />
           ))}
         </div>
       </section>
