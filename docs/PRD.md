@@ -65,11 +65,15 @@ a **committed artifact**. Code cannot satisfy those. A green CI run is not evide
 - Discovery is a local TF-IDF ranker behind the `Catalog` seam, not the Circle Agent Marketplace
   (§6.6, unchanged).
 - USYC is a mock strategy behind a real interface (§6.7, unchanged).
-- **The compliance screen is a labelled stub**, not the Circle Compliance Engine.
-  `worker.StubCompliance` returns decision `not-screened`, provider `stub`, `stub: true`, and QA
-  surfaces that as a visible note rather than a pass. It is the only implementation of the
-  `Compliance` seam in the tree. Unlike the facilitator this is **not** credential-blocked: no
-  client has been written, so V3 does not unblock it.
+- **Entity/sanctions screening is a labelled stub**, not the Circle Compliance Engine.
+  `worker.StubCompliance` screens a *subject* (a customer/counterparty against a sanctions/KYC
+  provider); it returns decision `not-screened`, provider `stub`, `stub: true`, and QA surfaces
+  that as a visible note rather than a pass. It is the only implementation of the `Compliance`
+  seam in the tree. Unlike the facilitator this is **not** credential-blocked: no client has been
+  written, so V3 does not unblock it. **This is unchanged by `compliance-scout`**, which is a
+  different function entirely: an operator tool that lints the repo's *own* committed
+  manifests/configs for least-privilege policy alignment. It screens no external entity, so its
+  arrival does not make sanctions/entity screening real — that stays stubbed.
 
 ---
 

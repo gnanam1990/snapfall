@@ -36,18 +36,24 @@ export const RELEASE_SCRIBE_MANIFEST: WorkerManifest = {
   permissions: ['Read-only repo', 'No payments', 'No shell'],
 };
 
+export const COMPLIANCE_SCOUT_MANIFEST: WorkerManifest = {
+  id: 'compliance-scout',
+  name: 'Compliance Scout',
+  category: 'Security & compliance',
+  description: 'Scans committed manifests/configs for least-privilege policy alignment and reports findings to Brain.',
+  permissions: ['Read-only repo', 'No payments', 'No shell'],
+};
+
 // The committed fallback catalogue, used when no daemon has answered /api/workforce (the public
 // deploy). Keep in step with cmd/snapfall/main.go's WorkerCatalog: a manifest here that the
 // daemon does not register would claim a worker that cannot be dispatched.
-export const CATALOG_MANIFESTS: WorkerManifest[] = [BUILD_MONITOR_MANIFEST, RELEASE_SCRIBE_MANIFEST];
+export const CATALOG_MANIFESTS: WorkerManifest[] = [
+  BUILD_MONITOR_MANIFEST,
+  RELEASE_SCRIBE_MANIFEST,
+  COMPLIANCE_SCOUT_MANIFEST,
+];
 
 export const COMING_SOON_WORKERS = [
-  {
-    id: 'compliance-scout',
-    name: 'Compliance Scout',
-    category: 'Security & compliance',
-    description: 'Scans artifacts and configs for policy alignment and reports findings.',
-  },
   {
     id: 'incident-watch',
     name: 'Incident Watch',

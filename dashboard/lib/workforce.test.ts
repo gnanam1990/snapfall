@@ -7,6 +7,7 @@ import {
   BUILD_MONITOR_MANIFEST,
   CATALOG_MANIFESTS,
   COMING_SOON_WORKERS,
+  COMPLIANCE_SCOUT_MANIFEST,
   RELEASE_SCRIBE_MANIFEST,
   activationLabel,
   validHireInput,
@@ -30,6 +31,17 @@ test('release-scribe is a real registered manifest, not a coming-soon stub', () 
   assert.ok(
     !COMING_SOON_WORKERS.map((w) => String(w.id)).includes('release-scribe'),
     'release-scribe must no longer be advertised as coming soon',
+  );
+});
+
+test('compliance-scout is a real registered manifest, not a coming-soon stub', () => {
+  assert.equal(COMPLIANCE_SCOUT_MANIFEST.id, 'compliance-scout');
+  assert.deepEqual(COMPLIANCE_SCOUT_MANIFEST.permissions, ['Read-only repo', 'No payments', 'No shell']);
+  assert.equal(COMPLIANCE_SCOUT_MANIFEST.checklistPath, undefined);
+  assert.ok(CATALOG_MANIFESTS.some((m) => m.id === 'compliance-scout'), 'must be in the committed fallback catalogue');
+  assert.ok(
+    !COMING_SOON_WORKERS.map((w) => String(w.id)).includes('compliance-scout'),
+    'compliance-scout must no longer be advertised as coming soon',
   );
 });
 
