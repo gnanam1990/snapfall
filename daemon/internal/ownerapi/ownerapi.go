@@ -24,6 +24,7 @@ import (
 
 	"github.com/gnanam1990/snapfall/daemon/internal/approval"
 	"github.com/gnanam1990/snapfall/daemon/internal/billing"
+	"github.com/gnanam1990/snapfall/daemon/internal/events"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
 
@@ -480,9 +481,15 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-tick.C:
 		}
+		// agent.heartbeat is the Day-1 dummy worker's liveness tick (agents.HeartbeatWorker). It is
+		// still STORED — the event log keeps it, and the bus subscriber in main.go still logs it —
+		// but it carries no owner-facing meaning and, at one per second, it evicts money and chain
+		// events from the dashboard's 30-item feed within seconds (#78). Excluding it in the WHERE
+		// (rather than skipping it in the loop below) keeps it out of the 256-row page budget and off
+		// the resume cursor entirely, so a heartbeat burst can never starve a real event of its slot.
 		rows, err := s.st.DB().QueryContext(r.Context(),
 			`SELECT seq, ts, kind, COALESCE(entity_id,''), COALESCE(actor,''), COALESCE(payload_json,'')
-			 FROM events WHERE seq > ? ORDER BY seq LIMIT 256`, lastSeq)
+			 FROM events WHERE seq > ? AND kind != ? ORDER BY seq LIMIT 256`, lastSeq, events.KindWorkerHeartbeat)
 		if err != nil {
 			return
 		}
