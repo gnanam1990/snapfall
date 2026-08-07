@@ -44,6 +44,15 @@ export const COMPLIANCE_SCOUT_MANIFEST: WorkerManifest = {
   permissions: ['Read-only repo', 'No payments', 'No shell'],
 };
 
+export const INCIDENT_WATCH_MANIFEST: WorkerManifest = {
+  id: 'incident-watch',
+  name: 'Incident Watch',
+  category: 'Reliability',
+  // Says exactly what it does: liveness + recorded incidents, not "significant incidents".
+  description: 'Watches the H2 event stream for recorded incidents (freeze, reverted advance, failed payment) and probes endpoint liveness.',
+  permissions: ['Read-only stream', 'No payments', 'No shell'],
+};
+
 // The committed fallback catalogue, used when no daemon has answered /api/workforce (the public
 // deploy). Keep in step with cmd/snapfall/main.go's WorkerCatalog: a manifest here that the
 // daemon does not register would claim a worker that cannot be dispatched.
@@ -51,16 +60,16 @@ export const CATALOG_MANIFESTS: WorkerManifest[] = [
   BUILD_MONITOR_MANIFEST,
   RELEASE_SCRIBE_MANIFEST,
   COMPLIANCE_SCOUT_MANIFEST,
+  INCIDENT_WATCH_MANIFEST,
 ];
 
-export const COMING_SOON_WORKERS = [
-  {
-    id: 'incident-watch',
-    name: 'Incident Watch',
-    category: 'Reliability',
-    description: 'Monitors systems and alerts Brain on significant incidents with evidence.',
-  },
-] as const;
+// All three former "Coming soon" workers have shipped; nothing is pending.
+export const COMING_SOON_WORKERS: ReadonlyArray<{
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+}> = [];
 
 export function validHireInput(repository: string, quoteUsdc: string): boolean {
   if (!repository.trim()) return false;
