@@ -8,6 +8,7 @@ import {
   CATALOG_MANIFESTS,
   COMING_SOON_WORKERS,
   COMPLIANCE_SCOUT_MANIFEST,
+  INCIDENT_WATCH_MANIFEST,
   RELEASE_SCRIBE_MANIFEST,
   activationLabel,
   validHireInput,
@@ -43,6 +44,22 @@ test('compliance-scout is a real registered manifest, not a coming-soon stub', (
     !COMING_SOON_WORKERS.map((w) => String(w.id)).includes('compliance-scout'),
     'compliance-scout must no longer be advertised as coming soon',
   );
+});
+
+test('incident-watch is a real registered manifest, not a coming-soon stub', () => {
+  assert.equal(INCIDENT_WATCH_MANIFEST.id, 'incident-watch');
+  assert.deepEqual(INCIDENT_WATCH_MANIFEST.permissions, ['Read-only stream', 'No payments', 'No shell']);
+  assert.equal(INCIDENT_WATCH_MANIFEST.checklistPath, undefined);
+  // The description says what it does — liveness + recorded incidents — not "significant incidents".
+  assert.match(INCIDENT_WATCH_MANIFEST.description, /recorded incidents/);
+  assert.ok(CATALOG_MANIFESTS.some((m) => m.id === 'incident-watch'), 'must be in the committed fallback catalogue');
+});
+
+test('nothing is pending — all three former Coming-soon workers have shipped', () => {
+  assert.equal(COMING_SOON_WORKERS.length, 0);
+  for (const id of ['release-scribe', 'compliance-scout', 'incident-watch']) {
+    assert.ok(CATALOG_MANIFESTS.some((m) => m.id === id), `${id} must be a real registered manifest`);
+  }
 });
 
 test('hire input requires a repository and positive two-decimal quote', () => {

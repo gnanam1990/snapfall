@@ -518,6 +518,14 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		Category:    "Security & compliance",
 		Description: "Scans committed manifests/configs for least-privilege policy alignment and reports findings to Brain.",
 		Permissions: []string{"Read-only repo", "No payments", "No shell"},
+	}, {
+		// Operator tool. Description states exactly what it does — liveness + recorded incidents,
+		// not "significant incidents" — so the catalog promises no capability the worker lacks.
+		ID:          worker.IncidentWatchKind,
+		Name:        "Incident Watch",
+		Category:    "Reliability",
+		Description: "Watches the H2 event stream for recorded incidents (freeze, reverted advance, failed payment) and probes endpoint liveness.",
+		Permissions: []string{"Read-only stream", "No payments", "No shell"},
 	}}
 	api.HireWorker = buildMonitorHire(br)
 	api.ListWorkerActivations = buildMonitorActivations(br)
@@ -758,6 +766,31 @@ func buildMonitorActivations(br *brain.Brain) func(context.Context) ([]ownerapi.
 	}
 }
 
+// newIncidentSource builds incident-watch's observation source from the environment. The stream
+// consumer (the substance) reads the daemon's OWN H2 event stream as an HTTP client — default the
+// loopback --api-addr, override with SNAPFALL_INCIDENT_STREAM_URL; the owner token, when set,
+// authenticates it. The health probe (a second signal) probes SNAPFALL_INCIDENT_ENDPOINTS (a
+// comma-separated list); with none configured it is omitted, and the stream alone is the monitor.
+func newIncidentSource() worker.IncidentSource {
+	streamURL := strings.TrimSpace(os.Getenv("SNAPFALL_INCIDENT_STREAM_URL"))
+	if streamURL == "" {
+		streamURL = "http://127.0.0.1:4010/api/v1/events/stream" // the default --api-addr loopback bind
+	}
+	stream := worker.StreamIncidentSource{URL: streamURL, Token: os.Getenv("SNAPFALL_OWNER_TOKEN")}
+
+	var health worker.IncidentSource
+	var endpoints []string
+	for _, e := range strings.Split(os.Getenv("SNAPFALL_INCIDENT_ENDPOINTS"), ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			endpoints = append(endpoints, e)
+		}
+	}
+	if len(endpoints) > 0 {
+		health = worker.HealthProbeSource{Endpoints: endpoints}
+	}
+	return worker.NewCombinedIncidentSource(stream, health)
+}
+
 func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, orgID, deployment string) (*brain.Brain, *approval.Lifecycle, *bootLanes, error) {
 	mem, err := brain.NewMemoryStore(filepath.Join(filepath.Dir(dbPath), "memory"))
 	if err != nil {
@@ -788,6 +821,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		return nil, nil, nil, err
 	}
 	if err := br.RegisterWorker(worker.NewComplianceScout(worker.ManifestPolicySource{})); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := br.RegisterWorker(worker.NewIncidentWatch(newIncidentSource())); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := br.RegisterQAWorker(qa.Worker{}); err != nil {

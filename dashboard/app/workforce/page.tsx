@@ -303,25 +303,6 @@ function OperatorToolCard({ manifest }: { manifest: WorkerManifest }) {
   );
 }
 
-function ComingSoonCard({ worker, index }: { worker: (typeof COMING_SOON_WORKERS)[number]; index: number }) {
-  const glyphs = ['✎', '⌕', '◉'];
-  return (
-    <article className="manifest-card manifest-soon">
-      <span className="manifest-icon" aria-hidden="true">{glyphs[index]}</span>
-      <h3>{worker.name}</h3>
-      <p className="manifest-category">{worker.category}</p>
-      <span className="coming-soon"><i />Coming soon</span>
-      <p className="manifest-description">{worker.description}</p>
-      <div className="soon-divider" />
-      <div className="permission-row">
-        <PermissionChip label="Read-only repo" />
-        <PermissionChip label="No payments" />
-        <PermissionChip label="No shell" />
-      </div>
-    </article>
-  );
-}
-
 export default function WorkforcePage() {
   const [manifests, setManifests] = useState<WorkerManifest[]>(CATALOG_MANIFESTS);
   const [activations, setActivations] = useState<WorkerActivation[]>([]);
@@ -400,16 +381,14 @@ export default function WorkforcePage() {
             <p>Hire from reviewed manifests. Permissions stay explicit.</p>
           </div>
           <span className="gallery-count">
-            {manifests.length} available · {COMING_SOON_WORKERS.length} upcoming
+            {manifests.length} available
+            {COMING_SOON_WORKERS.length > 0 ? ` · ${COMING_SOON_WORKERS.length} upcoming` : ''}
           </span>
         </div>
         <div className="manifest-grid">
           <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} />
           {operatorTools.map((manifest) => (
             <OperatorToolCard key={manifest.id} manifest={manifest} />
-          ))}
-          {COMING_SOON_WORKERS.map((worker, index) => (
-            <ComingSoonCard key={worker.id} worker={worker} index={index} />
           ))}
         </div>
       </section>
