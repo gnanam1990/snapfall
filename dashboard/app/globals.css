@@ -292,7 +292,10 @@ a { color: inherit; text-decoration: none; }
 /* ── main ── */
 .main { width: 100%; min-width: 0; padding: 26px 30px 60px; max-width: 1180px; }
 .topbar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 20px; }
-.page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
+/* A real page heading, not a caption hovering between title and label (#4). 30px reads as the
+   page's own h1 while staying clearly below the 46px landing hero. Shared by every app page, so all
+   of them gain a proper heading, not just Overview. */
+.page-title { font-size: 30px; font-weight: 700; letter-spacing: -0.025em; margin: 0; }
 .page-sub { color: var(--muted); margin: 4px 0 0; }
 .badge-live { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .badge-live::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: var(--pos); box-shadow: 0 0 0 0 var(--pos-glow); animation: pulse 1.8s infinite; }
@@ -1693,8 +1696,11 @@ table.t { width: 100%; border-collapse: collapse; }
 .mg-bal { fill: var(--text); font-size: 14px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
 
 /* F2 Score Ring: only the percentage sits inside the circle; captions flow beneath it. */
-.ring { width: 128px; flex: none; text-align: center; }
-.ring-figure { position: relative; width: 104px; height: 104px; margin: 0 auto; }
+/* The ring leads the Overview page now (moved out of the money-graph header), so it carries a
+   proportionate nudge — 104→124px figure, 23→28px value — to read as primary against the pool
+   vessel's mass rather than sitting subordinate to it. Still the ring device, not a hero tile. */
+.ring { width: 148px; flex: none; text-align: center; }
+.ring-figure { position: relative; width: 124px; height: 124px; margin: 0 auto; }
 .ring-figure.is-bumping { animation: ring-bump 0.5s ease; }
 @keyframes ring-bump { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.06); } }
 .ring-svg { width: 100%; height: 100%; display: block; }
@@ -1707,10 +1713,30 @@ table.t { width: 100%; border-collapse: collapse; }
   transition: stroke-dasharray 0.1s linear;
 }
 .ring-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.ring-pct { font-size: 23px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ring-pct { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .ring-cap { margin-top: 8px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .ring-hint { margin-top: 1px; font-size: 11.5px; color: var(--muted-2); }
 .ring-hint b { color: var(--pos); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* The advance rate leads the Overview page: the ScoreRing beside its on-chain progression, above
+   the pool vessel. Not a hero-metric tile — the ring is this world's own device, the progression is
+   the evidence set beside it. The ring keeps its 23px value; the ORDER carries the emphasis. */
+.rate-hero { display: flex; align-items: center; gap: 34px; flex-wrap: wrap; padding: 2px 0 10px; }
+.rate-progression { min-width: 0; }
+.rate-progression-cap {
+  margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--muted);
+}
+.rate-progression-seq {
+  list-style: none; margin: 9px 0 0; padding: 0;
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.rate-progression-seq li { display: flex; align-items: baseline; gap: 10px; font-size: 20px; font-weight: 600; color: var(--muted); }
+.rate-progression-seq li::after { content: "\2192"; color: var(--muted-2); font-weight: 400; font-size: 15px; }
+.rate-progression-seq li:last-child::after { content: none; }
+.rate-progression-seq li.is-current { color: var(--text); }
+.rate-progression-note { margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); max-width: 46ch; }
 
 @media (max-width: 640px) {
   .mg-head { flex-direction: column; align-items: flex-start; }
@@ -2208,13 +2234,15 @@ table.t { width: 100%; border-collapse: collapse; }
 .lp-alt:hover { color: var(--accent-bright); }
 
 .lp-h2 { margin: 0 0 18px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
-.lp-body { margin: 0 0 14px; font-size: 14px; line-height: 1.65; color: var(--text-2); max-width: 66ch; }
+/* Landing body lifted 14px → 16px (#3): this is the honest-limits paragraph, the one most meant to
+   be read. Measure already capped at 66ch. */
+.lp-body { margin: 0 0 14px; font-size: 16px; line-height: 1.65; color: var(--text-2); max-width: 66ch; }
 .lp-body code, .lp-ref code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12.5px; color: var(--text); }
 
 .lp-figure { margin-top: 44px; }
 .lp-honest { margin-top: 52px; }
 /* The caption sits under the drawing and does the explaining the drawing cannot. */
-.lp-caption { margin: 8px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted); max-width: 74ch; }
+.lp-caption { margin: 8px 0 0; font-size: 14px; line-height: 1.7; color: var(--muted); max-width: 74ch; }
 .lp-caption code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; color: var(--text-2); }
 .lp-svg { width: 100%; height: auto; display: block; overflow: visible; }
 .lp-wall { fill: none; stroke: var(--text-2); stroke-width: 1.5; }

@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import type { ActivityMessage } from '@/lib/activity';
 import type { PoolStats } from '@/lib/types';
 import { formatUsdc } from '@/lib/format';
-import ScoreRing from './ScoreRing';
 
 /**
  * F1 Live Money Graph (V10, PRD §8) — the "watch the Snapfall" screen.
@@ -182,14 +181,12 @@ export default function MoneyGraph({
   latest,
   treasuryUsdc,
   pool,
-  jobPriceUsdc,
   live = true,
 }: {
   /** Newest normalized activity message; the graph reacts to its kind + amount. */
   latest: ActivityMessage | null;
   treasuryUsdc: string | null;
   pool: PoolStats | null;
-  jobPriceUsdc?: string | null;
   live?: boolean;
 }) {
   // null means NOT YET KNOWN, not zero. The graph does not replay history, so on a mid-cycle
@@ -373,7 +370,9 @@ export default function MoneyGraph({
             {beat ? CAPTION[beat] : 'watch the money move'}
           </p>
         </div>
-        <ScoreRing rateBps={pool?.orgRateBps ?? null} jobPriceUsdc={jobPriceUsdc} />
+        {/* The advance-rate ScoreRing moved out of this header to lead the Overview page (the rate
+            is the product's central claim; it was rendering below the pool vessel). MoneyGraph is
+            now purely the money-flow graph. */}
       </div>
 
       <div className="mg-stage">
