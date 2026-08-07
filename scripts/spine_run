@@ -523,7 +523,7 @@ on_exit() {
 print_plan() {
 	cat <<EOF
 
-The plan, seven beats, in demo order (PRD §5.1):
+The plan — seven demo beats plus the operator's two on-chain delivery assertions (2b, 5c), in demo order (PRD §5.1):
 
   1 FUND         scripts/seed_demo tops the pool to the exposure-cap floor, mints a fresh
                  job id, funds the escrow from the customer wallet, and re-reads the chain.
@@ -531,12 +531,16 @@ The plan, seven beats, in demo order (PRD §5.1):
   2 SNAP         POST /api/v1/jobs/$job_label/advance, approve it in the inbox, then read
                  FloatPool.openAdvanceOf back from chain. Proves the snap and the H2 approval
                  path; PASS needs principal == the seed's expected advance.
+  2b START-WORK  JobVault.startWork (operator): Funded -> InProgress, read back as jobStatus 2.
+                 The advance is drawn; the operator now asserts on chain that work has begun.
   3 SPEND        the DD worker buys the $(usdc_short $profile_micros) source through the sidecar; verified from the
                  sidecar's durable store, not from the worker's own report. Closes V1 live.
   4 REJECT       the $(usdc_short $premium_micros) source escalates; this runner answers request_alternative with a
                  cost reason (internal/worker/worker.go interpretReason keys the adaptation
                  on the reason text). The rejection beat, end to end.
   5 ALTERNATIVE  the worker adapts and buys the $(usdc_short $bench_micros) source; verified from the store again.
+  5c DELIVER     JobVault.submitDelivery (operator): InProgress -> Delivered, read back as jobStatus 3,
+                 with a disclosed spine-run deliveryHash (keccak(jobId), not the daemon's content).
   6 SETTLE       mint the customer accept credential, POST the customer Accept, then read
                  JobVault status == Accepted and openAdvanceOf open == false from chain.
                  The fall. Closes V9's "on-chain settlement tx" clause.
@@ -973,6 +977,29 @@ else
 	unverified "openAdvanceOf never showed an open advance within ${wait_chain}s; principal read back: ${adv_seen_principal:-none}"
 fi
 
+# ── beat 2b · START-WORK ──────────────────────────────────────────────────────
+# The operator's on-chain assertion "work has begun": Funded -> InProgress (JobVault.startWork,
+# operator-signed, so chainops uses its default TREASURY_PRIVATE_KEY). It must precede
+# submit-delivery (which requires InProgress) and therefore beat 6 (which requires Delivered).
+# Neither the daemon pipeline nor an earlier version of this script drove it, so the job sat at
+# Funded and beat 6's acceptDelivery reverted on status (the 7 Aug run). The write's own receipt
+# is not the evidence -- jobStatus read back from chain is; a mined-and-reverted startWork leaves
+# the status at Funded, which the assertion below catches. Not fatal: beats 3-5 exercise the x402
+# and policy path, which never touches JobVault status, so the run continues either way.
+beat 2b START-WORK "the operator asserts on chain that work has begun (Funded -> InProgress)"
+chainops start-work "$vault_job" >"$run_dir/start-work.txt" 2>&1 || true
+sed 's/^/     /' "$run_dir/start-work.txt" 2>/dev/null || true
+sw_status=""
+if chainops job-status "$vault_job" >"$run_dir/status-inprogress.txt" 2>&1; then
+	sed 's/^/     /' "$run_dir/status-inprogress.txt"
+	sw_status="$(sed -n 's/^job-status: \([0-9]*\).*/\1/p' "$run_dir/status-inprogress.txt" | tail -n 1)"
+fi
+if [[ "$sw_status" == "2" ]]; then
+	pass "JobVault.jobStatus reads 2 (InProgress) — startWork took on chain"
+else
+	soft_fail "startWork did not move the job to InProgress: jobStatus is ${sw_status:-unreadable}, not 2, so nothing downstream can deliver or settle"
+fi
+
 # ── beat 3 · SPEND ────────────────────────────────────────────────────────────
 beat 3 SPEND "the DD worker buys the $(usdc_short $profile_micros) source; policy auto-approves"
 
@@ -1131,6 +1158,39 @@ case "$terminal_line" in
 	*delivery_ready*) info "QA gate: stage delivery_ready, so the QA worker passed the draft (FR-QA-001)" ;;
 	*) info "QA gate: NOT delivery_ready, so beat 6 will refuse, which is the correct behavior" ;;
 esac
+
+# ── beat 5c · DELIVER ─────────────────────────────────────────────────────────
+# The operator's on-chain assertion "the deliverable exists": InProgress -> Delivered
+# (JobVault.submitDelivery, operator-signed). acceptDelivery (beat 6) accepts ONLY the Delivered
+# state, so without this the customer Accept reverts (the 7 Aug run). chainops is daemon-
+# independent, so this runs fine after the QA gate stopped the daemon. Gated on the QA gate: the
+# operator asserts delivery only when the DD task actually reached delivery_ready.
+#
+# THE deliveryHash IS A SPINE-RUN MARKER, NOT A PROVENANCE COMMITMENT. submitDelivery needs a
+# non-zero hash (SC-JV-004); this script is decoupled from the daemon's deliverable (the same
+# reason job-004 used a placeholder), so the hash is keccak(jobId) -- deterministic, unique per
+# job, unmistakable for another run's or job-004's 0x2222. It proves "a delivery was submitted",
+# NOT that this specific report content was committed. Real provenance would couple spine_run to
+# the daemon's store, a deliberate non-goal here; the log says so rather than dressing it up.
+beat 5c DELIVER "the operator asserts the deliverable on chain (InProgress -> Delivered)"
+if [[ "$terminal_line" == *delivery_ready* ]]; then
+	delivery_hash="$(cast keccak "$vault_job")"
+	info "deliveryHash $delivery_hash — a spine-run marker = keccak(jobId), NOT the daemon's deliverable content (provenance is decoupled by design)"
+	chainops submit-delivery "$vault_job" "$delivery_hash" >"$run_dir/submit-delivery.txt" 2>&1 || true
+	sed 's/^/     /' "$run_dir/submit-delivery.txt" 2>/dev/null || true
+	sd_status=""
+	if chainops job-status "$vault_job" >"$run_dir/status-delivered.txt" 2>&1; then
+		sed 's/^/     /' "$run_dir/status-delivered.txt"
+		sd_status="$(sed -n 's/^job-status: \([0-9]*\).*/\1/p' "$run_dir/status-delivered.txt" | tail -n 1)"
+	fi
+	if [[ "$sd_status" == "3" ]]; then
+		pass "JobVault.jobStatus reads 3 (Delivered) — submitDelivery took on chain, so beat 6 can settle"
+	else
+		soft_fail "submitDelivery did not move the job to Delivered: jobStatus is ${sd_status:-unreadable}, not 3, so beat 6's acceptDelivery will revert"
+	fi
+else
+	unverified "the QA gate was not delivery_ready, so the operator does not assert delivery; beat 6 will correctly refuse"
+fi
 
 # ── beat 6 · SETTLE ───────────────────────────────────────────────────────────
 beat 6 SETTLE "the customer clicks Accept and one atomic tx pays the pool first"
