@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage, FloatSnapshot } from '@/lib/types';
+import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage, FloatSnapshot, RateHistoryPoint } from '@/lib/types';
 import type { ActivityMessage } from '@/lib/activity';
 import { humanizeLegacyEvent, humanizeStreamEvent } from '@/lib/activity';
 
@@ -18,6 +18,7 @@ import { formatUsdc, formatUsdcExact, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import PoolVessel from '@/components/PoolVessel';
 import MoneyGraph from '@/components/MoneyGraph';
+import ScoreRing from '@/components/ScoreRing';
 import Card, { CardHeader, CardBody } from '@/components/Card';
 import TeamActivityFeed from '@/components/TeamActivityFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
@@ -80,6 +81,27 @@ function PendingApprovals({
         Review and decide <span aria-hidden="true">→</span>
       </Link>
     </section>
+  );
+}
+
+// The advance-rate progression: the sequence of on-chain rate changes that makes "earned, not set"
+// concrete, shown beside the ring. Reads float.rateHistoryBps (the historical scan) and renders
+// nothing when that history is unavailable — e.g. a public RPC that cannot complete the log scan —
+// rather than inventing a curve.
+function RateProgression({ points }: { points: RateHistoryPoint[] | null }) {
+  if (!points || points.length === 0) return null;
+  return (
+    <div className="rate-progression">
+      <p className="rate-progression-cap">Earned, not set</p>
+      <ol className="rate-progression-seq" aria-label="Advance rate history">
+        {points.map((p, i) => (
+          <li key={`${p.rateBps}-${i}`} className={i === points.length - 1 ? 'is-current' : undefined}>
+            {formatBps(p.rateBps)}
+          </li>
+        ))}
+      </ol>
+      <p className="rate-progression-note">Each accepted job raises the rate; the chain is the record.</p>
+    </div>
   );
 }
 
@@ -213,6 +235,21 @@ export default function OverviewPage() {
     </>
   );
 
+  // The advance rate is the claim the whole project rests on, so it LEADS the page and the vessel
+  // follows — a visitor's first impression should be the rate, not a pool balance (the order was
+  // inverted). Rate source: the live pool aggregate when a daemon is streaming, else the /api/float
+  // chain read, so a daemon-less public visitor still sees it. Kept within the direction contract:
+  // the ScoreRing is this world's own device, not the hero-metric tile the contract refuses.
+  const rateHero = (
+    <section className="rate-hero" aria-label="Advance rate, earned from delivery history">
+      <ScoreRing
+        rateBps={pool?.orgRateBps ?? float?.orgRateBps ?? null}
+        jobPriceUsdc={snap?.activeJobs?.[0]?.priceUsdc ?? null}
+      />
+      <RateProgression points={float?.rateHistoryBps ?? null} />
+    </section>
+  );
+
   if (!snap) {
     return (
       <>
@@ -238,6 +275,7 @@ export default function OverviewPage() {
             <p className="page-sub">One founder, a workforce that finances itself.</p>
           </div>
         </div>
+        {rateHero}
         {treasuryAndPool}
         <Card className="mt">
           <CardHeader title="No daemon connected — showing on-chain data only" />
@@ -286,6 +324,8 @@ export default function OverviewPage() {
         )}
       </div>
 
+      {rateHero}
+
       {treasuryAndPool}
 
       <div className="mt">
@@ -293,7 +333,6 @@ export default function OverviewPage() {
           latest={activity[0] ?? null}
           treasuryUsdc={float?.treasuryUsdc ?? null}
           pool={pool}
-          jobPriceUsdc={snap.activeJobs?.[0]?.priceUsdc ?? null}
           live={status === 'live'}
         />
       </div>
