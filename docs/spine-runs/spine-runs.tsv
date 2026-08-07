@@ -1,0 +1,6 @@
+# Snapfall spine runs. One line per run, appended by scripts/spine_run.
+# started_utc	git_sha	verdict	scale	first_bad_beat	vault_job_id	note
+2026-08-07T05:59:19Z	695d1a8	FAIL	unknown	1-FUND	-	seed_demo failed; nothing was escrowed, so no later beat can mean anything
+2026-08-07T06:14:17Z	695d1a8+dirty	FAIL	unknown	1-FUND	-	seed_demo failed; nothing was escrowed, so no later beat can mean anything
+2026-08-07T06:30:45Z	695d1a8+dirty	FAIL	price=1.00	3-SPEND	0xd37ec9bb2ab90be9c3d911634082b61ad104571537a923f00a7aad8bb5675fc5	the 0.04 payment rests at DELIVERED, not SETTLED (id pay_f962cb080f58ae5d): seller.ts:217 returns settlement NOT_BROADCAST, so the x402 handshake and signature are real but nothing reached Arc. V1's clause stays open until a facilitator broadcast is wired; see docs/V3-CIRCLE-SETUP.md
+2026-08-07T07:12:03Z	695d1a8+dirty	UNVERIFIED	price=0.60	3-SPEND	0xb02580600dbcb1025b892f6251d3c91f36ff54fb4319df4b046b167c10c20bc8	the 0.04 payment rests at DELIVERED, not SETTLED (id pay_f962cb080f58ae5d): seller.ts:217 returns settlement NOT_BROADCAST, so the x402 handshake and signature are real but nothing reached Arc. V1's clause stays open until a facilitator broadcast is wired; see docs/V3-CIRCLE-SETUP.md

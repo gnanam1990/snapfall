@@ -148,8 +148,8 @@ An org's advance rate is set by its on-chain repayment record, read live from
 `FloatPool.advanceRate(org)`:
 
 ```bash
-cast call $FLOATPOOL "advanceRate(address)(uint16)" $OPERATOR --rpc-url $ARC   # 6000
-cast call $FLOATPOOL "acceptedJobs(address)(uint32)" $OPERATOR --rpc-url $ARC  # 2
+cast call $FLOATPOOL "advanceRate(address)(uint16)" $OPERATOR --rpc-url $ARC   # 6500
+cast call $FLOATPOOL "acceptedJobs(address)(uint32)" $OPERATOR --rpc-url $ARC  # 3
 ```
 
 | Rate (bps) | Block | Emitted? |
@@ -157,6 +157,7 @@ cast call $FLOATPOOL "acceptedJobs(address)(uint32)" $OPERATOR --rpc-url $ARC  #
 | 5000 | — | **No.** The base rate is the pre-tick value (`BASE_BPS`, `acceptedJobs = 0`); `RateChanged` fires only *on* a tick, so 50% is never emitted. |
 | 5500 | 53,290,364 | `RateChanged` (job-003 settlement) |
 | 6000 | 53,613,272 | `RateChanged` (job-004 settlement, §4) |
+| 6500 | 55,738,882 | `RateChanged` (first automated run, §7) |
 
 `RateChanged` topic0 — scan for it directly:
 
@@ -168,6 +169,7 @@ cast call $FLOATPOOL "acceptedJobs(address)(uint32)" $OPERATOR --rpc-url $ARC  #
 # each tick lives in its settlement receipt; both carry the topic0 above
 cast receipt 0x9b57c8b8aa917823611b3f94a82de5cd9a14696ea74c6dc9c59107945b03ccdd --rpc-url $ARC  # -> 5500 @ 53290364
 cast receipt 0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b --rpc-url $ARC  # -> 6000 @ 53613272
+cast receipt 0xc0fb6a8699147cc6381d6d8863c7dadd96d4b43e0299773ff5442574d26c52fc --rpc-url $ARC  # -> 6500 @ 55738882
 ```
 
 The engine is **deliberately asymmetric** — read the constants from chain, not the source:
@@ -192,11 +194,42 @@ The settlement balances exactly, to the cent, on chain:
 ```bash
 cast call $FLOATPOOL "FEE_BPS()(uint16)"         --rpc-url $ARC   # 200   (2% of the 0.55 principal = 0.011)
 cast call $FLOATPOOL "RESERVE_CUT_BPS()(uint16)" --rpc-url $ARC   # 2000  (20% of the fee -> reserve)
-cast call $FLOATPOOL "reserve()(uint256)"        --rpc-url $ARC   # 4200  (0.0042 cumulative: job-003 0.002 + job-004 0.0022)
+cast call $FLOATPOOL "reserve()(uint256)"        --rpc-url $ARC   # 5640  (0.00564 cumulative: job-003 0.002 + job-004 0.0022 + first automated run 0.00144)
 ```
 
-The on-chain `reserve` is cumulative across both settled jobs (0.0042); job-004's own
-contribution is the 0.0022 above.
+The on-chain `reserve` is cumulative across all three settled jobs (0.00564); job-004's own
+contribution is the 0.0022 above, and the first automated run's (§7) is 0.00144.
+
+## 7. A second settlement — automated, on independent LP capital
+
+job-004 (§3–§6) was walked by hand, one `chainops` command at a time, on a pool the operator had
+seeded. On 7 Aug 2026 `scripts/spine_run` drove the whole spine end to end and settled a second
+job — this time on a pool funded entirely by an independent LP, with the operator holding **zero**
+pool shares. Full run: [`docs/spine-runs/2026-08-07-first-automated-settlement.md`](spine-runs/2026-08-07-first-automated-settlement.md).
+
+| | |
+|---|---|
+| Job id | `0xb02580600dbcb1025b892f6251d3c91f36ff54fb4319df4b046b167c10c20bc8` |
+| Settlement tx | `0xc0fb6a8699147cc6381d6d8863c7dadd96d4b43e0299773ff5442574d26c52fc` (block 55,738,882) |
+| LP that seeded the pool | `0x27Ff…Eb03` — deposited 3.60, tx `0xe8e1c0…907e7e` |
+| Scale | reduced (`price=0.60`) — this does **not** close a PRD-figure done-when clause |
+
+The waterfall, 6-decimal `Transfer` logs by index (each also emitted at the 18dp native index one
+lower, 69 and 72):
+
+| logIndex | Event | Value |
+|---:|---|---|
+| **70** | `Transfer` → FloatPool | **0.3672 USDC** (0.36 principal + 0.0072 fee) |
+| **73** | `Transfer` → operator | **0.2328 USDC** |
+
+**The pool is repaid at log index 70; the operator at 73. Pool is lower** — the same control-flow
+ordering as §4, on a different job, from an automated run. Reconciliation: escrow 0.60 = pool
+0.3672 + operator 0.2328; fee 0.0072 = first-loss reserve 0.00144 + LP yield 0.00576.
+
+What distinguishes this proof from job-004: the advance borrowed **independent LP capital**. The
+treasury held no pool shares, so "the business opens on someone else's capital" is literally true
+here in a way it was not for the operator-seeded job-004. Two settlements — one hand-driven on
+operator liquidity, one automated on independent LP liquidity — is a stronger record than one.
 
 ## Security review
 
