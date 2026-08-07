@@ -593,6 +593,30 @@ need_env() {
 	fi
 }
 
+# need_key_addr asserts the private key in <key-var> derives <expected-addr>. This is the guard the
+# 7 Aug run lacked: SNAPFALL_CUSTOMER_PRIVATE_KEY was a copy of the treasury key, so it derived the
+# operator address, passed a preflight that only checked LP != treasury, and died at beat 1 when
+# seed_demo's SC-JV-001 check refused the wrong signer -- after wasting a seed. A wrong signer is a
+# configuration error and belongs here, not at beat 1. Lowercased with tr (not bash ${x,,}) to stay
+# 3.2-safe, matching the LP check below. Skips when either input is empty: need_env already reports a
+# missing key or address, and re-reporting it here would just be noise.
+need_key_addr() { # need_key_addr <key-var-name> <expected-addr> <label>
+	local keyvar="$1" expected="$2" label="$3" got got_l exp_l
+	[[ -n "${!keyvar:-}" && -n "$expected" ]] || return 0
+	got="$(cast wallet address --private-key "${!keyvar}" 2>/dev/null || printf '')"
+	got_l="$(printf %s "$got" | tr "[:upper:]" "[:lower:]")"
+	exp_l="$(printf %s "$expected" | tr "[:upper:]" "[:lower:]")"
+	if [[ -z "$got" ]]; then
+		printf '   MISSING  %s is not a usable private key (no address could be derived)\n' "$keyvar"
+		preflight_missing=1
+	elif [[ "$got_l" != "$exp_l" ]]; then
+		printf '   MISSING  %s derives %s, but %s expects %s -- wrong signer\n' "$keyvar" "$got" "$label" "$expected"
+		preflight_missing=1
+	else
+		printf '   ok       %s derives %s (%s)\n' "$keyvar" "$got" "$label"
+	fi
+}
+
 preflight() {
 	say "── beat 0 · PREFLIGHT · refuse now, not at beat 6"
 
@@ -602,6 +626,7 @@ preflight() {
 	need_cmd curl "every H2 and health call"
 	need_cmd node "JSON parsing, so this script needs no jq the rest of the repo lacks"
 	need_cmd go   "scripts/seed_demo, cmd/chainops and the daemon build all need it"
+	need_cmd cast "derive each signer's address and check it matches the wallet the deployment expects"
 
 	# Keys and addresses. Three parties, because the contracts treat them as distinct
 	# (see scripts/README.md): the operator draws the advance, only the designated customer
@@ -628,6 +653,15 @@ false. Use a separate funded wallet for the LP (see docs/V3-CIRCLE-SETUP.md)."
 	fi
 	need_env SNAPFALL_TREASURY_ADDRESS     "deployment fundedWallets.operatorTreasury"
 	need_env SNAPFALL_CUSTOMER_ADDRESS     "deployment fundedWallets.externalCustomer"
+
+	# Every signer must derive the wallet the deployment expects, not merely be set. The deployment
+	# resolves fundedWallets.operatorTreasury/externalCustomer FROM these env addresses, so a key that
+	# derives a different address is a wrong signer the contracts reject at beat 1 (SC-JV-001) -- which
+	# is exactly what wasted the 7 Aug run. The LP has no deployment entry; it is checked against its
+	# declared address when one is set.
+	need_key_addr TREASURY_PRIVATE_KEY          "${SNAPFALL_TREASURY_ADDRESS:-}" "operator treasury"
+	need_key_addr SNAPFALL_CUSTOMER_PRIVATE_KEY "${SNAPFALL_CUSTOMER_ADDRESS:-}" "external customer"
+	need_key_addr SNAPFALL_LP_PRIVATE_KEY       "${SNAPFALL_LP_ADDRESS:-}"       "pool LP"
 
 	# The daemon's two lanes. Missing either wires NO payment lane, and every purchase then
 	# stops at purchase.pending_settlement: beats 3 and 5 could only ever be UNVERIFIED.
