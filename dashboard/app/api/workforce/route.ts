@@ -1,4 +1,4 @@
-import { BUILD_MONITOR_MANIFEST } from '@/lib/workforce';
+import { CATALOG_MANIFESTS } from '@/lib/workforce';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -13,7 +13,13 @@ function ownerHeaders(): Headers {
 export async function GET(): Promise<Response> {
   const base = process.env.SNAPFALL_OWNER_API_URL?.replace(/\/$/, '');
   if (!base) {
-    return Response.json({ manifests: [BUILD_MONITOR_MANIFEST], activations: [], source: 'local-catalog' });
+    // No daemon (the public deploy): serve the committed catalogue. This is the SAME source the
+    // page initialises from (lib/workforce.ts CATALOG_MANIFESTS), so the route and the page cannot
+    // disagree about which workers exist. These entries are static repo artefacts — name, category,
+    // description, permission chips — not daemon state, so they must not depend on a daemon (the
+    // same reasoning as treasury/pool reading chain directly). A daemon, when present, remains the
+    // source below.
+    return Response.json({ manifests: CATALOG_MANIFESTS, activations: [], source: 'local-catalog' });
   }
   try {
     const [catalog, activationState] = await Promise.all([
