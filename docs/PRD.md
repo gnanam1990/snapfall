@@ -56,7 +56,7 @@ a **committed artifact**. Code cannot satisfy those. A green CI run is not evide
 | V1 real four-cent purchase + committed fixture | V3, then a live capture. `capture-v1-fixture.ts` refuses to write a fixture without a real transaction hash from Circle's endpoints (refusals 5–7). |
 | V7 / V10 / V11 "renders live" | One green spine run with a human watching. |
 | V12 reset → spine → reset → spine | Two consecutive green runs. |
-| Daily spine runs (schedule, §16) | **Zero runs have been logged.** `docs/spine-runs/` holds only `.gitkeep`. The Wed 29 Jul gate was missed. |
+| Spine runs (schedule, §16) | **First automated settlement logged 2026-08-07, verdict UNVERIFIED** — the waterfall settled on chain and only the x402 beat is unproven (settlement rests at `NOT_BROADCAST`, pending a funded Circle Gateway deposit). **Three prior FAIL runs the same day** are recorded in `docs/spine-runs/spine-runs.tsv` and kept deliberately: the live runs surfaced what CI could not — the missing `startWork`/`submitDelivery` caller, and an operator-owned pool. **No daily cadence exists**: the Wed 29 Jul gate was missed; runs are on-demand, not scheduled. |
 
 **Known gaps carried deliberately**
 
@@ -470,7 +470,7 @@ AT-01..15 remain in force from the v4 SRS annex, with AT-10 extended (restart re
 - Restart recovery demonstrated, including Brain.
 - Secret audit clean.
 - Full reset rehearsed twice (reset ×2).
-- Daily spine runs have been green since Wed 29 Jul.
+- Spine runs: first automated settlement 2026-08-07, verdict UNVERIFIED (the waterfall settled on chain; only the x402 beat is unproven). Three prior FAIL runs the same day are kept in `docs/spine-runs/spine-runs.tsv` — a live run found what CI could not. No daily cadence: on-demand, not scheduled. See §0.1.
 - Recording integrity: replay of real runs, live transactions, disclosed caption. Record Thu; edit + deck + README Fri (**Teammate 2 owns final README/deck review**).
 - Submission Sat 8 Aug, evening IST; all links verified incognito. Sun 9 Aug = AoE contingency only, not build time.
 
@@ -503,7 +503,7 @@ Canonical IDs only; the invented AT-20/AT-21 from the source material are delibe
 |---|---|---|
 | **Tue 21 – Wed 22 Jul** | Money moves | **C: full x402 buyer loop against our paid API via Circle's facilitator — TONIGHT; all-three swarm Wed if red.** A: indexer skeleton on deployed contracts. B: Brain skeleton — router + per-job files + owner chat. |
 | Thu 23 – Sun 26 Jul | Brain kernel | Brain routes a stub DD job end-to-end. Funding wraps signer; Billing formats from indexer. **Interface freeze Fri 24 Jul** (Brain schemas + local APIs; ABI already frozen by being done). |
-| Mon 27 Jul – Sun 2 Aug | The spine, live | Full DD spine on testnet incl. compliance step + QA pass + rejection beat + portal accept + fall + ring. **Daily spine runs from Wed 29 Jul.** |
+| Mon 27 Jul – Sun 2 Aug | The spine, live | Full DD spine on testnet incl. compliance step + QA pass + rejection beat + portal accept + fall + ring. **Daily spine runs planned Wed 29 Jul — not achieved; see §0.1.** |
 | Mon 3 – Wed 5 Aug | Fabulous + generalize | F1–F4 + F7; Build-Monitor beat (fresh-job-per-milestone); approval digest if calm. |
 | Thu 6 – Fri 7 Aug | Hardening + story | AT-01..19 green; restart recovery incl. Brain; secret audit; reset ×2; **record Thu; edit + deck + README Fri** (Teammate 2 owns final README/deck review). |
 | **Sat 8 Aug** | **SUBMIT** | Evening IST; verify links incognito. Sun 9 = contingency only (AoE). |
