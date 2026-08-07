@@ -408,12 +408,18 @@ export default function WorkforcePage() {
             {COMING_SOON_WORKERS.length > 0 ? ` · ${COMING_SOON_WORKERS.length} upcoming` : ''}
           </span>
         </div>
-        <div className="manifest-grid">
-          <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} catalogOnly={catalogOnly} />
-          {operatorTools.map((manifest) => (
-            <OperatorToolCard key={manifest.id} manifest={manifest} catalogOnly={catalogOnly} />
-          ))}
-        </div>
+        {/* Build Monitor is the one hireable job (it has a form); the three operator tools have no
+            form. They no longer share a grid row — the form's height stretched the tools into 144px
+            columns padded to match. Build Monitor keeps its full-width block; the tools get their
+            own content-height row below. */}
+        <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} catalogOnly={catalogOnly} />
+        {operatorTools.length > 0 ? (
+          <div className="operator-tools">
+            {operatorTools.map((manifest) => (
+              <OperatorToolCard key={manifest.id} manifest={manifest} catalogOnly={catalogOnly} />
+            ))}
+          </div>
+        ) : null}
       </section>
     </div>
   );

@@ -197,11 +197,20 @@ test('activation labels expose the real one-shot Build Monitor lifecycle', () =>
   assert.notEqual(activationLabel('complete'), 'Watching');
 });
 
-test('workforce gallery collapses fixed-width tracks before the sidebar causes overflow', () => {
+test('workforce gallery has no fixed-width track that could overflow, and collapses on narrow', () => {
   const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
-  const intermediate = css.match(/@media \(max-width: 1120px\) \{([\s\S]*?)\n\}/)?.[1] ?? '';
-  assert.match(intermediate, /\.manifest-grid\s*\{\s*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
-  assert.doesNotMatch(intermediate, /minmax\(390px/);
+  // The old four-across grid carried a minmax(390px, …) track for Build Monitor's hire form, which
+  // overflowed once the three operator tools shared its row (144px columns padded to 491px). That
+  // grid is gone: Build Monitor is now a full-width block, and the operator tools use only
+  // minmax(0, 1fr) tracks — they shrink, never overflow. So the fixed-width track must not remain.
+  assert.doesNotMatch(css, /minmax\(390px/, 'the fixed-width gallery track must be gone');
+  const base = css.match(/\.operator-tools \{([\s\S]*?)\n\}/)?.[1] ?? '';
+  assert.match(base, /grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+  // …and it degrades to two then one column on narrow viewports rather than pushing the page wide.
+  // These collapse rules are unique, so match them directly — the page has several same-width
+  // @media blocks, and extracting "the" 560px block by first-match is fragile.
+  assert.match(css, /\.operator-tools \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/);
+  assert.match(css, /\.operator-tools \{ grid-template-columns: 1fr; \}/);
 });
 
 test('workforce documentation uses the manifest display name consistently', () => {

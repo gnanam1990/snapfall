@@ -1298,12 +1298,16 @@ table.t { width: 100%; border-collapse: collapse; }
   color: var(--muted);
 }
 .gallery-count { padding-bottom: 3px; }
-.manifest-grid {
+/* Build Monitor (the hireable job, with a form) stands on its own full-width block; the three
+   operator tools (no form) get their own row below, sized to their content. They shared one row
+   before, which forced the tools into 144px columns stretched to the form's 491px height. */
+.manifest-featured { margin-top: 20px; }
+.operator-tools {
   display: grid;
-  grid-template-columns: minmax(390px, 1.45fr) repeat(3, minmax(0, 0.75fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  margin-top: 20px;
-  align-items: stretch;
+  margin-top: 12px;
+  align-items: start; /* content height — no card padded to match a taller neighbour */
 }
 .manifest-card {
   min-width: 0;
@@ -1514,14 +1518,11 @@ table.t { width: 100%; border-collapse: collapse; }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 @media (max-width: 1120px) {
-  .manifest-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .manifest-featured { grid-column: 1 / -1; }
   .active-team-line { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
   .team-connector { display: none; }
 }
 @media (max-width: 820px) {
-  .manifest-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .manifest-featured { grid-column: 1 / -1; }
+  .operator-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .active-team-line { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 560px) {
@@ -1529,7 +1530,7 @@ table.t { width: 100%; border-collapse: collapse; }
   .workforce-panel-head { align-items: flex-start; flex-direction: column; }
   .workforce-policy { display: none; }
   .active-team-line,
-  .manifest-grid { grid-template-columns: 1fr; }
+  .operator-tools { grid-template-columns: 1fr; }
   .manifest-featured,
   .watcher-config label,
   .watcher-readonly { grid-template-columns: 1fr; gap: 4px; padding: 8px 0; }
