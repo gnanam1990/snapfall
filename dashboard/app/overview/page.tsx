@@ -1,10 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OverviewSnapshot, PoolStats, OpenAdvance, StreamMessage, FloatSnapshot } from '@/lib/types';
 import type { ActivityMessage } from '@/lib/activity';
 import { humanizeLegacyEvent, humanizeStreamEvent } from '@/lib/activity';
+
+/** Read a string field off an unknown chain-event payload without trusting its shape. */
+function payloadString(payload: unknown, key: string): string | null {
+  if (payload && typeof payload === 'object' && key in payload) {
+    const v = (payload as Record<string, unknown>)[key];
+    return typeof v === 'string' ? v : null;
+  }
+  return null;
+}
 import { formatUsdc, formatUsdcExact, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import PoolVessel from '@/components/PoolVessel';
@@ -86,6 +95,11 @@ export default function OverviewPage() {
   // means the daemon-less public deploy shows real numbers instead of dashes. The SSE stream
   // still supplies the agent feed, workforce, advances, active jobs and approvals.
   const [float, setFloat] = useState<FloatSnapshot | null>(null);
+  // The org the ScoreRing represents (the operator), read from /api/float. Held in a ref so the
+  // stable onMessage callback always sees the current value without re-subscribing the stream —
+  // and so a RateChanged for a DIFFERENT org is rejected. The ring shows the operator's rate; it
+  // must not move on another org's rate. Single-org demo or not, the check is not optional.
+  const orgRef = useRef<string | null>(null);
 
   const onMessage = useCallback((msg: StreamMessage) => {
     if (msg.kind === 'snapshot') {
@@ -101,6 +115,25 @@ export default function OverviewPage() {
     } else {
       const next = humanizeStreamEvent(msg);
       setActivity((prev) => [next, ...prev.filter((item) => item.id !== next.id)].slice(0, 30));
+
+      // A live RateChanged chain frame folds its new rate into the pool aggregate the ScoreRing
+      // reads (MoneyGraph passes pool.orgRateBps to the ring) — one source of truth (`pool`), and
+      // ScoreRing stays a scalar renderer that never learns this event kind exists. Chain frames
+      // carry no aggregates, so without this the ring only moved on reconnect. Two guards, both
+      // load-bearing: the rate is applied ONLY when the frame's org matches the operator org the
+      // ring shows (another org's RateChanged is ignored), and rateBps is a base-10 STRING on the
+      // wire (indexer decode.go) so a non-numeric value is dropped rather than turning the ring
+      // into NaN.
+      if (msg.source === 'chain' && msg.event.kind === 'RateChanged') {
+        const org = payloadString(msg.event.payload, 'org');
+        const rateStr = payloadString(msg.event.payload, 'rateBps');
+        const rate = rateStr === null ? NaN : Number.parseInt(rateStr, 10);
+        const ringOrg = orgRef.current;
+        if (org && ringOrg && org.toLowerCase() === ringOrg.toLowerCase() && Number.isFinite(rate)) {
+          setPool((p) => (p ? { ...p, orgRateBps: rate } : p));
+        }
+      }
+
       const aggregates = msg.aggregates;
       if (aggregates?.pool) setPool(aggregates.pool);
       if (aggregates?.openAdvances) setAdvances(aggregates.openAdvances);
@@ -130,7 +163,11 @@ export default function OverviewPage() {
         const res = await fetch('/api/float', { cache: 'no-store' });
         if (!res.ok) return;
         const data = (await res.json()) as FloatSnapshot;
-        if (alive) setFloat(data);
+        if (alive) {
+          setFloat(data);
+          // Keep the ring's org current for the RateChanged guard in onMessage.
+          orgRef.current = data.orgAddress ?? null;
+        }
       } catch {
         /* keep last known values */
       }
