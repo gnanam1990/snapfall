@@ -105,5 +105,12 @@ differences worth knowing before a deploy.
   to be the real product.
 - **The customer wallet is daemon-custodial for the demo**, stated openly — it stands in for a
   real customer self-custodying and clicking Accept.
-- **Scoping and quotes above the money path use a deterministic stub, not a live LLM**, so demo
-  runs are reproducible; the chain is authoritative for every figure that moves money.
+- **Scoping and quotes above the money path use a deterministic stub by default, not a live LLM**,
+  so demo runs are reproducible; the chain is authoritative for every figure that moves money. A
+  live scoper is opt-in: set `ANTHROPIC_API_KEY` (model via `SNAPFALL_SCOPER_MODEL`, default
+  `claude-haiku-4-5`) and the owner's request text is sent to Claude to produce the one-sentence
+  scope framing. Only the scope *text* comes from the model — the quote and the worker kind stay
+  deterministic, so the settlement proof above is unchanged. **This is the one place local-first is
+  qualified:** with the scoper on, the owner's request text (only that — no keys, addresses, or job
+  state) leaves the machine to Anthropic. With no key set, the deterministic stub runs and nothing
+  leaves the machine, which is what keeps the local-first claim true by default.
