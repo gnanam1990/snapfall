@@ -1,0 +1,82 @@
+flowchart TB
+
+subgraph LOCAL["🖥️  LOCAL — the operator's machine · keys, agents and work never leave this box"]
+  direction TB
+  OWNER(["👤 Owner (human)"])
+
+  subgraph DAEMON["Go daemon · snapfalld"]
+    direction TB
+    OAPI["Owner API — H2<br/>approvals · SSE stream"]
+    BRAIN["Brain<br/>scope · route · watch<br/>relays approved instructions"]
+    WORK["Workers / Agents<br/>due-diligence · build-monitor<br/><b>never touch money, keys or owner</b>"]
+    POLICY["Policy + Approval<br/>inner guard — spend limits, escalation"]
+    FUND["🔑 Funding agent<br/><b>the ONLY signer</b><br/>treasury lane · customer lane · x402 lane · HMAC"]
+    BILL["Billing<br/>invoices from on-chain data"]
+    STORE[("Store — SQLite<br/>event log · job memory")]
+    IDX["Indexer<br/>chain events → SSE"]
+  end
+
+  subgraph SIDECAR["Sidecar · TypeScript — H3"]
+    direction TB
+    SELLER["Paid API — x402 seller"]
+    BUYER["x402 buyer"]
+    FAC["Gateway facilitator client"]
+  end
+
+  DASH["Dashboard · Next.js<br/>reads Arc via RPC + daemon SSE"]
+end
+
+subgraph CHAIN["⛓️  ON-CHAIN — Arc testnet · chain 5042002 · USDC is the gas token"]
+  direction TB
+  JV["JobVault<br/>escrow · job lifecycle"]
+  FP["FloatPool<br/>advances · WATERFALL · LP shares · reserve"]
+  AA["AuditAnchor<br/>content hashes only"]
+  USDC{{"USDC — Circle<br/>native gas + ERC-20"}}
+  USYC["MockUSYCStrategy<br/>idle-capital sweep"]
+end
+
+subgraph CIRCLE["Circle — off-chain"]
+  GATEWAY["Gateway x402 facilitator<br/>verify / settle"]
+end
+
+OWNER --- OAPI
+OAPI --> BRAIN
+BRAIN --> WORK
+BRAIN --> POLICY
+POLICY --> FUND
+WORK -. "spend request<br/>(never signs)" .-> POLICY
+IDX --> OAPI
+OAPI -. SSE .-> DASH
+
+%% on-chain money — the PROVEN waterfall, in order
+FUND ==>|"① fund escrow · customer lane"| JV
+FUND ==>|"② requestAdvance · treasury lane"| FP
+FP  ==>|"advance funds the work"| FUND
+FUND ==>|"③ acceptDelivery · customer lane"| JV
+JV  ==>|"④ repayAdvance — POOL FIRST"| FP
+JV  ==>|"⑤ operator payout — SECOND"| FUND
+
+%% x402 agent purchase — real handshake, UNPROVEN settlement
+FUND ==>|"x402 payment · x402 lane"| BUYER
+BUYER -->|"402 → sign → 200"| SELLER
+SELLER -. settle .-> FAC
+FAC   -. "built · NEVER run against the live service" .-> GATEWAY
+
+%% verifiable reads + the only thing besides money that crosses: a hash
+DASH -. "RPC · balanceOf / getLogs" .-> FP
+IDX  -. eth_getLogs .-> JV
+FUND -. "delivery hash" .-> AA
+
+FP    -. "mock sweep" .-> USYC
+JV    --- USDC
+FP    --- USDC
+
+classDef proven   fill:#e6f2e6,stroke:#2f7d32,stroke-width:2px,color:#173d19;
+classDef unproven fill:#fde4d3,stroke:#c05a1e,stroke-width:2px,stroke-dasharray:6 4,color:#5a2e0e;
+classDef mock     fill:#efe4f4,stroke:#7b4a8c,stroke-width:2px,stroke-dasharray:3 3,color:#39234a;
+classDef keys     fill:#fbe0e0,stroke:#b23636,stroke-width:3px,color:#4a1414;
+
+class JV,FP,AA,USDC proven;
+class GATEWAY,FAC unproven;
+class USYC mock;
+class FUND keys;

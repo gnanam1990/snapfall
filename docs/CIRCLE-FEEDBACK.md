@@ -12,6 +12,8 @@ Products used: **USDC** (escrow, gas, settlement), **Arc** L1, **x402** for agen
 through the sidecar — integrated by calling Circle's **Gateway** `verify`/`settle` endpoints
 directly over HTTP, not through an SDK — **Circle Wallets / EOA** (treasury and agent
 identities), **USYC** (idle-pool sweep, P1), with **Paymaster** and **CCTP** as planned tiers.
+See [`architecture.md`](architecture.md) for where each surface sits and which edges are proven
+versus built-but-unexercised (the Gateway facilitator) or mocked (USYC).
 
 ---
 

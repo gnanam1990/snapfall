@@ -14,6 +14,7 @@ on the explorer without trusting the operator.
 Arc Programmable Money Hackathon (Encode × Circle) · Agentic Economy + DeFi · CP3 submission
 Aug 9, 2026.
 
+- [`docs/architecture.md`](docs/architecture.md) — architecture diagram: the local/on-chain split, the settlement waterfall, and the Circle surfaces marked proven vs unproven.
 - [`docs/PRD.md`](docs/PRD.md) — the product/spec definition.
 - [`docs/CP2-SUBMISSION.md`](docs/CP2-SUBMISSION.md) — the CP2 progress submission.
 - [`docs/CIRCLE-FEEDBACK.md`](docs/CIRCLE-FEEDBACK.md) — Circle product feedback (Ignyte Stablecoins Commerce Stack Challenge).
