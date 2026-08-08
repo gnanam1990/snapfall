@@ -23,7 +23,7 @@ spine still runs but something on screen contradicts the narration.
 | [V6-F1](#v6-f1-recordexpense-is-unwired) | `recordExpense` is unwired: no daemon purchase ever reaches the chain | No | **Yes**, the job page's budget bar | Medium | Vasanth (V6/V7 lanes), with a Gnanam and Anandan dependency |
 | [V6-F2](#v6-f2-paymentexecuted-carries-no-amount-and-no-receipthash) | `payment.executed` carries no amount and no receiptHash, so the money graph reconciles by amount | No | Low | Low | Gnanam **and** Vasanth (spans two owners) |
 | [V6-F3](#v6-f3-per-job-chain-budget-versus-per-org-daemon-budget) | Per-job chain budget versus per-org daemon budget, made loud but not resolved | No | No, at default seed values | Low | Gnanam (policy engine) |
-| [V6-F4](#v6-f4-docsopen-spec-questionsmd-does-not-exist) | `docs/OPEN-SPEC-QUESTIONS.md` is cited six times and does not exist | No | No | Low for the demo, **medium for the submission package** | Vasanth (docs), ruling content is Gnanam's |
+| [V6-F4](#v6-f4-docsopen-spec-questionsmd-does-not-exist) | ✅ **RESOLVED 2026-08-08** — `docs/OPEN-SPEC-QUESTIONS.md` restored from `8c04728^` with a current status register; all citations resolve | No | No | Low for the demo, **medium for the submission package** | Vasanth (docs), ruling content is Gnanam's |
 | [V6-F5](#v6-f5-policy_version-is-an-integer-column-holding-text) | `policy_version INTEGER` holds the string `"pol_7"`, stored as TEXT | No | No | Low, latent | Gnanam (schema) |
 | [V6-F6](#v6-f6-manifestbudgetmicros-is-a-false-guarantee) | `Manifest.BudgetMicros` is parsed and validated but never enforced, while a shipped manifest says it is | No | No | Medium as an integrity claim | Gnanam (policy engine) or Vasanth (the comment) |
 
@@ -440,6 +440,14 @@ mitigation for the value it can actually protect. Revisit only if V6-F1 lands fi
 ---
 
 ## V6-F4 docs/OPEN-SPEC-QUESTIONS.md does not exist
+
+> ### ✅ RESOLVED — 2026-08-08
+> The file was restored per the plan in "The fix" below: recovered in full from `8c04728^`,
+> with a dated status-register banner prepended so it reads as a resolution register rather
+> than a live blocker list, and SPEC-06's stale "open — reverts" status refreshed to its V12
+> resolution. All fourteen citations now resolve. README.md no longer carries the wrong
+> SPEC-01-blocker line (fixed earlier, before this restore). The original finding is preserved
+> below for the record.
 
 ### What is true today
 
