@@ -1,18 +1,18 @@
 'use client';
 
 /**
- * V8 — the approvals inbox, drawn as valves on the spend line.
+ * V8 — the approvals inbox.
  *
- * An agent has reached a purchase it may not make alone, so the line is shut and waiting for a
- * hand. That is not a metaphor reached for after the fact: it is what the daemon is doing, and it
- * is why the nav glyph for this surface is a gate valve.
+ * An agent has reached a purchase it may not make alone, so the spend is held and waiting for a
+ * hand. That is not a metaphor reached for after the fact: it is what the daemon is doing.
  *
  * The direction contract names this surface as the one place colour appears and the place the
  * primary action lives. PRODUCT.md principle 3 constrains how: "Refusing must be as easy and as
  * legible as approving." So approve and refuse are the same size, the same weight and the same
  * distance from the pointer, and neither is styled as the default. Requesting a cheaper source is
  * the third option and sits apart, because it is a different kind of answer rather than a weaker
- * one.
+ * one. A decision already taken is stated as a dot and a word, painted by the row's own state
+ * class, so the marker and its lettering can never disagree about what happened.
  *
  * Two things this file deliberately does NOT do:
  *
@@ -30,7 +30,6 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { formatUsdcExact, timeUntil } from '@/lib/format';
-import ValveState, { type ValveStateName } from '@/components/ValveState';
 
 type Approval = {
   requestId: string;
@@ -86,13 +85,6 @@ const ACTION_LABEL: Record<Decision, string> = {
 
 /** What the worker receives when the owner refuses without typing anything (purchasing.go). */
 const DEFAULT_REFUSAL = 'owner declined the purchase';
-
-/** Terminal states, mapped onto the valve the decision left behind. */
-const VALVE: Record<string, ValveStateName> = {
-  approved: 'open',
-  rejected: 'shut',
-  alternative_requested: 'diverted',
-};
 
 /** Plain-language cover for the daemon's error codes, so a refusal never dead-ends in a token. */
 const FAILURE_TEXT: Record<string, string> = {
@@ -243,7 +235,7 @@ function ApprovalsInner() {
         <div className="page-header-text">
           <h1>Approvals</h1>
           <p className="page-header-sub">
-            Purchases an agent may not make alone. The line is shut until you answer.
+            Purchases an agent may not make alone. Nothing moves until you answer.
           </p>
         </div>
         <span className="page-header-aside">
@@ -277,11 +269,12 @@ function ApprovalsInner() {
           {settled.map((s) => (
             <li key={s.approval.requestId} className={`approval is-settled ${s.state}`}>
               <div className="approval-line">
-                <ValveState state={VALVE[s.state] ?? 'shut'} />
                 <div className="approval-ident">
                   <h2 className="approval-resource">{s.approval.resource}</h2>
                   <p className="approval-origin">
-                    {s.state.replace(/_/g, ' ')} · recorded as {s.decidedBy}
+                    <span className="approval-state">{s.state.replace(/_/g, ' ')}</span>
+                    {' · recorded as '}
+                    {s.decidedBy}
                   </p>
                 </div>
                 <div className="approval-amount">
@@ -342,7 +335,6 @@ function ApprovalsInner() {
                 aria-labelledby={`ap-${a.requestId}`}
               >
                 <div className="approval-line">
-                  <ValveState state="pending" />
                   <div className="approval-ident">
                     <h2 className="approval-resource" id={`ap-${a.requestId}`}>
                       {a.resource}

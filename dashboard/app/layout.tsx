@@ -28,30 +28,29 @@ const THEME_BOOT = `try{if(localStorage.getItem('snapfall-theme')==='light'){doc
  * production output for the seed key and finding nothing. This ships as a real HTML comment.
  */
 const DIRECTION_CONTRACT = `<!--
-  THESIS: Money here is plumbing with capacity limits, so the interface is the drawing an engineer
-  reads to understand a system under load. It refuses the stat-tile grid and the hero-metric
-  template: a vessel with its caps drawn as real thresholds says more than a big number with a
-  small label ever does.
+  THESIS: Money in this product is evidence, not atmosphere, so the interface is a ledger. Every
+  figure names its source, every state its reason, and nothing is asserted that cannot be read
+  back from the chain. It refuses dashboard theatre — glow, gradient, drawn machinery — and lets
+  type, hairlines and tabular digits do the work.
 
-  OWN-WORLD: A piping and instrumentation diagram. Ink on vellum, hairline rules, vessels and
-  valves as drawn glyphs, callout leaders tying every figure to the thing it measures, annotation
-  lettering in tracked small caps, tabular figures throughout. Colour is semantic only: flowing,
-  alarm, settled. No gradient, no glow, no shadow as decoration. Recognisable with all content
-  removed, by its rules, leaders and registration marks.
+  OWN-WORLD: A ledger kept by a careful operator. Flat panels, one hairline system, figures in
+  tabular digits with their provenance beside them. Colour is semantic only: settled green,
+  refused red, waiting amber, and an iris accent for the live, verifiable element — a link out
+  to evidence, a focus ring, money in motion. Recognisable with all content removed by its ruled
+  structure and its source lines.
 
-  STORY: The visitor sees money enter escrow, an advance drawn against it under a cap they can
-  see, spending reduce it, and a waterfall repay the pool before the operator. They believe it
-  because every figure carries its source. They act by approving or refusing a purchase while it
-  is still pending.
+  STORY: The visitor sees the pool's capital and its caps, what is lent out, what is waiting on
+  them, and money moving between customer, escrow, pool and operator. They believe it because
+  every number says where it came from. They act by approving or refusing a purchase while it is
+  still pending.
 
-  FIRST VIEWPORT: The pool drawn as a vessel, left of centre, its 80% utilisation and 10% per-org
-  caps rendered as real threshold lines rather than labels. Escrow feeds in from above; the
-  waterfall leaves in stages, pool first, operator second. Figures sit on callout leaders, each
-  naming its source. Pending approvals are the one place colour appears, and the primary action
-  sits with them.
+  FIRST VIEWPORT: The capital pool as a measured panel — TVL as the primary figure, utilisation
+  as a meter with the 80% and 10% caps marked as ticks where they sit, and four facts each naming
+  their source. Pending approvals are the one coloured region and carry the primary action. The
+  live money graph sits below, flat, its droplets the only motion on the page.
 
-  FORM: Instrument diagram (P&ID). Candidate 4 of 7 on the grounded list, ordered by resonance.
-  Seed key c0015262.
+  FORM: Ledger / refined fintech. Supersedes the instrument-diagram contract (seed c0015262);
+  seed key a91f44c0.
 
   FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the
   verdict, and DESIGN.md

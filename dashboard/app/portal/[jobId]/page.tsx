@@ -8,12 +8,11 @@
  *
  * Three things, exactly as scoped: status, Accept, receipt.
  *
- * DELIBERATELY NOT AN INSTRUMENT DIAGRAM. The rest of the dashboard was redesigned into a
- * piping-and-instrumentation drawing because the owner is reading a system under load. This
- * reader is not. They arrived from one link, they are accepting one deliverable once, and they
- * have no reason to learn a drafting vocabulary to do it. Same tokens, same flat register, same
- * type scale -- no vessels, no callout leaders, no annotation lettering. The restraint is the
- * design decision here.
+ * DELIBERATELY THE PLAINEST SURFACE IN THE PRODUCT. The owner dashboard is a ledger because the
+ * owner is reading a system under load. This reader is not. They arrived from one link, they are
+ * accepting one deliverable once, and they owe nobody an operator's vocabulary to do it. Same
+ * tokens, same flat register, same type scale -- no meters, no state dots beyond the one status
+ * that is theirs. The restraint is the design decision here.
  *
  * WHAT THIS SURFACE MAY SHOW is the other half of that. PRODUCT.md: the customer "never sees the
  * operator's internals or any other customer's job. This isolation is a hard product rule, not a

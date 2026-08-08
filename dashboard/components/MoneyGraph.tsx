@@ -377,16 +377,6 @@ export default function MoneyGraph({
 
       <div className="mg-stage">
         <svg viewBox="0 0 960 440" className="mg-svg" role="img" aria-label="Money flow between the customer, JobVault, FloatPool, treasury, paid API and operator">
-          <defs>
-            <filter id="mg-glow" x="-60%" y="-60%" width="220%" height="220%">
-              <feGaussianBlur stdDeviation="4" result="b" />
-              <feMerge>
-                <feMergeNode in="b" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
-
           {(Object.keys(PIPES) as Pipe[]).map((k) => (
             <path key={k} id={`mg-pipe-${k}`} d={PIPES[k]} className={`mg-pipe mg-pipe-${k}`} fill="none" />
           ))}
@@ -394,9 +384,8 @@ export default function MoneyGraph({
           {drops.map((d) => (
             <circle
               key={d.id}
-              r={d.kind === 'snap' ? 9 : d.kind.startsWith('fall') ? 8 : 6}
+              r={d.kind === 'snap' ? 8 : d.kind.startsWith('fall') ? 7 : 5.5}
               className={`mg-drop mg-drop-${d.kind}`}
-              filter="url(#mg-glow)"
             >
               <animateMotion dur={`${d.dur}s`} begin={`${d.begin}s`} fill="freeze" rotate="auto">
                 <mpath href={`#mg-pipe-${d.pipe}`} />
@@ -411,7 +400,7 @@ export default function MoneyGraph({
                 y={n.cy - H / 2}
                 width={W}
                 height={H}
-                rx={13}
+                rx={8}
                 className="mg-box"
                 style={n.accent ? ({ ['--n' as string]: n.accent }) : undefined}
               />

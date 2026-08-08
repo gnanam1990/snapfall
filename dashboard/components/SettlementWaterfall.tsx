@@ -1,25 +1,25 @@
 /**
- * The settlement waterfall for one job, drawn.
+ * The settlement split for one job, drawn as one bar.
  *
- * This is the product's own sentence -- "capital in a snap, settlement in a waterfall" -- and the
+ * This is the product's own sentence — "capital in a snap, settlement in a waterfall" — and the
  * job detail page is the only surface where it resolves into real figures for a real job. It was
- * four rows of a table, which makes the reader do the arithmetic and hides the thing that matters:
- * the pool is made whole BEFORE the operator sees anything, in the same transaction.
+ * four rows of a table, which makes the reader do the arithmetic and hides the thing that
+ * matters: the pool is made whole BEFORE the operator sees anything, in the same transaction.
  *
- * So the escrow is drawn as a column split in proportion to where it goes. Segment heights are the
- * actual ratio, which means a job whose advance ate most of the escrow looks like one, and no
- * caption is needed to say so.
- *
- * Order is carried by weight, not by colour, the same way PoolVessel draws the two outlets: the
- * pool leg is a full-weight .v-pipe and the operator leg is .v-pipe-dim. Colour would have to mean
- * something here, and "first" is not an alarm.
+ * So the escrow is drawn as a single bar split in proportion to where it goes. Segment widths
+ * are the actual ratio, which means a job whose advance ate most of the escrow looks like one,
+ * and no caption is needed to say so. The pool leg sits first and solid; the operator leg is
+ * whatever survives it. Order is carried by position and weight, not hue — colour would have to
+ * mean something here, and "first" is not an alarm. The figures underneath name what each leg
+ * measures, numbered, because the order IS the evidence.
  *
  * The four states are genuinely different claims and are drawn differently:
  *   settled      the transfers happened; past tense.
  *   projection   what settlement would pay at the current chain state; conditional.
- *   terminal     Refunded/Cancelled -- the escrow already went back to the customer, so any
+ *   terminal     Refunded/Cancelled — the escrow already went back to the customer, so any
  *                operator payout is fiction. Nothing is drawn.
- *   unavailable  the pool read failed. The split is unknowable, so it is hatched, not zeroed.
+ *   unavailable  the pool read failed. The split is unknowable, so the track is hatched and the
+ *                legs read "unknown" — never zeroed, never an operator payout of the whole.
  */
 
 import { formatUsdcExact } from '@/lib/format';
@@ -39,14 +39,6 @@ interface Props {
   terminal: string | null;
 }
 
-const W = 520;
-const H = 190;
-const COL_X = 232;
-const COL_W = 74;
-const COL_TOP = 24;
-const COL_BOT = 158;
-const COL_H = COL_BOT - COL_TOP;
-
 export default function SettlementWaterfall({
   escrowUsdc,
   repaymentUsdc,
@@ -59,8 +51,8 @@ export default function SettlementWaterfall({
     return (
       <p className="wf-terminal">
         This job ended as <b>{terminal}</b>. The escrow was returned to the customer in full, so
-        there is no waterfall to draw: the operator received nothing, and any advance was written
-        off through the pool’s loss waterfall rather than repaid from this escrow.
+        there is no split to draw: the operator received nothing, and any advance was written off
+        through the pool’s loss waterfall rather than repaid from this escrow.
       </p>
     );
   }
@@ -68,24 +60,25 @@ export default function SettlementWaterfall({
   const escrow = escrowUsdc === null ? null : BigInt(escrowUsdc);
   const repay = repaymentUsdc === null ? null : BigInt(repaymentUsdc);
   const net = operatorNetUsdc === null ? null : BigInt(operatorNetUsdc);
-  const known = !unavailable && escrow !== null && repay !== null && net !== null && escrow > 0n;
 
-  // Proportional split. Clamped so a rounding artefact can never invert the two legs.
-  const poolFrac = known
-    ? Math.min(1, Math.max(0, Number((repay! * 10_000n) / escrow!) / 10_000))
+  /* A failed read and a real zero are different claims. The first is hatched and says "unknown";
+     the second is an empty track and figures of 0, as checkable as any other number here. */
+  const readsFailed = unavailable || escrow === null || repay === null || net === null;
+  const known = !readsFailed && escrow! > 0n;
+
+  /* Proportional split, clamped so a rounding artefact can never invert the two legs. */
+  const poolPct = known
+    ? Math.min(100, Math.max(0, Number((repay! * 10_000n) / escrow!) / 100))
     : 0;
-  const poolH = Math.round(COL_H * poolFrac);
-  const splitY = COL_TOP + poolH;
-  const poolLegY = COL_TOP + Math.max(14, poolH / 2);
-  const opLegY = splitY + Math.max(14, (COL_BOT - splitY) / 2);
 
   const verb = settled ? 'was' : 'would be';
+  const leg = (value: string | null) =>
+    readsFailed ? 'unknown' : `${formatUsdcExact(value)} USDC`;
 
   return (
     <figure className="wf">
-      <svg
-        className="wf-svg"
-        viewBox={`0 0 ${W} ${H}`}
+      <div
+        className={`wf-track${readsFailed ? ' is-unknown' : ''}`}
         role="img"
         aria-label={
           known
@@ -94,98 +87,44 @@ export default function SettlementWaterfall({
               )} ${verb} repaid to the capital pool first, and the operator ${
                 settled ? 'received' : 'would receive'
               } the remaining ${formatUsdcExact(operatorNetUsdc)}.`
-            : 'The settlement split cannot be shown: the capital pool read did not answer, so how the escrow divides is unknown.'
+            : readsFailed
+              ? 'The settlement split cannot be shown: a chain read did not answer, so how the escrow divides is unknown.'
+              : 'Nothing is held in escrow, so there is nothing to split.'
         }
       >
-        {/* Escrow enters from above. */}
-        <g className="v-pipe">
-          <path d={`M ${COL_X + COL_W / 2} 4 L ${COL_X + COL_W / 2} ${COL_TOP}`} />
-          <text x={COL_X + COL_W / 2 + 8} y="10">
-            escrow
-          </text>
-        </g>
-
-        <rect x={COL_X} y={COL_TOP} width={COL_W} height={COL_H} className="v-wall" />
-
         {known ? (
           <>
-            {/* The pool's share, drawn at the top because it is taken first. */}
-            <rect
-              x={COL_X + 1}
-              y={COL_TOP + 1}
-              width={COL_W - 2}
-              height={Math.max(0, poolH - 1)}
-              className="wf-pool"
-            />
-            <line x1={COL_X} y1={splitY} x2={COL_X + COL_W} y2={splitY} className="wf-split" />
+            <div className="wf-pool" style={{ width: `${poolPct}%` }} />
+            <div className="wf-operator" style={{ width: `${100 - poolPct}%` }} />
           </>
-        ) : (
-          <g className="v-unknown">
-            {[0.25, 0.5, 0.75].map((f) => (
-              <line
-                key={f}
-                x1={COL_X + 1}
-                y1={COL_TOP + COL_H * f}
-                x2={COL_X + COL_W - 1}
-                y2={COL_TOP + COL_H * f}
-              />
-            ))}
-            <text x={COL_X + COL_W / 2} y={COL_TOP + COL_H / 2 - 8} textAnchor="middle">
-              split unknown
-            </text>
-          </g>
-        )}
+        ) : null}
+      </div>
 
-        {/* Leg one: the pool. Full weight, because it is satisfied first. */}
-        <g className="v-pipe">
-          <path d={`M ${COL_X + COL_W} ${poolLegY} L ${COL_X + COL_W + 34} ${poolLegY}`} />
-          <text x={COL_X + COL_W + 40} y={poolLegY + 3.5}>
-            1 · pool repaid first
-          </text>
-        </g>
-
-        {/* Leg two: the operator. Dimmed, because it is whatever survives leg one. */}
-        <g className="v-pipe v-pipe-dim">
-          <path d={`M ${COL_X + COL_W} ${opLegY} L ${COL_X + COL_W + 34} ${opLegY}`} />
-          <text x={COL_X + COL_W + 40} y={opLegY + 3.5}>
-            2 · operator, second
-          </text>
-        </g>
-
-        {/* Figures hang off callout leaders on the left, so each number names what it measures. */}
-        <g className="wf-callout">
-          <line x1={COL_X - 8} y1={COL_TOP} x2={COL_X} y2={COL_TOP} />
-          <text x={COL_X - 14} y={COL_TOP + 4} textAnchor="end" className="wf-fig">
-            {escrowUsdc === null ? '—' : formatUsdcExact(escrowUsdc)}
-          </text>
-          <text x={COL_X - 14} y={COL_TOP + 18} textAnchor="end" className="wf-lab">
-            escrow held
-          </text>
-
-          <line x1={COL_X - 8} y1={splitY} x2={COL_X} y2={splitY} />
-          <text x={COL_X - 14} y={splitY + 4} textAnchor="end" className="wf-fig">
-            {known ? formatUsdcExact(repaymentUsdc) : '—'}
-          </text>
-          <text x={COL_X - 14} y={splitY + 18} textAnchor="end" className="wf-lab">
-            to the pool
-          </text>
-
-          <line x1={COL_X - 8} y1={COL_BOT} x2={COL_X} y2={COL_BOT} />
-          <text x={COL_X - 14} y={COL_BOT + 4} textAnchor="end" className="wf-fig">
-            {known ? formatUsdcExact(operatorNetUsdc) : '—'}
-          </text>
-          <text x={COL_X - 14} y={COL_BOT + 18} textAnchor="end" className="wf-lab">
-            to the operator
-          </text>
-        </g>
-      </svg>
+      <dl className="wf-facts">
+        <div>
+          <dt>escrow held</dt>
+          <dd className={escrow === null ? 'is-absent' : undefined}>
+            {escrow === null ? 'not reported' : `${formatUsdcExact(escrowUsdc)} USDC`}
+          </dd>
+        </div>
+        <div>
+          <dt>1 · repaid to the pool, first</dt>
+          <dd className={readsFailed ? 'is-absent' : undefined}>{leg(repaymentUsdc)}</dd>
+        </div>
+        <div>
+          <dt>2 · to the operator, second</dt>
+          <dd className={readsFailed ? 'is-absent' : undefined}>{leg(operatorNetUsdc)}</dd>
+        </div>
+      </dl>
 
       <figcaption className="wf-note">
         {unavailable
           ? 'The FloatPool read did not answer, so how this escrow divides is unknown. It is left undrawn rather than shown as an operator payout of the whole amount.'
           : settled
             ? 'Settled. Both transfers happened in one transaction, the pool made whole before the operator.'
-            : 'What settlement would pay out at the current chain state. The pool is repaid in full before the operator receives anything, in the same transaction as acceptance.'}
+            : known
+              ? 'What settlement would pay out at the current chain state. The pool is repaid in full before the operator receives anything, in the same transaction as acceptance.'
+              : 'Nothing is held in escrow yet. When the customer funds this job, this bar shows how the escrow divides.'}
       </figcaption>
     </figure>
   );

@@ -29,80 +29,21 @@ const HIRED_BY = 'local-console';
  * roles" counter, which asserted five agents were running -- on the public deploy, where none
  * are, and with no source anywhere. It is a statement about how authority is partitioned, which
  * is true whether or not anything is running, and it is now labelled as one.
+ *
+ * Set as a schedule: the role name and its duty are on the row in words, so there is no icon to
+ * decode and nothing a glyph could say that the sentence does not.
  */
 const BOUNDED_ROLES = [
-  { role: 'Brain', detail: 'Routes work. Cannot spend.', mark: 'hub' },
-  { role: 'Research', detail: 'Reads sources. Cannot submit.', mark: 'read' },
-  { role: 'Delivery', detail: 'Submits deliverables.', mark: 'out' },
-  { role: 'QA', detail: 'Verifies. Cannot deliver.', mark: 'check' },
-  { role: 'Funding', detail: 'Policy-gated. Escalates to you.', mark: 'gate' },
+  { role: 'Brain', detail: 'Routes work. Cannot spend.' },
+  { role: 'Research', detail: 'Reads sources. Cannot submit.' },
+  { role: 'Delivery', detail: 'Submits deliverables.' },
+  { role: 'QA', detail: 'Verifies. Cannot deliver.' },
+  { role: 'Funding', detail: 'Policy-gated. Escalates to you.' },
 ] as const;
 
-/**
- * Drawn marks rather than unicode glyphs, matching NavIcon: same 16-unit grid, same 1.25 stroke,
- * currentColor so the surrounding state paints them. A compass and a magnifying glass borrowed
- * from a text font are a different visual language from the rest of this product.
- */
-function RoleMark({ mark }: { mark: (typeof BOUNDED_ROLES)[number]['mark'] }) {
-  const paths: Record<string, React.ReactNode> = {
-    // A routing hub: one node, lines leaving it.
-    hub: (
-      <>
-        <circle cx="8" cy="8" r="2.5" />
-        <path d="M8 5.5V2M8 10.5V14M5.5 8H2M10.5 8H14" />
-      </>
-    ),
-    // Reading: a page with a rule across it.
-    read: (
-      <>
-        <rect x="3" y="2.5" width="10" height="11" rx="0.5" />
-        <path d="M5.5 6h5M5.5 9h3.5" />
-      </>
-    ),
-    // Delivery: something leaving.
-    out: (
-      <>
-        <path d="M2.5 13.5L13 3" />
-        <path d="M8 3h5v5" />
-      </>
-    ),
-    // Verification: a check inside a bound.
-    check: (
-      <>
-        <rect x="2.5" y="2.5" width="11" height="11" rx="0.5" />
-        <path d="M5.5 8.2l2 2 3.2-4" />
-      </>
-    ),
-    // A gate valve, the same symbol Approvals uses: this role is the one a human can stop.
-    gate: (
-      <>
-        <path d="M3 5v6l5-3z" />
-        <path d="M13 5v6l-5-3z" />
-        <path d="M8 8V4M6 4h4" />
-      </>
-    ),
-  };
-  return (
-    <svg
-      className="role-mark"
-      viewBox="0 0 16 16"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.25"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {paths[mark]}
-    </svg>
-  );
-}
-
+/** A permission is a stated bound: plain text inside a hairline, not a glyph. */
 function PermissionChip({ label }: { label: string }) {
-  const symbol = label === 'Read-only repo' ? '▣' : label === 'No payments' ? '⊘' : '›_';
-  return <span className="permission-chip"><i aria-hidden="true">{symbol}</i>{label}</span>;
+  return <span className="permission-chip">{label}</span>;
 }
 
 function ActiveTeam() {
@@ -110,32 +51,19 @@ function ActiveTeam() {
     <section className="workforce-active" aria-labelledby="active-team-title">
       <div className="workforce-panel-head">
         <div>
-          <p className="workforce-eyebrow">How authority is partitioned</p>
           <h2 id="active-team-title">Bounded roles</h2>
+          <p className="workforce-panel-sub">How authority is partitioned.</p>
         </div>
-        <span className="workforce-safe">
-          <i />
-          {BOUNDED_ROLES.length} roles
-        </span>
+        <span className="workforce-safe">{BOUNDED_ROLES.length} roles</span>
       </div>
-      <div className="active-team-line">
-        {BOUNDED_ROLES.map((agent, index) => (
-          <div className="active-team-step" key={agent.role}>
-            <article className="active-agent">
-              <span className="active-agent-icon">
-                <RoleMark mark={agent.mark} />
-              </span>
-              <div>
-                <strong>{agent.role}</strong>
-                <small>{agent.detail}</small>
-              </div>
-            </article>
-            {index < BOUNDED_ROLES.length - 1 ? (
-              <span className="team-connector" aria-hidden="true" />
-            ) : null}
-          </div>
+      <ul className="workforce-roles">
+        {BOUNDED_ROLES.map((agent) => (
+          <li key={agent.role}>
+            <strong>{agent.role}</strong>
+            <span>{agent.detail}</span>
+          </li>
         ))}
-      </div>
+      </ul>
       <p className="workforce-caveat">
         This is the authority model, not a live roster. Nothing on this page reads which agents are
         currently running.
@@ -168,7 +96,7 @@ function BuildMonitorCard({ manifest, activation, catalogOnly }: { manifest: Wor
       const response = await fetch(`/api/workforce/${encodeURIComponent(manifest.id)}/hire`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-                // The daemon requires `by` and calls it the owner identity (ownerapi.go:189-191), then
+        // The daemon requires `by` and calls it the owner identity (ownerapi.go:189-191), then
         // records it. Nothing here authenticates a person -- there is no owner login in this
         // dashboard -- so naming a real teammate made every activation assert that a specific
         // human authorised it. Records what is actually established, matching the same fix made
@@ -202,14 +130,13 @@ function BuildMonitorCard({ manifest, activation, catalogOnly }: { manifest: Wor
     <article className="manifest-card manifest-featured">
       <div className="manifest-card-head">
         <div className="manifest-identity">
-          <span className="manifest-icon is-featured" aria-hidden="true">⌘</span>
           <div>
             <h3>{manifest.name}</h3>
             <p>{manifest.category}</p>
           </div>
         </div>
         <span className={`manifest-status${activeResult ? ' is-active' : ''}`}>
-          <i />{activeResult ? activationLabel(activeResult.state) : 'Ready to hire'}
+          {activeResult ? activationLabel(activeResult.state) : 'Ready to hire'}
         </span>
       </div>
 
@@ -218,13 +145,8 @@ function BuildMonitorCard({ manifest, activation, catalogOnly }: { manifest: Wor
         {manifest.permissions.map((permission) => <PermissionChip key={permission} label={permission} />)}
       </div>
 
-      <div className="watcher-flow" aria-label="Repository evidence flow">
-        <div><span aria-hidden="true">⑂</span><small>Repository</small></div>
-        <i aria-hidden="true">→</i>
-        <div><span aria-hidden="true">◎</span><small>Brain</small></div>
-        <i aria-hidden="true">→</i>
-        <div><span aria-hidden="true">▤</span><small>Milestone evidence</small></div>
-      </div>
+      {/* The evidence flow as one line of text: the arrows are operators, not icons. */}
+      <p className="watcher-flow">Repository → Brain → Milestone evidence</p>
 
       <div className="watcher-config">
         <label>
@@ -301,7 +223,6 @@ function OperatorToolCard({ manifest, catalogOnly }: { manifest: WorkerManifest;
     <article className="manifest-card">
       <div className="manifest-card-head">
         <div className="manifest-identity">
-          <span className="manifest-icon" aria-hidden="true">✎</span>
           <div>
             <h3>{manifest.name}</h3>
             <p>{manifest.category}</p>
@@ -378,7 +299,7 @@ export default function WorkforcePage() {
 
   return (
     <div className="workforce-page">
-      <div className="page-header workforce-topbar">
+      <div className="page-header">
         <div className="page-header-text">
           <h1>Workforce</h1>
           <p className="page-header-sub">
@@ -397,11 +318,10 @@ export default function WorkforcePage() {
       <ActiveTeam />
 
       <section className="manifest-gallery" aria-labelledby="manifest-gallery-title">
-        <div className="workforce-panel-head manifest-gallery-head">
+        <div className="workforce-panel-head">
           <div>
-            <p className="workforce-eyebrow">Manifest gallery</p>
-            <h2 id="manifest-gallery-title">Grow your team</h2>
-            <p>Hire from reviewed manifests. Permissions stay explicit.</p>
+            <h2 id="manifest-gallery-title">Manifest gallery</h2>
+            <p className="workforce-panel-sub">Hire from reviewed manifests. Permissions stay explicit.</p>
           </div>
           <span className="gallery-count">
             {manifests.length} available

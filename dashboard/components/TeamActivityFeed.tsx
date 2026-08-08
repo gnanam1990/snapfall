@@ -65,11 +65,7 @@ export default function TeamActivityFeed({
       {visible.length ? (
         <ol className="activity-list">
           {visible.map((message) => (
-            <li
-              className={`activity-item tone-${message.tone}${message.threadKey ? ' has-thread' : ''}`}
-              key={message.id}
-            >
-              <span className="activity-node" aria-hidden="true" />
+            <li className={`activity-item tone-${message.tone}`} key={message.id}>
               <span className="activity-avatar" aria-hidden="true">{message.initials}</span>
               <div className="activity-copy">
                 <div className="activity-identity">

@@ -1,235 +1,219 @@
-/* ══ The instrument diagram ══
+/* ══ The ledger ══
  *
- * This is a piping and instrumentation drawing, not a dashboard skin. The product is a capital
- * pool with real capacity limits — an 80% utilisation cap, a 10% per-org exposure cap, a
- * first-loss reserve — and a settlement waterfall that empties in stages. A P&ID is the drawing
- * an engineer reads to understand exactly that, so the system is borrowed whole rather than
- * quoted: hairline rules do the structural work, vessels and valves are drawn, and every figure
- * hangs off a callout leader that says what it measures.
+ * This interface is a ledger kept by a careful operator, not a drawing of a machine. Money here
+ * is evidence: every figure names its source, every state its reason, and nothing is asserted
+ * that cannot be read back from the chain. Type, hairlines and tabular digits do the work.
  *
- * Three consequences fall out of the world and are enforced at the token layer, so no component
- * can reintroduce them by accident:
+ * Three rules are enforced at the token layer so no component can reintroduce them by accident:
  *
- *   NO DEPTH.    A drawing is flat. --shadow and --shadow-lg are `none`. Elevation is expressed
- *                by line weight, never by a shadow.
- *   NO GLOW.     Every *-glow token resolves to transparent. A glow is light emission; ink does
- *                not emit. The names survive because components reference them.
- *   NO GRADIENT. Not one gradient declaration survives in this stylesheet; the CTA stops are
- *                also identical, so even a reintroduced one would render flat.
+ *   NO DEPTH.    --shadow and --shadow-lg are `none`. Separation is a hairline or a fill step,
+ *                never a shadow.
+ *   NO GLOW.     Every *-glow token resolves to transparent. The names survive because
+ *                components still reference them.
+ *   NO GRADIENT. No gradient declaration colours anything; the CTA stops are one hex, so even a
+ *                reintroduced one renders flat.
  *
- * Colour is semantic only, in the instrument grammar: green reads open/flowing/settled, red reads
- * alarm/refused, amber reads caution/pending, and the process teal marks the live path. Nothing
- * is coloured for decoration. With all content removed the surface is still recognisable, by its
- * rules, its leaders and its registration marks.
+ * Colour is semantic only: green is settled/flowing, red is refused/alarm, amber is waiting on
+ * a human, and the iris accent marks the live, verifiable element — a link out to evidence, a
+ * focus ring, the process in motion. Nothing is coloured for decoration.
  *
  * ── Contrast ──
  *
- * AA is re-earned here rather than inherited: the previous system's ratios were measured against
- * different surfaces and do not transfer. Text tokens are checked against the LIGHTEST surface
- * they can land on in dark (--panel-3) and the lightest in light (--panel), the worst case in
- * each theme. The muted ramp is where AA bites: at 4.5:1 on small text there is about one step of
- * headroom between --muted and --muted-2 before they collapse into one grey, so --muted-2 sits at
- * the floor and --muted a clear step above it, which keeps the ramp readable instead of nominal.
+ * Every ratio below was computed from these hex values by WCAG 2.x relative luminance, not
+ * eyeballed. Text tokens are checked against the lightest surface they can land on in each
+ * theme: --panel-3 in dark, --panel in light. The muted ramp has about one step of headroom at
+ * 4.5:1 before --muted and --muted-2 collapse into one grey, so there is no room for a third
+ * muted token: --muted-2 sits at the floor and --muted a clear step above it.
  */
 
 :root {
   color-scheme: dark;
 
-  /* ── surfaces: the drafting table at night ──
-     Warm graphite, deliberately not blue-black. Blue-black plus a bright accent is the crypto
-     dashboard default this world refuses, and the ground is where that reads first. */
-  --bg: #16171a;
-  --bg-2: #1a1c20;
+  /* ── surfaces ──
+     Neutral graphite, one step apart. Panels lift from the ground by a fill step and a
+     hairline, never by a shadow. */
+  --bg: #0e0f11;
+  --bg-2: #131518;
   /* The page glow is gone; the name resolves to the ground so any consumer draws nothing. */
-  --bg-glow-top: #16171a;
-  --well: #121316;
-  --well-2: #0f1012;
-  --panel: #1a1c20;
-  --panel-2: #1e2024;
-  --panel-3: #232529;
-  --panel-a: rgba(26, 28, 32, 0.97);
-  --panel-b: rgba(18, 19, 22, 0.97);
-  --scrim: rgba(22, 23, 26, 0.76);
-  --inset: rgba(10, 11, 13, 0.34);
-  --inset-2: rgba(10, 11, 13, 0.2);
-  --hover: rgba(255, 255, 255, 0.04);
+  --bg-glow-top: #0e0f11;
+  --well: #0a0b0d;
+  --well-2: #07080a;
+  --panel: #15181c;
+  --panel-2: #1a1e23;
+  --panel-3: #20252b;
+  --panel-a: rgba(21, 24, 28, 0.97);
+  --panel-b: rgba(16, 18, 21, 0.97);
+  --scrim: rgba(14, 15, 17, 0.76);
+  --inset: rgba(0, 0, 0, 0.28);
+  --inset-2: rgba(0, 0, 0, 0.16);
+  --hover: rgba(255, 255, 255, 0.045);
 
-  /* ── lines: the primary material ──
-     --border is the drawn line and carries most of the structure. --border-2 is the heavier line
-     a drawing uses for a vessel wall or a section boundary. */
-  --border: #2e3136;
-  --border-2: #3e4249;
-  --border-3: #34373c;
+  /* ── lines ──
+     --border carries the structure; --border-2 is the firmer edge on meters, inputs and
+     controls. */
+  --border: #282d33;
+  --border-2: #383e46;
+  --border-3: #2f343b;
 
   /* ── lettering ──
-     Warm off-white rather than pure white: this is ink on a dark sheet, and #fff reads as
-     emitted light. Ratios against --panel-3 #232529. */
-  --text: #e9e7e2;      /* 12.4:1 */
-  --text-2: #bab6ae;    /*  8.0:1 */
-  --muted: #a09c94;     /*  5.7:1 */
-  /* Measured, not asserted. #8d8981 claimed 4.5 and delivered 4.41 on --panel-3, the lightest
-     surface it can land on in dark, so it cleared AA nowhere that mattered. */
-  --muted-2: #918d85;   /*  4.64 --panel-3 · 4.93 --panel-2 · 5.16 --panel · 5.42 --bg */
+     Ratios against --panel-3 #20252b, the lightest dark surface text can land on. */
+  --text: #ecedef;      /* 13.17 */
+  --text-2: #b9bdc4;    /*  8.18 */
+  --muted: #a2a7ae;     /*  6.37 */
+  --muted-2: #90959d;   /*  5.12 panel-3 · 5.56 panel-2 · 5.91 panel · 6.37 bg */
   --color-muted: var(--muted);
   --n: var(--text);
 
-  /* ── state: the only colour in the system ──
-     Instrument conventions, desaturated to sit on a drawing rather than shout over it. */
-  --pos: #7cb389;             /* open · flowing · settled */
-  --pos-bg: #16241a;
-  --pos-bg-strong: #1b2f21;
-  --pos-border: #27412e;
-  --pos-border-strong: #35583d;
-  --pos-glow: transparent;    /* ink does not emit */
+  /* ── state: the only colour in the system ── */
+  --pos: #83c795;             /* settled · flowing — 7.77 on panel-3 */
+  --pos-bg: #15251b;
+  --pos-bg-strong: #1a2f22;
+  --pos-border: #2a4a35;
+  --pos-border-strong: #38604a;
+  --pos-glow: transparent;
 
-  --neg: #d47c74;             /* alarm · refused */
-  --neg-bg: #2a1616;
-  --neg-border: #4a2724;
+  --neg: #dc8a83;             /* refused · alarm — 5.88 on panel-3 */
+  --neg-bg: #2a1816;
+  --neg-border: #4d2925;
   --on-neg: #1a0f0e;
 
-  --warn: #d1a45c;            /* caution · pending */
-  --warn-bg: #271e10;
-  --warn-border: #453519;
+  --warn: #d3a65c;            /* waiting on a human — 6.89 on panel-3 */
+  --warn-bg: #261e10;
+  --warn-border: #4a3719;
 
-  /* The process line: what is live and flowing now. A drafting teal, not a signal cyan. */
-  --accent: #6ba3a8;
-  --accent-bright: #8bc0c4;
-  --accent-dim: #4d7f83;
-  --accent-bg: #16262a;
-  --accent-border: #244a4f;
-  --accent-wash: rgba(107, 163, 168, 0.12);
+  /* The live, verifiable element: links out to evidence, the focus ring, money in motion.
+     An iris, deliberately not the crypto-dashboard cyan and not the old drafting teal. */
+  --accent: #9b98e8;          /* 5.92 on panel-3 */
+  --accent-bright: #b7b5f0;   /* 8.00 on panel-3 */
+  --accent-dim: #6f6cb4;
+  --accent-bg: #1b1a2e;
+  --accent-border: #35335c;
+  --accent-wash: rgba(155, 152, 232, 0.10);
   --accent-glow-2: transparent;
   --accent-glow-3: transparent;
-  --on-accent: #0e1416;
+  --on-accent: #14132a;       /* 6.96 on --accent */
 
   /* Both stops identical: belt and braces, since no gradient declaration remains anywhere. */
-  --cta-from: #6ba3a8;
-  --cta-to: #6ba3a8;
+  --cta-from: #9b98e8;
+  --cta-to: #9b98e8;
   --cta-glow: transparent;
 
-  /* --sky is the focus family. It maps onto the process line, so focus reads as "this is the
-     live element" — the same idea the accent already carries. */
-  --sky: #6ba3a8;
-  --sky-bright: #8bc0c4;
-  --sky-bg: #16262a;
-  --sky-border: #244a4f;
-  --sky-border-strong: #33686e;
-  --sky-wash: rgba(107, 163, 168, 0.12);
+  /* --sky is the focus family, mapped onto the accent so focus reads as "the live element". */
+  --sky: #9b98e8;
+  --sky-bright: #b7b5f0;
+  --sky-bg: #1b1a2e;
+  --sky-border: #35335c;
+  --sky-border-strong: #4a4780;
+  --sky-wash: rgba(155, 152, 232, 0.10);
 
-  --violet: #9b8fc4;          /* a distinct actor hue in the feed, nothing more */
-  --tick: rgba(160, 156, 148, 0.42);
+  --violet: #b493d6;          /* a distinct actor hue in the feed, nothing more — 5.94 on panel-3 */
+  --tick: rgba(162, 167, 174, 0.42);
   --pipe-accent: var(--accent);
-  --workforce-line: var(--border-2);
   --actor-color: var(--muted);
 
-  /* Focus owes 3:1 against the field it sits on. 55% reaches 3.4:1 here; light needs a different
+  /* Focus owes 3:1 against the field it sits on. 55% clears it here; light needs a different
      figure entirely, so this cannot be one shared alpha. */
   --focus-wash: color-mix(in srgb, var(--sky) 55%, transparent);
   --avatar-tint: 14%;
   --avatar-tint-base: var(--bg-2);
 
-  /* Drawn boxes have corners. 2px stops them reading as a rendering artefact without ever
-     reading as a rounded card. */
-  --radius: 2px;
+  /* Panels and meters. Small controls use --radius-sm. */
+  --radius: 10px;
+  --radius-sm: 7px;
 
-  /* A drawing is flat. Depth is line weight. */
+  /* Flat. Separation is a hairline or a fill step. */
   --shadow: none;
   --shadow-lg: none;
 }
 
-/* ══ Vellum ══
+/* ══ Day ledger ══
  *
- * The canonical rendition: ink on warm drafting paper. Dark ships as the default only because
- * changing a running dashboard's appearance underneath its operator mid-hackathon costs more than
- * a non-canonical default does. Both are the same drawing under different light.
- *
- * Not an inversion. The ground is warm paper rather than white, because white plus hairlines
- * reads as a spreadsheet; the ink is a soft near-black rather than #000, which on paper reads as
- * printed rather than rendered. Ratios are against --panel #faf8f3.
+ * The same ledger under daylight. Not an inversion: the ground is a soft neutral rather than
+ * white, because pure white under hairlines reads as a spreadsheet, and the ink is a soft
+ * near-black rather than #000. Ratios against --panel #ffffff, the lightest light surface.
  */
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --bg: #efece4;
-  --bg-2: #f4f1ea;
-  --bg-glow-top: #efece4;
-  --well: #e7e3d9;
-  --well-2: #e1dcd1;
-  --panel: #faf8f3;
-  --panel-2: #f4f1ea;
-  --panel-3: #eeeae1;
-  --panel-a: rgba(250, 248, 243, 0.97);
-  --panel-b: rgba(244, 241, 234, 0.97);
-  --scrim: rgba(250, 248, 243, 0.8);
-  --inset: rgba(28, 27, 24, 0.06);
-  --inset-2: rgba(28, 27, 24, 0.035);
-  --hover: rgba(28, 27, 24, 0.04);
+  --bg: #f5f5f2;
+  --bg-2: #fafaf8;
+  --bg-glow-top: #f5f5f2;
+  --well: #ebebe7;
+  --well-2: #e4e4df;
+  --panel: #ffffff;
+  --panel-2: #f7f7f4;
+  --panel-3: #efefeb;
+  --panel-a: rgba(255, 255, 255, 0.97);
+  --panel-b: rgba(247, 247, 244, 0.97);
+  --scrim: rgba(255, 255, 255, 0.8);
+  --inset: rgba(22, 23, 26, 0.05);
+  --inset-2: rgba(22, 23, 26, 0.03);
+  --hover: rgba(22, 23, 26, 0.045);
 
-  --border: #cdc7b9;
-  --border-2: #b2ab9a;
-  --border-3: #c2bbac;
+  --border: #e1e1dc;
+  --border-2: #c9c9c2;
+  --border-3: #d5d5cf;
 
-  --text: #1c1b18;      /* 15.6:1 */
-  --text-2: #45423a;    /*  9.1:1 */
-  --muted: #6a665c;     /*  5.4:1 */
-  /* Measured, not mirrored by eye. #7c776a claimed 4.5 and delivered 4.21 on --panel, 3.96 on
-     --panel-2 and 3.78 on --bg -- it cleared AA on nothing. These are the real ratios for the
-     surfaces this token actually lands on. It still does not clear 4.5 on --well-2 (4.00), so
-     --muted-2 must not be used on that surface; --muted is the token there. */
-  --muted-2: #6e695d;   /*  5.15 --panel · 4.85 --panel-2 · 4.63 --bg */
+  --text: #16171a;      /* 17.92 */
+  --text-2: #404349;    /*  9.92 */
+  --muted: #5e6269;     /*  6.13 panel · 4.80 well-2 */
+  /* Measured, not mirrored by eye. It does not clear 4.5 on --well-2 (3.96), so --muted-2 must
+     not be used on that surface; --muted is the token there, at 4.80. Darkening it further
+     collapses it into --muted — the ramp has no room, which is why the rule exists. */
+  --muted-2: #6b6f76;   /*  5.05 panel · 4.70 panel-2 · 4.62 bg */
   --color-muted: var(--muted);
   --n: var(--text);
 
-  --pos: #3a7048;      /* 4.97 on --pos-bg, 5.51 on --panel, 5.18 on --panel-2 */
-  --pos-bg: #e6efe4;
-  --pos-bg-strong: #d9e8d8;
-  --pos-border: #bcd2ba;
-  --pos-border-strong: #96b795;
+  --pos: #2c7546;      /* 4.79 on --pos-bg · 5.61 on --panel · 5.23 on --panel-2 */
+  --pos-bg: #e4f0e7;
+  --pos-bg-strong: #d7e8dc;
+  --pos-border: #b7d3bf;
+  --pos-border-strong: #92b89e;
   --pos-glow: transparent;
 
-  --neg: #a4443c;
-  --neg-bg: #f4e4e1;
-  --neg-border: #ddbdb8;
-  --on-neg: #ffffff;
+  --neg: #a83c34;       /* 5.09 on --neg-bg · 6.25 on --panel */
+  --neg-bg: #f6e4e1;
+  --neg-border: #e0bcb6;
+  --on-neg: #ffffff;    /* 6.25 on --neg */
 
-  --warn: #8a6320;
-  --warn-bg: #f6ecd8;
-  --warn-border: #ddc79a;
+  --warn: #87590f;      /* 5.17 on --warn-bg · 6.06 on --panel */
+  --warn-bg: #f7ecd7;
+  --warn-border: #e0c795;
 
-  --accent: #35696e;
-  --accent-bright: #27565b;
-  --accent-dim: #6b9498;
-  --accent-bg: #e2eced;
-  --accent-border: #b6cdcf;
-  --accent-wash: rgba(53, 105, 110, 0.1);
+  --accent: #4c44b0;    /* 6.34 on --accent-bg · 7.61 on --panel */
+  --accent-bright: #3d37a0;
+  --accent-dim: #7c76c4;
+  --accent-bg: #eae9f7;
+  --accent-border: #c5c2e6;
+  --accent-wash: rgba(76, 68, 176, 0.08);
   --accent-glow-2: transparent;
   --accent-glow-3: transparent;
-  --on-accent: #ffffff;
+  --on-accent: #ffffff; /* 7.61 on --accent */
 
-  --cta-from: #35696e;
-  --cta-to: #35696e;
+  --cta-from: #4c44b0;
+  --cta-to: #4c44b0;
   --cta-glow: transparent;
 
-  --sky: #35696e;
-  --sky-bright: #27565b;
-  --sky-bg: #e2eced;
-  --sky-border: #b6cdcf;
-  --sky-border-strong: #7ba3a7;
-  --sky-wash: rgba(53, 105, 110, 0.1);
+  --sky: #4c44b0;
+  --sky-bright: #3d37a0;
+  --sky-bg: #eae9f7;
+  --sky-border: #c5c2e6;
+  --sky-border-strong: #9d99d6;
+  --sky-wash: rgba(76, 68, 176, 0.08);
 
-  --violet: #5d4f8c;
-  --tick: rgba(70, 66, 58, 0.34);
+  --violet: #6d5a9e;    /* 5.82 on --panel */
+  --tick: rgba(64, 67, 73, 0.34);
   --pipe-accent: var(--accent);
-  --workforce-line: var(--border-2);
   --actor-color: var(--muted);
 
   /* Light needs a heavier mix than dark to clear 3:1 on the same composited field: 70% against
      55%. One shared alpha fixes one theme and fails the other. */
   --focus-wash: color-mix(in srgb, var(--sky) 70%, transparent);
   --avatar-tint: 12%;
-  --avatar-tint-base: var(--bg-2);
+  --avatar-tint-base: var(--panel);
 
-  --radius: 2px;
+  --radius: 10px;
+  --radius-sm: 7px;
   --shadow: none;
   --shadow-lg: none;
 }
@@ -256,149 +240,69 @@ a { color: inherit; text-decoration: none; }
   padding: 20px 14px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   position: sticky;
   top: 0;
   height: 100vh;
 }
-.brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 20px; }
 /* The mark inherits currentColor, so the accent comes from the theme rather than the asset. */
 .brand > svg { color: var(--accent); flex: none; display: block; }
-.brand-name { font-weight: 700; letter-spacing: -0.02em; font-size: 16px; }
+.brand-name { font-weight: 650; letter-spacing: -0.01em; font-size: 15px; }
+/* Text-only navigation: the destination names are short and unambiguous, so no glyph earns its
+   place beside them. Active is a fill step plus weight, not a coloured marker. */
 .nav-link {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 10px; border-radius: var(--radius); color: var(--muted);
-  font-weight: 500; transition: background 0.12s, color 0.12s;
+  padding: 7px 10px; border-radius: var(--radius-sm); color: var(--muted);
+  font-size: 13.5px; font-weight: 500; transition: background 0.12s, color 0.12s;
 }
-/* Icon and label travel together on the left; the pill stays pushed right by the flex
-   justification above. */
-.nav-label { display: flex; align-items: center; gap: 10px; min-width: 0; }
-/* Quieter than the lettering it labels, so the glyph reads as an annotation rather than
-   competing with the word. The active item takes the accent already carried by the rail. */
-.nav-icon { flex: none; display: block; color: var(--muted-2); transition: color 0.12s; }
-.nav-link:hover .nav-icon { color: var(--text-2); }
-.nav-link.active .nav-icon { color: var(--accent); }
-.nav-link:hover { background: var(--panel); color: var(--text); }
-.nav-link.active {
-  color: var(--text);
-  background: none;
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-.nav-link.active::after { content: ""; }
-.nav-link .pill { font-size: 11px; background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); border-radius: 999px; padding: 0 7px; font-weight: 700; }
-.sidebar-foot { margin-top: auto; padding: 12px 8px 4px; color: var(--muted-2); font-size: 11.5px; line-height: 1.5; min-width: 0; overflow-wrap: anywhere; border-top: 1px solid var(--border); }
-.dot-live { color: var(--pos); }
+.nav-link:hover { background: var(--hover); color: var(--text); }
+.nav-link.active { background: var(--panel-2); color: var(--text); font-weight: 600; }
+.sidebar-foot { margin-top: auto; padding: 14px 10px 2px; color: var(--muted-2); font-size: 11.5px; line-height: 1.5; min-width: 0; overflow-wrap: anywhere; border-top: 1px solid var(--border); }
+.sidebar-net { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
+.sidebar-net-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pos); flex: none; }
 
 /* ── main ── */
-.main { width: 100%; min-width: 0; padding: 26px 30px 60px; max-width: 1180px; }
-.topbar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 20px; }
-/* A real page heading, not a caption hovering between title and label (#4). 30px reads as the
-   page's own h1 while staying clearly below the 46px landing hero. Shared by every app page, so all
-   of them gain a proper heading, not just Overview. */
-.page-title { font-size: 30px; font-weight: 700; letter-spacing: -0.025em; margin: 0; }
-.page-sub { color: var(--muted); margin: 4px 0 0; }
+.main { width: 100%; min-width: 0; padding: 28px 32px 64px; max-width: 1180px; }
+/* A steady dot, not a pulse: liveness is stated by the word and the dot's hue, and motion on a
+   ledger is reserved for money actually moving (the graph below). */
 .badge-live { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
-.badge-live::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: var(--pos); box-shadow: 0 0 0 0 var(--pos-glow); animation: pulse 1.8s infinite; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 var(--pos-glow); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
-.badge-reconnecting::before { background: var(--warn); animation: none; }
-/* The live-badge pulse runs indefinitely, which is the case SC 2.2.2 (Pause, Stop, Hide) covers;
-   the hero figure's value transition is brief and data-driven, so no criterion compels removing
-   it, but it is still motion a user may not want. Neither is essential to the information, so
-   both stop on request.
-   NOT SC 2.3.3: that criterion is about motion triggered by user INTERACTION, and neither of
-   these is interaction-triggered. */
-@media (prefers-reduced-motion: reduce) {
-  .badge-live::before { animation: none; }
-  .hero-num { transition: none; }
-}
+.badge-live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--pos); }
+.badge-reconnecting::before { background: var(--warn); }
 
 /* ── cards & grid ── */
 .grid { display: grid; gap: 16px; }
-.cols-4 { grid-template-columns: repeat(4, 1fr); }
-
-/* The gauge band.
- *
- * Four same-size cards in a row is the page structure the craft floor names as a default to
- * refuse, and it was this page spine. An instrument panel does not read as four cards; it reads
- * as ONE strip of gauges divided by rules. So inside a .cols-4 the card loses its box entirely
- * and the grid gains the drawn frame: hairlines between readings, one border around the set.
- * No JSX changes, because the markup was never the problem -- the container was. */
-.grid.cols-4 {
-  gap: 0;
-  border: 1px solid var(--border);
-  background: var(--panel);
-}
-.grid.cols-4 > .card {
-  border: 0;
-  background: none;
-  border-radius: 0;
-  padding: 14px 16px 15px;
-  border-left: 1px solid var(--border);
-}
-.grid.cols-4 > .card:first-child { border-left: 0; }
-.grid.cols-4 .stat-label {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: var(--muted);
-}
-.grid.cols-4 .stat-value { font-size: 23px; margin-top: 10px; letter-spacing: -0.01em; }
-.grid.cols-4 .stat-sub { margin-top: 6px; font-size: 11.5px; }
-
-@media (max-width: 860px) {
-  .grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
-  .grid.cols-4 > .card:nth-child(3) { border-left: 0; }
-  .grid.cols-4 > .card:nth-child(n+3) { border-top: 1px solid var(--border); }
-}
 .cols-2 { grid-template-columns: 1.4fr 1fr; }
 .activity-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.75fr); gap: 16px; align-items: start; }
 @media (max-width: 900px) {
-  .cols-4 { grid-template-columns: repeat(2, 1fr); }
   .cols-2, .activity-layout { grid-template-columns: 1fr; }
   .app { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; }
 }
 .card {
-  background: var(--panel-2);
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 18px;
+  padding: 18px 20px;
   box-shadow: var(--shadow);
 }
-.card-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+.card-title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); margin: 0 0 12px; }
 
-/* ── stat ── */
-.stat-label { color: var(--muted); font-size: 12.5px; font-weight: 500; }
-.stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin-top: 6px; font-variant-numeric: tabular-nums; }
+/* ── figure sub-line and unit, shared by the older surfaces ── */
 .stat-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .u { color: var(--muted); font-weight: 500; font-size: 0.62em; }
 
-/* ── treasury hero ── */
-.hero {
-  grid-column: 1 / -1;
-  display: flex; align-items: center; justify-content: space-between;
-  background: var(--panel-2);
-  border: 1px solid var(--border-2);
-  border-radius: 16px;
-  padding: 22px 26px;
-  box-shadow: var(--shadow);
-}
-.hero-num { font-size: 46px; font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; transition: color 0.3s; }
-.hero-num.flash { color: var(--accent); }
-.hero-right { text-align: right; color: var(--muted); }
-.chip-arc { display: inline-flex; gap: 8px; align-items: center; border: 1px solid var(--border-2); border-radius: 999px; padding: 5px 12px; color: var(--sky); font-size: 12.5px; font-weight: 600; }
-
-/* ── humanized team activity ── */
+/* ── team activity ── */
 .activity {
   overflow: hidden;
-  background: var(--panel-2);
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 .activity-head {
-  min-height: 66px;
-  padding: 14px 18px;
+  min-height: 52px;
+  padding: 8px 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -406,60 +310,36 @@ a { color: inherit; text-decoration: none; }
   border-bottom: 1px solid var(--border);
 }
 .activity-heading { display: flex; align-items: center; gap: 10px; }
-.activity-heading h2 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
-.activity-live {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border: 1px solid var(--pos-border);
-  border-radius: 999px;
-  background: var(--pos-bg);
-  color: var(--pos);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
+.activity-heading h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.activity-live { display: inline-flex; align-items: center; gap: 6px; color: var(--pos); font-size: 11.5px; font-weight: 600; }
 .activity-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
-.activity-live.is-waiting { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
-.activity-filters { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.activity-live.is-waiting { color: var(--warn); }
+.activity-filters { display: flex; gap: 2px; flex-wrap: wrap; justify-content: flex-end; }
 .activity-filter {
   appearance: none;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  padding: 5px 9px;
+  padding: 5px 10px;
   font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
 .activity-filter:hover { color: var(--text); background: var(--hover); }
-.activity-filter.is-active { color: var(--text); background: var(--bg-2); border-color: var(--border-2); }
+.activity-filter.is-active { color: var(--text); background: var(--panel-2); border-color: var(--border); }
 .activity-filter:focus-visible, .activity-action:focus-visible {
   outline: 2px solid var(--sky);
   outline-offset: 2px;
 }
-.activity-list { position: relative; list-style: none; padding: 0; margin: 0; }
-.activity-list::before {
-  content: "";
-  position: absolute;
-  left: 27px;
-  top: 26px;
-  bottom: 26px;
-  width: 1px;
-  background: var(--border);
-}
+.activity-list { list-style: none; padding: 0; margin: 0; }
 .activity-item {
   --actor-color: var(--accent);
 
-  position: relative;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) minmax(126px, auto);
+  grid-template-columns: 34px minmax(0, 1fr) minmax(126px, auto);
   gap: 12px;
-  min-height: 100px;
-  padding: 17px 18px 17px 47px;
+  padding: 15px 20px;
   border-top: 1px solid var(--border);
 }
 .activity-item:first-child { border-top: 0; }
@@ -467,532 +347,288 @@ a { color: inherit; text-decoration: none; }
 .activity-item.tone-funding { --actor-color: var(--pos); }
 .activity-item.tone-owner { --actor-color: var(--neg); }
 .activity-item.tone-qa { --actor-color: var(--violet); }
-.activity-node {
-  position: absolute;
-  z-index: 1;
-  top: 30px;
-  left: 23px;
-  width: 9px;
-  height: 9px;
-  border: 2px solid var(--panel-2);
-  border-radius: 50%;
-  background: var(--actor-color);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--actor-color) 35%, var(--border));
-}
+/* The initials chip: a rounded square in the actor's tint. The tint is authored per theme rather
+   than derived: mixing the actor hue into --bg-2 pulls a light plate TOWARD the glyph and fails
+   AA, so light mixes into --panel instead (--avatar-tint-base), which is why that token differs
+   between themes. */
 .activity-avatar {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
-  clip-path: polygon(25% 5%, 75% 5%, 98% 50%, 75% 95%, 25% 95%, 2% 50%);
-  /* Authored per theme rather than derived. Mixing 16% of the actor hue into --bg-2 pulls a
-     light plate TOWARD the glyph, so the 11px/850 initials measured 3.89-4.21:1 for four of the
-     five actor tones in light (only violet passed). Lowering the percentage alone does not fix
-     it; the base has to be the lighter --panel. Dark's rendered output is unchanged, and light's
-     worst tone goes from 3.89:1 to 4.63:1 (audit finding). */
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--actor-color) var(--avatar-tint), var(--avatar-tint-base));
   color: var(--actor-color);
   font-size: 11px;
-  font-weight: 850;
-  letter-spacing: 0.04em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
 }
 .activity-copy { min-width: 0; }
 .activity-identity { display: flex; align-items: baseline; gap: 8px; }
-.activity-identity strong { font-size: 14px; }
-.activity-identity span { color: var(--muted); font-size: 11.5px; }
-.activity-copy p { margin: 5px 0 0; color: var(--text-2); font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
-.activity-meta { min-width: 126px; color: var(--muted); text-align: right; font-size: 11.5px; }
+.activity-identity strong { font-size: 13.5px; font-weight: 600; }
+.activity-identity span { color: var(--muted); font-size: 12px; }
+.activity-copy p { margin: 4px 0 0; color: var(--text-2); font-size: 13.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.activity-meta { min-width: 126px; color: var(--muted); text-align: right; font-size: 12px; }
 .activity-meta time { font-variant-numeric: tabular-nums; }
-.activity-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-top: 8px; }
+.activity-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-top: 7px; }
 .activity-job {
   max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 2px 7px;
-  border: 1px solid var(--border-2);
-  border-radius: 999px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   color: var(--muted);
   font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 11px;
   white-space: nowrap;
 }
-.activity-tags strong { color: var(--text); font-variant-numeric: tabular-nums; font-size: 11.5px; }
-.activity-tags a { color: var(--sky); }
+.activity-tags strong { color: var(--text); font-variant-numeric: tabular-nums; font-size: 12px; }
+.activity-tags a { color: var(--accent); }
 .activity-tags a:hover { text-decoration: underline; }
 /* Demo-replay explorer marker: deliberately NOT a link and visibly muted/italic so it can
    never be mistaken for a real "verify on explorer" affordance. */
-.activity-explorer-placeholder { color: var(--muted); font-size: 11px; font-style: italic; cursor: default; }
+.activity-explorer-placeholder { color: var(--muted-2); font-size: 11px; font-style: italic; cursor: default; }
 .disconnected-links { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .disconnected-links li { color: var(--muted); line-height: 1.5; }
-.disconnected-links a { color: var(--sky); }
+.disconnected-links a { color: var(--accent); }
 .disconnected-links a:hover { text-decoration: underline; }
-.activity-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
+.activity-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .activity-action {
   display: inline-flex;
-  min-height: 31px;
+  min-height: 32px;
   align-items: center;
   justify-content: center;
-  padding: 5px 11px;
-  border: 1px solid var(--border-2);
-  border-radius: 8px;
-  background: var(--bg-2);
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
   color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
 }
-.activity-action:hover { color: var(--text); border-color: var(--muted-2); }
+.activity-action:hover { color: var(--text); border-color: var(--border-2); }
 .activity-action.approve { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
 .activity-action.reject { color: var(--neg); border-color: var(--neg-border); background: var(--neg-bg); }
 .activity-action.alternative { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
-.activity-item.has-thread::after {
-  content: "";
-  position: absolute;
-  left: 37px;
-  top: 42px;
-  bottom: -1px;
-  width: 8px;
-  border-left: 1px dashed color-mix(in srgb, var(--actor-color) 55%, transparent);
-  border-bottom: 1px dashed color-mix(in srgb, var(--actor-color) 55%, transparent);
-  border-radius: 0 0 0 8px;
-  opacity: 0.65;
-}
-.activity-empty { min-height: 180px; display: grid; place-items: center; color: var(--muted); }
+.activity-empty { min-height: 160px; display: grid; place-items: center; color: var(--muted); }
 @media (max-width: 640px) {
   .activity-head { align-items: flex-start; flex-direction: column; }
   .activity-filters { justify-content: flex-start; }
-  .activity-item { grid-template-columns: 38px minmax(0, 1fr); padding-right: 15px; }
+  .activity-item { grid-template-columns: 34px minmax(0, 1fr); }
   .activity-identity { align-items: flex-start; flex-direction: column; gap: 0; }
   .activity-meta { grid-column: 2; display: flex; align-items: center; justify-content: space-between; text-align: left; }
   .activity-tags { flex-direction: row; flex-wrap: wrap; align-items: center; margin-top: 0; }
 }
 
-/* ── agent chips ── */
+/* ── workforce strip ── */
 .agents { display: flex; flex-wrap: wrap; gap: 8px; }
-.agent { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--bg-2); border-radius: 999px; padding: 6px 12px; }
-.agent .adot { width: 7px; height: 7px; border-radius: 999px; }
-.agent .arole { font-weight: 600; }
+.agent { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--panel-2); border-radius: var(--radius-sm); padding: 6px 11px; }
+.agent .adot { width: 7px; height: 7px; border-radius: 50%; }
+.agent .arole { font-weight: 600; font-size: 13px; }
 .agent .astat { color: var(--muted); font-size: 12px; }
 
 /* ── table ── */
 table.t { width: 100%; border-collapse: collapse; }
-.t th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; padding: 0 0 8px; }
+.t th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 0 0 8px; }
 .t td { padding: 10px 0; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 .mono { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12.5px; color: var(--muted); }
 .empty { color: var(--muted); padding: 8px 0; }
 
-/* ── badges ── */
-.badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--border-2); color: var(--muted); }
-.badge.Funded, .badge.Accepted, .badge.Repaid { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
-.badge.InProgress, .badge.Delivered, .badge.DeliveryReady { color: var(--sky); border-color: var(--sky-border); background: var(--sky-bg); }
-/* --accent-border, not --accent-dim: --accent-dim is a FILL token (it paints .nav-link.active) and
-   in light it is lighter than the --accent-bg it would edge, 1.11:1, so the pill lost its border
-   while every sibling state kept one (pos 1.38, warn 1.38, sky 1.40, neg 1.45). --accent-border
-   lands in that band at 1.41:1 light, and reads 2.19:1 in dark against 1.39-1.86 for the siblings,
-   a slightly firmer edge there rather than a missing one (deferred from review #43). */
-.badge.Issued { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg); }
-.badge.Failed, .badge.Refunded, .badge.Cancelled, .badge.WrittenOff { color: var(--neg); border-color: var(--neg-border); background: var(--neg-bg); }
-.badge.AwaitingFunding { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
+/* ── badges: state as a dot plus a label, one hue per state, no fills ──
+   The dot inherits currentcolor, so each state is a single declaration and the marker cannot
+   drift from the text. The kind names are the contract's state names. */
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.badge::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentcolor; }
+.badge.Funded, .badge.Accepted, .badge.Repaid { color: var(--pos); }
+.badge.InProgress, .badge.Delivered, .badge.DeliveryReady { color: var(--sky); }
+.badge.Issued { color: var(--accent); }
+.badge.Failed, .badge.Refunded, .badge.Cancelled, .badge.WrittenOff { color: var(--neg); }
+.badge.AwaitingFunding { color: var(--warn); }
 .badge.Draft { color: var(--muted-2); }
 
 .loading { color: var(--muted); padding: 60px 0; text-align: center; }
 .mt { margin-top: 16px; }
 
-/* ── Float: authoritative capital view ── */
+/* ── Float: authoritative capital view ──
+ *
+ * The same ledger register as the Overview: the capital panel reuses the .pool meter classes
+ * verbatim, so the same figure is drawn the same way everywhere it appears. Sections are flat
+ * panels with quiet headings; every figure names its source or says which absence it is.
+ */
 .float-page { min-width: 0; display: grid; gap: 16px; }
-.float-topbar { margin-bottom: 2px; }
 .float-live-meta { display: grid; justify-items: end; gap: 5px; }
 .float-live-meta small { color: var(--muted-2); font-variant-numeric: tabular-nums; }
-.float-live {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  border: 1px solid var(--pos-border);
-  border-radius: 9px;
-  background: var(--pos-bg);
-  color: var(--pos);
-  font-size: 12px;
-  font-weight: 700;
-}
-.float-live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentcolor; }
-.float-live.is-waiting { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
-.float-stale {
-  padding: 8px 12px;
-  border: 1px solid var(--warn-border);
-  border-radius: 8px;
-  background: var(--warn-bg);
-  color: var(--warn);
-  font-size: 12px;
-}
-.float-eyebrow {
-  margin: 0 0 6px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-.float-capital {
-  min-height: 292px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 30px 34px 32px;
-  border: 1px solid var(--border-2);
-  border-radius: 16px;
-  background: var(--well-2);
-  box-shadow: var(--shadow);
-}
-.float-capital-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
-.float-capital h2 {
-  margin: 0;
-  font-size: clamp(46px, 7vw, 72px);
-  line-height: 1;
-  letter-spacing: -0.045em;
-  font-variant-numeric: tabular-nums;
-}
-.float-capital h2 span { color: var(--muted); font-size: 0.38em; font-weight: 650; letter-spacing: 0; }
-.float-capital-top p:last-child { margin: 13px 0 0; color: var(--muted); font-size: 15px; font-variant-numeric: tabular-nums; }
-.float-proof-link { color: var(--sky); font-size: 12px; font-weight: 700; }
-.float-proof-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-.utilization-labels { display: flex; align-items: baseline; justify-content: space-between; color: var(--muted); }
-.utilization-labels strong { color: var(--accent); font-size: 20px; font-variant-numeric: tabular-nums; }
-.utilization-labels strong span { color: var(--muted); font-size: 13px; font-weight: 550; }
-.utilization-labels > span { font-size: 12px; }
-.utilization-track {
-  position: relative;
-  height: 14px;
-  overflow: hidden;
-  margin-top: 10px;
-  display: flex;
-  justify-content: space-evenly;
-  align-items: center;
-  border: 1px solid var(--border-2);
-  border-radius: 999px;
-  background: var(--panel-3);
-}
-.utilization-track > span {
-  position: absolute;
-  inset: 0 auto 0 0;
-  min-width: 3px;
-  border-radius: inherit;
-  background: var(--accent-bright);
-}
-.utilization-track i { z-index: 1; width: 1px; height: 6px; background: var(--tick); }
+/* A stale read is stated, not boxed: one warn-coloured line. */
+.float-stale { margin: 0; color: var(--warn); font-size: 12px; }
+
+.float-proof-link { color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.float-proof-link:hover { color: var(--accent-bright); }
+.float-proof-link:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
 .float-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .float-metric {
-  min-height: 128px;
-  display: grid;
-  grid-template-columns: 52px 1fr;
-  align-items: center;
-  gap: 16px;
-  padding: 19px 20px;
+  padding: 16px 18px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--panel-2);
-  box-shadow: var(--shadow);
+  background: var(--panel);
 }
-.float-metric-symbol {
-  width: 50px;
-  height: 50px;
-  display: grid;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, currentcolor 55%, var(--border));
-  border-radius: 13px;
-  background: color-mix(in srgb, currentcolor 8%, var(--bg-2));
-  color: var(--accent);
-  font-size: 26px;
-}
-.float-metric.fees .float-metric-symbol { color: var(--sky); }
-.float-metric.reserve .float-metric-symbol { color: var(--warn); }
-.float-metric p { margin: 0; color: var(--muted); font-size: 12.5px; }
-.float-metric strong { display: block; margin-top: 5px; font-size: 25px; font-variant-numeric: tabular-nums; }
-.float-metric small { display: block; margin-top: 3px; color: var(--muted-2); font-size: 10.5px; }
-.float-accounting-note {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 11px 15px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--scrim);
-  color: var(--muted);
-  font-size: 12px;
-}
-.float-accounting-note > span {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--sky);
-  border-radius: 50%;
-  color: var(--sky);
-  font-family: ui-serif, serif;
-  font-weight: 800;
-}
+.float-metric p { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.float-metric strong { display: block; margin-top: 8px; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+/* An absent figure states itself at the muted floor, tabular off, in the figure's own slot. */
+.float-metric strong.is-absent { color: var(--muted-2); font-variant-numeric: normal; font-weight: 500; font-size: 14px; }
+.float-metric small { display: block; margin-top: 4px; color: var(--muted-2); font-size: 11px; line-height: 1.45; }
+
+/* The accounting caveat: a plain note at the muted floor, not a boxed callout. */
+.float-accounting-note { margin: 0; color: var(--muted-2); font-size: 11.5px; line-height: 1.55; }
+
 .float-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
-.float-section-head h2 { margin: 0; font-size: 20px; letter-spacing: -0.02em; }
+.float-section-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.float-section-sub { margin: 4px 0 0; font-size: 12px; color: var(--muted-2); line-height: 1.5; }
 .float-muted { max-width: 360px; color: var(--muted-2); font-size: 11.5px; text-align: right; }
+
 .rate-engine, .float-advances, .loss-waterfall {
   min-width: 0;
-  border: 1px solid var(--border-2);
-  border-radius: 16px;
-  background: var(--well-2);
-  box-shadow: var(--shadow);
-}
-.rate-engine { margin-top: 12px; padding: 26px 28px 0; overflow: hidden; }
-.rate-engine-grid { display: grid; grid-template-columns: 270px 1fr; gap: 18px; margin-top: 22px; }
-.rate-current {
-  min-height: 276px;
-  padding: 27px 25px;
-  border: 1px solid var(--border-2);
-  border-radius: 13px;
-  background: var(--inset);
-}
-.rate-current > span { color: var(--muted); font-size: 15px; }
-.rate-current > strong {
-  display: block;
-  margin: 10px 0 16px;
-  font-size: 82px;
-  line-height: 1;
-  letter-spacing: -0.055em;
-  font-variant-numeric: tabular-nums;
-}
-.rate-delta {
-  display: inline-flex;
-  padding: 7px 10px;
-  border: 1px solid var(--accent-border);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--accent-bg);
-  color: var(--pos);
-  font-size: 11.5px;
-  font-weight: 650;
+  background: var(--panel);
+  padding: 20px 22px;
 }
-.rate-delta.is-negative { border-color: var(--neg-border); background: var(--neg-bg); color: var(--neg); }
-/* An absent rate must not wear the accent field and the --pos lettering the delta pill uses for
-   a live, better-than-base figure. Green means settled and flowing here; nothing is flowing when
-   there is no organisation to read. Muted, unfilled, and no longer shouting a value it lacks. */
-.rate-delta.is-absent {
-  border-color: var(--border); background: none; color: var(--muted-2); font-weight: 500;
+.rate-engine-grid { display: grid; grid-template-columns: 240px 1fr; gap: 18px; margin-top: 18px; align-items: start; }
+.rate-current {
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
 }
-.rate-scale-note { margin: 14px 0 0; font-size: 11px; color: var(--muted-2); }
-/* No check mark in this state, so the note carries no badge and drops to the muted floor. */
-.rate-proof-note.is-absent { color: var(--muted-2); font-size: 12px; }
-.rate-derivation {
-  min-width: 0;
-  padding: 24px 26px;
-  border: 1px solid var(--border-2);
-  border-radius: 13px;
-  background: var(--inset-2);
+.rate-current > span { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.rate-current > strong { display: block; margin: 8px 0 10px; font-size: 32px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.rate-current > strong.is-absent { font-size: 14px; color: var(--muted-2); font-weight: 500; }
+/* The delta is a state claim, so it is one hue and no box: pos when history lifted the rate,
+   neg when it cut it, muted when there is no rate to speak of. */
+.rate-delta { margin: 0; color: var(--pos); font-size: 12px; font-weight: 600; }
+.rate-delta.is-negative { color: var(--neg); }
+.rate-delta.is-absent { color: var(--muted-2); font-weight: 500; }
+.rate-scale-note { margin: 12px 0 0; font-size: 11px; color: var(--muted-2); }
+
+.rate-derivation { min-width: 0; }
+/* The derivation as one line of arithmetic: figures tabular, operators muted, no boxes. */
+.rate-equation { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
+.rate-term { display: grid; gap: 3px; justify-items: start; min-width: 88px; }
+.rate-term strong { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rate-term strong.is-absent { color: var(--muted-2); font-variant-numeric: normal; font-weight: 500; }
+.rate-term span { color: var(--muted); font-size: 11px; }
+.rate-term.result strong { font-weight: 650; }
+.rate-operator { color: var(--muted-2); font-size: 18px; padding-top: 8px; }
+
+/* The rate plotted where it sits between the protocol floor and cap. The track's ends ARE the
+   bounds, so the only standing tick is the base rate; the marker is the current figure. */
+.rate-scale { margin-top: 22px; padding: 0 24px; }
+.rate-track { position: relative; height: 10px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--border); margin-top: 24px; }
+.rate-tick { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--border-2); }
+.rate-marker { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent); }
+.rate-marker-fig {
+  position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+  margin-bottom: 7px; color: var(--accent); font-size: 12px; font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.rate-equation { display: grid; grid-template-columns: repeat(7, auto); align-items: center; gap: 10px; }
-.rate-term {
-  min-width: 112px;
-  min-height: 105px;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  padding: 13px;
-  border: 1px solid var(--border-2);
-  border-radius: 10px;
-  text-align: center;
-}
-.rate-term strong { font-size: 30px; font-variant-numeric: tabular-nums; }
-.rate-term span { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.rate-term.growth { border-color: var(--accent-border); }
-.rate-term.growth strong { color: var(--pos); }
-.rate-term.penalty { border-color: var(--neg-border); }
-.rate-term.penalty strong { color: var(--neg); }
-.rate-term.result { border-color: var(--sky-border-strong); }
-.rate-term.result strong { color: var(--sky); }
-.rate-operator { color: var(--muted); font-size: 27px; }
-.rate-scale { position: relative; min-height: 118px; margin-top: 27px; padding-top: 30px; }
-.rate-scale-line {
-  position: absolute;
-  top: 42px;
-  left: 20px;
-  right: 20px;
-  height: 3px;
-  border-radius: 99px;
-  background: var(--border-2);
-}
-.rate-marker {
-  position: absolute;
-  z-index: 1;
-  top: 5px;
-  display: grid;
-  justify-items: center;
-  transform: translateX(-50%);
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-}
-.rate-marker span {
-  width: 15px;
-  height: 15px;
-  margin-top: 5px;
-  border: 3px solid var(--accent-border);
-  border-radius: 50%;
-  background: var(--accent);
-}
-.rate-scale-label { position: absolute; top: 58px; display: grid; color: var(--muted); }
-.rate-scale-label strong { color: var(--text-2); font-size: 16px; font-variant-numeric: tabular-nums; }
-.rate-scale-label span { font-size: 11px; }
-.rate-scale-label.floor { left: 20px; }
-.rate-scale-label.base { left: 36.36%; transform: translateX(-50%); }
-.rate-scale-label.cap { right: 20px; text-align: right; }
-.rate-proof-note {
-  margin: 26px -28px 0;
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 17px 28px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-}
-.rate-proof-note > span {
-  width: 26px; height: 26px; display: grid; place-items: center;
-  border: 1px solid var(--accent); border-radius: var(--radius); color: var(--accent); font-weight: 800;
-}
-.float-advances { margin-top: 12px; padding: 26px 28px 28px; }
-.float-advance-summary { margin: 4px 0 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rate-scale-labels { position: relative; margin-top: 7px; height: 16px; font-size: 11px; color: var(--muted-2); }
+.rate-scale-labels span { position: absolute; white-space: nowrap; }
+
+.rate-proof-note { margin: 18px 0 0; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.55; }
+.rate-proof-note > span { color: var(--pos); font-weight: 700; margin-right: 2px; }
+/* No check mark in this state, so the note drops to the muted floor. */
+.rate-proof-note.is-absent { color: var(--muted-2); }
+
+.float-advance-summary { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .float-advance-summary span { margin: 0 5px; color: var(--muted-2); }
-.float-advance-summary strong { color: var(--accent); }
-.float-table-wrap { overflow-x: auto; margin-top: 22px; border: 1px solid var(--border-2); border-radius: 12px; }
+.float-advance-summary strong { color: var(--text); font-weight: 600; }
+.float-table-wrap { overflow-x: auto; margin-top: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .float-table { width: 100%; min-width: 880px; border-collapse: collapse; }
 .float-table th {
-  height: 52px;
-  padding: 0 16px;
-  border-right: 1px solid var(--border);
-  background: var(--scrim);
+  padding: 10px 14px;
   color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.045em;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-align: left;
   text-transform: uppercase;
 }
 .float-table td {
-  height: 70px;
-  padding: 0 16px;
-  border-top: 1px solid var(--border-2);
-  border-right: 1px solid var(--border);
+  padding: 11px 14px;
+  border-top: 1px solid var(--border);
   color: var(--text-2);
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.float-table th:last-child, .float-table td:last-child { border-right: 0; }
-.float-table td a { color: var(--sky); font-weight: 650; }
+.float-table td a { color: var(--accent); font-weight: 600; }
 .float-table td a:hover { text-decoration: underline; text-underline-offset: 3px; }
-.float-issued {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 9px;
-  border: 1px solid var(--pos-border);
-  border-radius: 999px;
-  background: var(--pos-bg);
-  color: var(--pos);
-  font-size: 11px;
-  font-weight: 700;
-}
-.float-issued i { width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
+/* A cell the history scan did not fill is not a zero: muted, tabular off. */
+.float-table .is-absent { color: var(--muted-2); font-variant-numeric: normal; }
 .float-empty {
-  min-height: 138px;
-  margin-top: 20px;
+  margin-top: 16px;
+  padding: 22px;
   display: grid;
-  place-content: center;
   justify-items: center;
   gap: 4px;
   border: 1px dashed var(--border-2);
-  border-radius: 12px;
-  color: var(--muted);
-}
-.float-empty strong { color: var(--text); }
-.float-empty span { font-size: 12px; }
-.loss-waterfall { display: grid; grid-template-columns: 280px 1fr; gap: 26px; padding: 25px 28px; }
-.loss-copy h2 { margin: 0; font-size: 20px; letter-spacing: -0.02em; }
-.loss-copy > p:not(.float-eyebrow) { margin: 6px 0 20px; color: var(--muted); }
-.loss-copy > strong { font-size: 12px; }
-.loss-copy .is-clear { color: var(--pos); }
-.loss-copy .has-loss { color: var(--neg); }
-.loss-stages { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 68px; padding: 14px 0; margin: 0; list-style: none; }
-.loss-stages::before {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  left: 12%;
-  right: 12%;
-  top: 50%;
-  height: 2px;
-  background: var(--accent);
-}
-.loss-stages li {
-  position: relative;
-  z-index: 1;
-  min-height: 86px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--border-2);
-  border-radius: 12px;
-  background: var(--well);
-}
-.loss-stages li > span {
-  width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center;
-  border: 1px solid var(--accent); border-radius: 50%; font-weight: 750;
-}
-.loss-stages li div { display: grid; gap: 3px; }
-.loss-stages li strong { font-size: 12px; }
-.loss-stages li small { color: var(--muted); font-variant-numeric: tabular-nums; }
-.float-error {
-  min-height: 220px;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 8px;
-  padding: 24px;
-  border: 1px solid var(--neg-border);
-  border-radius: 14px;
-  background: var(--neg-bg);
+  border-radius: var(--radius);
   color: var(--muted);
   text-align: center;
 }
-.float-error strong { color: var(--neg); font-size: 16px; }
+.float-empty strong { color: var(--text); font-weight: 600; }
+.float-empty span { font-size: 12px; }
+
+/* The loss waterfall as a schedule. The order is the evidence, so it is numbered, and the
+   amounts are tabular. No connecting line: the numerals carry the sequence. */
+.loss-waterfall .float-section-head > strong { font-size: 12.5px; font-weight: 600; }
+.loss-waterfall .is-clear { color: var(--pos); }
+.loss-waterfall .has-loss { color: var(--neg); }
+.loss-stages { margin: 14px 0 0; padding: 0; list-style: none; }
+.loss-stages li { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+.loss-stages li > span { color: var(--muted-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.loss-stages li strong { font-size: 13px; font-weight: 600; }
+.loss-stages li small { margin-left: auto; color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+
+.float-error {
+  padding: 22px;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  border: 1px solid var(--neg-border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--muted);
+  text-align: center;
+}
+.float-error strong { color: var(--neg); font-size: 14px; }
 .float-error button {
-  margin-top: 8px;
-  padding: 8px 13px;
-  border: 1px solid var(--border-2);
-  border-radius: 8px;
+  margin-top: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
-  color: var(--text);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
   cursor: pointer;
 }
+.float-error button:hover { border-color: var(--border-2); color: var(--text); }
 .float-error button:disabled { cursor: wait; opacity: 0.65; }
+
 @media (max-width: 1060px) {
-  .rate-engine-grid { grid-template-columns: 220px 1fr; }
-  .rate-equation { grid-template-columns: repeat(4, 1fr); }
-  .rate-operator { display: none; }
-  .rate-term { min-width: 0; }
-  .loss-waterfall { grid-template-columns: 1fr; }
+  .rate-engine-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
   .float-metrics { grid-template-columns: 1fr; }
-  .rate-engine-grid { grid-template-columns: 1fr; }
-  .rate-current { min-height: 210px; }
-  .rate-current > strong { font-size: 68px; }
-  .loss-stages { gap: 12px; grid-template-columns: 1fr; }
-  .loss-stages::before { display: none; }
 }
 @media (max-width: 560px) {
   .main { padding: 26px 18px 60px; }
-  .float-capital { min-height: 270px; padding: 24px 20px; }
-  .float-capital-top, .float-section-head { flex-direction: column; }
+  .float-section-head { flex-direction: column; }
   .float-live-meta { justify-items: start; }
   .float-muted { text-align: left; }
-  .rate-engine, .float-advances { padding-left: 18px; padding-right: 18px; }
-  .rate-proof-note { margin-left: -18px; margin-right: -18px; padding-left: 18px; padding-right: 18px; }
-  .rate-equation { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* ── V9 customer portal (full-bleed magic-link surface, no owner chrome) ── */
@@ -1026,8 +662,6 @@ table.t { width: 100%; border-collapse: collapse; }
    confirmation, and capitalize mangles real message text. */
 .portal-note.is-error { color: var(--neg); text-transform: none; }
 .portal-receipt { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border); }
-.portal-lines { list-style: none; padding: 0; margin: 10px 0; }
-.portal-lines li { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border-2); font-size: 13.5px; font-variant-numeric: tabular-nums; }
 .portal-total { margin: 14px 0 0; font-size: 15px; display: flex; justify-content: space-between; }
 .portal-gaps { list-style: none; padding: 0; margin: 14px 0 0; color: var(--muted); font-size: 12.5px; }
 .portal-gaps li { padding: 3px 0; }
@@ -1037,8 +671,8 @@ table.t { width: 100%; border-collapse: collapse; }
 /* ══ Approvals ══
  *
  * The one surface the direction contract allows colour on, so the rules for it are stricter than
- * anywhere else, not looser. Colour appears on exactly three things: the valve, the two decision
- * controls, and a closed window. Everything else is ink.
+ * anywhere else, not looser. Colour appears on exactly three things: the state of a decided
+ * request, the two decision controls, and a closed window. Everything else is ink.
  *
  * Approve and refuse are deliberately identical in size, weight, padding and border, and differ
  * only in hue. PRODUCT.md principle 3 says refusing must be as easy and as legible as approving,
@@ -1052,12 +686,11 @@ table.t { width: 100%; border-collapse: collapse; }
   background: var(--panel-2);
   padding: 18px 20px;
 }
-/* The deep-linked request, marked with registration marks rather than a coloured rail down one
-   edge. The rail was the more obvious move and the wrong one: a thick accent border on one side
-   of a card is the single most recognisable tell of a generated interface, which is the register
-   this project refuses. Corner marks are what a drawing actually uses to say "this sheet, here",
-   they cannot be confused with the focus ring (an offset outline, different geometry), and the
-   direction contract names registration marks as part of this world. */
+/* The deep-linked request, marked with corner ticks rather than a coloured rail down one edge.
+   The rail was the more obvious move and the wrong one: a thick accent border on one side of a
+   card is the single most recognisable tell of a generated interface, which is the register this
+   project refuses. Corner ticks say "this row, here" and cannot be confused with the focus ring
+   (an offset outline, different geometry). */
 .approval.is-linked { position: relative; }
 .approval.is-linked::before,
 .approval.is-linked::after {
@@ -1094,14 +727,14 @@ table.t { width: 100%; border-collapse: collapse; }
 .approval-facts dd.is-expired { color: var(--neg); }
 .approval-hash { color: var(--muted-2); }
 
-/* The valve. Ink while it waits, and only then coloured by the answer it received. A pending
-   valve is not an alarm, so it is not painted like one -- the same rule the vessel thresholds
-   follow. */
-.valve { flex: none; color: var(--text-2); }
-.valve-dead { stroke: var(--border-2); stroke-dasharray: 2 3; }
-.approval.approved .valve { color: var(--pos); }
-.approval.rejected .valve { color: var(--neg); }
-.approval.alternative_requested .valve { color: var(--warn); }
+/* The state of a decided request: a dot and a word, painted by the row's own state class so the
+   marker and its lettering can never disagree. The dot inherits currentcolor, so each state is a
+   single declaration -- the same rule .badge follows. */
+.approval-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text-2); }
+.approval-state::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentcolor; }
+.approval.approved .approval-state { color: var(--pos); }
+.approval.rejected .approval-state { color: var(--neg); }
+.approval.alternative_requested .approval-state { color: var(--warn); }
 
 .approval-label { display: block; margin: 16px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 .approval-reason {
@@ -1151,193 +784,56 @@ table.t { width: 100%; border-collapse: collapse; }
   clip-path: inset(50%); white-space: nowrap;
 }
 
-/* ── A12 workforce manifest gallery ── */
-.workforce-page {
-
-  --workforce-line: var(--border-3);
-  display: grid;
-  gap: 18px;
-}
-.workforce-topbar { margin-bottom: 2px; }
-.workforce-policy,
-.workforce-safe,
-.gallery-count {
-  color: var(--muted);
-  font-size: 12px;
-}
-.workforce-policy {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--scrim);
-}
-.workforce-policy::before {
-  content: "◇";
-  color: var(--accent);
-  font-size: 13px;
-}
-.workforce-active,
-.manifest-gallery {
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--panel-b);
-  box-shadow: var(--shadow);
-}
-.workforce-active { padding: 18px 20px 20px; }
-.manifest-gallery { padding: 24px 20px 20px; }
+/* ── Workforce: bounded roles and the manifest gallery ──
+ *
+ * The authority model as a schedule and the hireable manifests as plain cards. No role marks and
+ * no glyph icons: the role name and its duty are on the row in words, and a permission is a
+ * stated bound, not an icon to decode.
+ */
+.workforce-page { display: grid; gap: 16px; }
 .workforce-panel-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
 }
-.workforce-panel-head h2 {
-  margin: 0;
-  font-size: 17px;
-  letter-spacing: -0.015em;
+.workforce-panel-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.workforce-panel-sub { margin: 4px 0 0; font-size: 12px; color: var(--muted-2); line-height: 1.5; }
+.workforce-safe, .gallery-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.workforce-active,
+.manifest-gallery {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 20px 22px;
 }
-.workforce-eyebrow {
-  margin: 0 0 5px;
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-.workforce-safe {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-.workforce-safe i,
-.manifest-status i {
-  width: 6px;
-  height: 6px;
-  display: inline-block;
-  border-radius: 50%;
-  background: currentcolor;
-}
-.active-team-line {
-  display: flex;
-  align-items: center;
-  margin-top: 16px;
-}
-.active-team-step {
-  min-width: 0;
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-}
-.active-agent {
-  min-width: 0;
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px;
-  border: 1px solid var(--border-2);
-  border-radius: 10px;
-  background: var(--panel-b);
-}
-.active-agent-icon,
-.manifest-icon {
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--accent-border);
-  border-radius: 9px;
-  background: var(--accent-bg);
-  color: var(--accent);
-  font-size: 21px;
-  line-height: 1;
-}
-.active-agent-icon {
-  width: 38px;
-  height: 38px;
-  flex: 0 0 auto;
-}
-.active-agent-icon.sky {
-  border-color: var(--sky-border-strong);
-  background: var(--sky-bg);
-  color: var(--sky);
-}
-.active-agent div { min-width: 0; display: grid; gap: 2px; }
-.active-agent strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; }
-.active-agent small {
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.active-agent small i {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--pos);
-}
-.team-connector {
-  width: 22px;
-  height: 1px;
-  flex: 0 0 auto;
-  background: var(--workforce-line);
-}
-.manifest-gallery-head { align-items: flex-end; }
-.manifest-gallery-head h2 {
-  font-size: 24px;
-  letter-spacing: -0.025em;
-}
-.manifest-gallery-head > div > p:last-child {
-  margin: 5px 0 0;
-  color: var(--muted);
-}
-.gallery-count { padding-bottom: 3px; }
-/* Build Monitor (the hireable job, with a form) stands on its own full-width block; the three
-   operator tools (no form) get their own row below, sized to their content. They shared one row
-   before, which forced the tools into 144px columns stretched to the form's 491px height. */
-.manifest-featured { margin-top: 20px; }
-.operator-tools {
+/* The five bounded roles as a schedule: name left, duty right, hairlines between. */
+.workforce-roles { list-style: none; margin: 14px 0 0; padding: 0; }
+.workforce-roles li { display: flex; align-items: baseline; gap: 14px; padding: 8px 0; border-top: 1px solid var(--border); }
+.workforce-roles strong { flex: 0 0 92px; font-size: 13px; font-weight: 600; }
+.workforce-roles li > span { color: var(--muted); font-size: 12.5px; }
+.manifest-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  margin-top: 12px;
-  align-items: start; /* content height — no card padded to match a taller neighbour */
+  margin-top: 16px;
+  align-items: stretch;
 }
 .manifest-card {
   min-width: 0;
-  border: 1px solid var(--border-2);
-  border-radius: 12px;
-  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
 }
-.manifest-featured {
-  padding: 16px;
-  border-color: color-mix(in srgb, var(--accent) 75%, var(--border));
-  box-shadow: inset 0 0 0 1px var(--accent-wash), var(--shadow-lg);
-}
-.manifest-card-head,
-.manifest-identity {
-  display: flex;
-  align-items: center;
-}
-.manifest-card-head { justify-content: space-between; gap: 14px; }
-.manifest-identity { min-width: 0; gap: 11px; }
-.manifest-icon {
-  width: 42px;
-  height: 42px;
-  flex: 0 0 auto;
-}
-.manifest-icon.is-featured { font-size: 20px; }
+.manifest-featured { padding: 18px 20px; }
+.manifest-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.manifest-identity { min-width: 0; }
 .manifest-card h3 {
   margin: 0;
   color: var(--text);
-  font-size: 16px;
-  letter-spacing: -0.015em;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 .manifest-identity p,
 .manifest-category {
@@ -1345,99 +841,69 @@ table.t { width: 100%; border-collapse: collapse; }
   color: var(--muted);
   font-size: 12px;
 }
-.manifest-status {
+/* Hire state as a dot and a word, painted by the state class: active is pos; ready and upcoming
+   are muted, because neither is a live thing yet. */
+.manifest-status,
+.coming-soon {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid var(--pos-border-strong);
-  border-radius: 7px;
-  padding: 4px 7px;
-  background: var(--pos-bg);
-  color: var(--pos);
-  font-size: 10px;
-  font-weight: 700;
+  color: var(--muted-2);
+  font-size: 11.5px;
+  font-weight: 600;
   white-space: nowrap;
 }
-.manifest-status.is-active { background: var(--pos-bg-strong); }
+.manifest-status::before,
+.coming-soon::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentcolor;
+}
+.manifest-status.is-active { color: var(--pos); }
 .manifest-description {
-  margin: 15px 0 0;
+  margin: 12px 0 0;
   color: var(--text-2);
   font-size: 12.5px;
-  line-height: 1.65;
+  line-height: 1.6;
 }
+/* A permission is a stated bound: plain text inside a hairline, no glyph to decode. */
 .permission-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 13px;
+  margin-top: 12px;
 }
 .permission-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 7px;
-  border: 1px solid var(--sky-border-strong);
-  border-radius: 6px;
-  background: var(--sky-bg);
-  color: var(--sky-bright);
-  font-size: 10px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 11px;
   white-space: nowrap;
 }
-.permission-chip i {
-  color: var(--accent);
-  font-style: normal;
-  font-size: 11px;
-}
-.watcher-flow {
-  display: grid;
-  grid-template-columns: 1fr 22px 1fr 22px 1.15fr;
-  align-items: center;
-  gap: 4px;
-  margin: 15px 4px 12px;
-}
-.watcher-flow > div {
-  min-width: 0;
-  display: grid;
-  justify-items: center;
-  gap: 5px;
-}
-.watcher-flow > div > span {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border-2);
-  border-radius: 9px;
-  background: var(--well);
-  color: var(--accent);
-  font-size: 19px;
-}
-.watcher-flow small {
-  color: var(--muted);
-  font-size: 9.5px;
-  text-align: center;
-}
-.watcher-flow > i {
-  color: var(--muted-2);
-  font-style: normal;
-  text-align: center;
-}
+
+/* The evidence flow as one line of text: the arrows are operators, not icons. */
+.watcher-flow { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
+
 .watcher-config {
   display: grid;
-  gap: 0;
-  padding: 5px 13px 10px;
-  border: 1px solid var(--border-2);
-  border-radius: 10px;
-  background: var(--scrim);
+  margin-top: 14px;
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
 }
 .watcher-config label,
 .watcher-readonly {
   min-width: 0;
-  min-height: 42px;
   display: grid;
   grid-template-columns: 116px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
+  padding: 9px 0;
   border-bottom: 1px solid var(--border);
 }
 .watcher-config label > span,
@@ -1453,19 +919,16 @@ table.t { width: 100%; border-collapse: collapse; }
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 .watcher-config input::placeholder { color: var(--muted-2); }
-.watcher-config input:focus-visible {
-  border-radius: 4px;
-  box-shadow: 0 0 0 2px var(--focus-wash);
-}
+.watcher-config input:focus-visible { outline: 2px solid var(--sky); outline-offset: 1px; border-radius: 2px; }
 .watcher-config input:disabled { opacity: 0.7; }
 .watcher-readonly code {
   overflow: hidden;
   color: var(--text-2);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1476,64 +939,69 @@ table.t { width: 100%; border-collapse: collapse; }
   align-items: center;
   gap: 6px;
 }
-.quote-input b { color: var(--muted); font-size: 10px; }
+.quote-input b { color: var(--muted); font-size: 11px; font-weight: 500; }
+/* The one filled button in the product. Flat accent, no glow: the hover is a brighter fill,
+   which RAISES contrast against --on-accent in both themes (dark's label is near-black, light's
+   is white, and --accent-bright moves away from each). */
 .watcher-activate {
-  min-height: 39px;
-  margin-top: 11px;
+  min-height: 36px;
+  margin: 12px 0 6px;
   border: 0;
-  border-radius: 7px;
-  background: var(--cta-to);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
   color: var(--on-accent);
   font: inherit;
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 12.5px;
+  font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 7px 20px var(--cta-glow);
 }
-/* brightness(1.08) is theme-blind while --on-accent flips polarity (#04120e dark, #ffffff
-   light). Brightening the fill RAISES contrast against a near-black label (dark: 5.61 -> 6.45)
-   and LOWERS it against a white one (light: 4.28 -> 3.73), so the same rule reads as a hover
-   affordance in dark and a contrast regression in light.
-   brightness(0.92) is not the fix: `filter` applies to the element's content too, so it darkens
-   the white label as well and still lands at 4.13:1. The light theme therefore gets a
-   non-filter affordance, scoped so dark cannot regress (audit finding). */
-.watcher-activate:hover:not(:disabled) { filter: brightness(1.08); }
-:root[data-theme='light'] .watcher-activate:hover:not(:disabled) {
-  filter: none;
-  box-shadow: 0 7px 20px var(--cta-glow), 0 0 0 3px var(--cta-glow);
-}
+.watcher-activate:hover:not(:disabled) { background: var(--accent-bright); }
 .watcher-activate:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-.watcher-activate:disabled { cursor: not-allowed; opacity: 0.46; box-shadow: none; }
-.watcher-feedback { min-height: 30px; padding-top: 8px; }
+.watcher-activate:disabled { cursor: not-allowed; opacity: 0.5; }
+.watcher-feedback { min-height: 26px; padding: 2px 0 8px; }
 .watcher-feedback p {
   margin: 0;
   color: var(--muted);
-  font-size: 9.5px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 .watcher-feedback .is-error { color: var(--neg); }
 .watcher-feedback .is-success { color: var(--pos); }
 .watcher-feedback code {
   color: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 11px;
 }
+
+/* Operator tools are content-height cards, no form, so they get their own row. */
+.operator-tools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+  align-items: start;
+}
+.manifest-soon {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 16px 18px;
+}
+.manifest-soon .coming-soon { margin-top: 10px; }
+.manifest-soon .permission-row { margin-top: auto; padding-top: 12px; }
+
 @media (max-width: 1120px) {
-  .active-team-line { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
-  .team-connector { display: none; }
-}
-@media (max-width: 820px) {
+  .manifest-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .manifest-featured { grid-column: 1 / -1; }
   .operator-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .active-team-line { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 560px) {
-  .workforce-topbar,
   .workforce-panel-head { align-items: flex-start; flex-direction: column; }
-  .workforce-policy { display: none; }
-  .active-team-line,
+  .manifest-grid { grid-template-columns: 1fr; }
+  .manifest-featured { grid-column: auto; }
   .operator-tools { grid-template-columns: 1fr; }
-  .manifest-featured,
   .watcher-config label,
-  .watcher-readonly { grid-template-columns: 1fr; gap: 4px; padding: 8px 0; }
+  .watcher-readonly { grid-template-columns: 1fr; gap: 4px; }
 }
 
 /* ── V7 job detail ── */
@@ -1543,12 +1011,15 @@ table.t { width: 100%; border-collapse: collapse; }
 .job-row-label { color: var(--muted); font-size: 12.5px; }
 .job-row-value { font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; word-break: break-all; }
 
-.job-figure { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.job-figure-muted { font-size: 17px; font-weight: 600; color: var(--muted); }
-.job-chip { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-2); }
-/* Same swap, same reason as .badge.Issued above. */
-.job-chip.is-open { color: var(--accent); border-color: var(--accent-border); background: var(--accent-bg); }
-.job-chip.is-repaid { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
+.job-figure { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* An absent advance states itself in the figure's own slot, at the muted floor, tabular off. */
+.job-figure-muted { color: var(--muted-2); font-weight: 500; font-variant-numeric: normal; }
+/* Open/closed as a dot and a word, not a pill: the same state register .badge uses, one
+   declaration per state because the dot inherits currentcolor. */
+.job-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.job-chip::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentcolor; }
+.job-chip.is-open { color: var(--accent); }
+.job-chip.is-closed { color: var(--muted); }
 
 /* lifecycle rail */
 .job-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 0; }
@@ -1560,30 +1031,24 @@ table.t { width: 100%; border-collapse: collapse; }
 .job-stage.is-done .job-stage-dot { background: var(--pos); }
 .job-stage.is-done .job-stage-name { color: var(--muted); }
 .job-stage.is-done::after { background: var(--pos-border); }
-.job-stage.is-current .job-stage-dot { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-glow-3); }
+.job-stage.is-current .job-stage-dot { background: var(--accent); outline: 1.25px solid var(--accent); outline-offset: 2px; }
 .job-stage.is-current .job-stage-name { color: var(--text); font-weight: 700; }
 .job-alt-terminal { margin: 0; font-size: 13px; color: var(--warn); }
 
 /* budget bar */
 .job-budget { display: grid; gap: 8px; }
-.job-budget-bar { height: 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border); overflow: hidden; }
+.job-budget-bar { height: 10px; border-radius: 5px; background: var(--bg-2); border: 1px solid var(--border); overflow: hidden; }
 .job-budget-fill { height: 100%; background: var(--accent); }
 .job-budget-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; font-size: 13px; font-variant-numeric: tabular-nums; }
 
 .job-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
 .job-links a { color: var(--sky); }
 
-/* per-job timeline */
-.job-timeline { list-style: none; margin: 0; padding: 0; position: relative; }
-.job-timeline::before { content: ""; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 1px; background: var(--border); }
-.job-event { display: flex; gap: 12px; padding: 8px 0; position: relative; }
-.job-event-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); margin-top: 5px; flex: none; z-index: 1; }
-.job-event.tone-funding .job-event-dot { background: var(--accent); }
-.job-event.tone-owner .job-event-dot { background: var(--warn); }
-.job-event.tone-qa .job-event-dot { background: var(--violet); }
-.job-event.tone-worker .job-event-dot { background: var(--sky); }
-.job-event.tone-brain .job-event-dot { background: var(--pos); }
-.job-event-body { min-width: 0; flex: 1; }
+/* per-job timeline: hairline-separated rows, the same register as the activity feed. The actor
+   is named in text on every row, so a colour-coded dot would only duplicate it. */
+.job-timeline { list-style: none; margin: 0; padding: 0; }
+.job-event { padding: 9px 0; border-top: 1px solid var(--border); }
+.job-event:first-child { border-top: none; }
 .job-event-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .job-event-actor { font-size: 12.5px; font-weight: 700; }
 .job-event-text { font-size: 13px; flex: 1; min-width: 0; }
@@ -1620,7 +1085,7 @@ table.t { width: 100%; border-collapse: collapse; }
 /* ── F1 Live Money Graph + F2 Score Ring (V10/V11, PRD §8) ── */
 .mg {
   overflow: hidden;
-  background: var(--panel-2);
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -1630,39 +1095,22 @@ table.t { width: 100%; border-collapse: collapse; }
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 18px 6px;
+  padding: 14px 20px 4px;
 }
 .mg-heading { min-width: 0; }
-.mg-heading h2 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
-.mg-live {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  padding: 3px 8px;
-  border: 1px solid var(--pos-border);
-  border-radius: 999px;
-  background: var(--pos-bg);
-  color: var(--pos);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
+.mg-heading h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.mg-live { display: inline-flex; align-items: center; gap: 6px; margin-top: 5px; color: var(--pos); font-size: 11.5px; font-weight: 600; }
 .mg-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
-.mg-live.is-waiting { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
+.mg-live.is-waiting { color: var(--warn); }
 .mg-beat {
   margin: 8px 0 0;
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--muted);
-  min-height: 25px;
-  /* No idle opacity. Dimming --muted to 0.55 put this 17px/600 caption at 2.50:1 in light and
-     2.69:1 in dark, i.e. failing in BOTH themes, on the resting state of the flagship panel.
-     Tuning the value does not help: --muted needs 0.83 light / 0.84 dark to clear 4.5:1, which
-     is no perceptible dim at all. The idle-to-beat emphasis is carried by the hue rules below
-     instead, so idle now sits at full --muted: 6.96:1 light / 5.95:1 dark (audit finding). */
+  min-height: 22px;
+  /* The idle-to-beat emphasis is carried by the hue rules below, never by dimming: a dimmed
+     resting caption fails AA in both themes. */
   transition: color 0.3s;
 }
 .mg-beat-fund, .mg-beat-spend { color: var(--sky); }
@@ -1670,31 +1118,26 @@ table.t { width: 100%; border-collapse: collapse; }
 .mg-beat-reject { color: var(--warn); }
 .mg-beat-flywheel { color: var(--violet); }
 
-.mg-stage { padding: 0 10px 8px; }
+.mg-stage { padding: 0 12px 10px; }
 .mg-svg { width: 100%; height: auto; display: block; }
 
+/* Solid hairlines, no shimmer: on a ledger the only motion is money actually moving, which the
+   droplets carry on their own. */
 .mg-pipe {
   stroke: var(--border-2);
-  stroke-width: 2;
-  stroke-dasharray: 2 8;
-  stroke-linecap: round;
-  opacity: 0.75;
-  animation: mg-pipeflow 1.4s linear infinite;
+  stroke-width: 1.5;
+  opacity: 0.9;
 }
-.mg-pipe-snap, .mg-pipe-repay { stroke: var(--pipe-accent); opacity: 0.95; }
-@keyframes mg-pipeflow { to { stroke-dashoffset: -10; } }
+.mg-pipe-snap, .mg-pipe-repay { stroke: var(--pipe-accent); }
 
 .mg-drop-fund, .mg-drop-spend { fill: var(--sky); }
 .mg-drop-snap, .mg-drop-fall-pool { fill: var(--accent); }
 .mg-drop-fall-op { fill: var(--pos); }
 
-.mg-box { fill: var(--panel-2); stroke: var(--border-2); stroke-width: 1.5; }
-/* The glow that used to live here rendered an 8px drop-shadow on the largest element below the
-   vessel, in the first viewport, while the file header three hundred lines up asserts that no
-   glow exists anywhere. Ink does not emit. Emphasis is stroke weight. */
+.mg-box { fill: var(--panel-2); stroke: var(--border); stroke-width: 1; }
 .mg-node .mg-box[style] { stroke: var(--n); }
-.mg-name { fill: var(--muted); font-size: 13px; font-weight: 600; text-anchor: middle; }
-.mg-bal { fill: var(--text); font-size: 14px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
+.mg-name { fill: var(--muted); font-size: 12.5px; font-weight: 600; text-anchor: middle; }
+.mg-bal { fill: var(--text); font-size: 13.5px; font-weight: 650; text-anchor: middle; font-variant-numeric: tabular-nums; }
 
 /* F2 Score Ring: only the percentage sits inside the circle; captions flow beneath it. */
 /* The ring leads the Overview page now (moved out of the money-graph header), so it carries a
@@ -1705,16 +1148,16 @@ table.t { width: 100%; border-collapse: collapse; }
 .ring-figure.is-bumping { animation: ring-bump 0.5s ease; }
 @keyframes ring-bump { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.06); } }
 .ring-svg { width: 100%; height: 100%; display: block; }
-.ring-track { fill: none; stroke: var(--border-2); stroke-width: 8; }
+.ring-track { fill: none; stroke: var(--border); stroke-width: 7; }
 .ring-arc {
   fill: none;
   stroke: var(--accent);
-  stroke-width: 8;
+  stroke-width: 7;
   stroke-linecap: round;
   transition: stroke-dasharray 0.1s linear;
 }
 .ring-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.ring-pct { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ring-pct { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .ring-cap { margin-top: 8px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .ring-hint { margin-top: 1px; font-size: 11.5px; color: var(--muted-2); }
 .ring-hint b { color: var(--pos); font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -1743,12 +1186,10 @@ table.t { width: 100%; border-collapse: collapse; }
   .mg-head { flex-direction: column; align-items: flex-start; }
   .ring { margin: 0 auto; }
 }
-/* Same reasoning as the live badge above: the pipe shimmer animates indefinitely (SC 2.2.2), and
-   the ring bump and beat transition are brief and driven by data rather than interaction, so no
+/* The ring bump and beat transition are brief and driven by data rather than interaction, so no
    criterion demands removing them; they are decorative, so they stop anyway.
    NOT SC 2.3.3, which covers interaction-triggered motion. */
 @media (prefers-reduced-motion: reduce) {
-  .mg-pipe { animation: none; }
   .ring-figure.is-bumping { animation: none; }
   .mg-beat { transition: none; }
 }
@@ -1758,7 +1199,7 @@ table.t { width: 100%; border-collapse: collapse; }
 .theme-toggle {
   width: 30px; height: 30px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--muted);
@@ -1774,34 +1215,17 @@ table.t { width: 100%; border-collapse: collapse; }
 
 /* ══ Card system ══
  *
- * Backs components/Card.tsx, components/Badge.tsx and components/PageHeader.tsx, ported from the
- * feat/ui-rework branch. That branch expressed the same system in Tailwind utilities plus
- * framer-motion; this dashboard has neither dependency and is staying that way, so what is ported
- * is the visual system and the component API, not the implementation. Every colour resolves through
- * a token that already existed: the port adds no literal and no hue.
+ * Backs components/Card.tsx, components/Badge.tsx and components/PageHeader.tsx. A card is a
+ * flat panel separated by hairlines: no shadow, no glow, no gradient, and no tinted fill per
+ * state — status is a dot plus a label, one hue per state.
  *
- * Mapping from the branch's token names: --color-card -> --panel, --color-border -> --border,
- * --color-divider -> --border, --color-well -> --inset, --color-faint -> --muted-2,
- * --color-muted -> --muted, --color-accent -> --accent, --shadow-card -> --shadow.
- *
- * Two things from the branch are deliberately dropped rather than translated. The card's "inset top
- * highlight in dark" is a light-leak decoration, and the branch's filled status pills carried a
- * tinted fill per state; both pull against the flat, monochrome, semantic-colour-only register this
- * UI is built in, and the highlight would have needed a new white literal to express. Surfaces here
- * are flat fills separated by hairlines and one shadow token, with no gradient and no glow.
- *
- * .card-shell is a sibling of .card, not a replacement: .card keeps its own radius and border weight
- * radius for the pages that already use it, and nothing here restyles it.
- *
- * Contrast, computed rather than eyeballed, dark / light, worst case across the three surfaces a
- * card can paint (--panel, --panel-2, .card-well):
- *   .card-heading, --text        14.20 / 15.19
- *   .card-meta, --muted-2         4.54 / 5.03
- *   .card-body prose, --text-2   11.16 / 8.74
- *   .page-header-sub, --muted     5.55 / 5.86  (this one sits on the page radial, not a card)
- *   .status-badge worst tint      4.54 / 4.63  (--muted-2 dark, --warn light)
- * .page-header h1 in --text is 14.08 / 13.85 on the same radial. The hairlines are not text and are
- * not held to 4.5: --border reads 1.24 / 1.28 on --panel.
+ * Contrast, recomputed for the ledger palette, dark / light, worst case across the surfaces a
+ * card can paint:
+ *   .card-heading, --text        15.20 / 17.92 (on --panel)
+ *   .card-meta, --muted-2         5.12 /  5.05 (dark --panel-3 / light --panel)
+ *   .card-body prose, --text-2    8.18 /  9.92 (same worst surfaces)
+ *   .status-badge worst tint      5.12 /  5.05 (--muted-2, both themes)
+ * The hairlines are not text and are not held to 4.5: --border reads 1.28 / 1.31 on --panel.
  */
 .card-shell {
   overflow: hidden;
@@ -1810,9 +1234,9 @@ table.t { width: 100%; border-collapse: collapse; }
   background: var(--panel);
 }
 /* A real header row, so a card's title is a landmark a screen reader can jump to and not a styled
-   paragraph. 46px is the floor, not the height: a two-line title grows the row. */
+   paragraph. 44px is the floor, not the height: a two-line title grows the row. */
 .card-head {
-  min-height: 46px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1837,14 +1261,15 @@ table.t { width: 100%; border-collapse: collapse; }
   font-variant-numeric: tabular-nums;
 }
 .card-body { padding: 20px; }
+/* Prose inside a card is capped at a readable measure; figures and tables are not prose. */
+.card-body > p { max-width: 70ch; }
 /* The nested canvas for visuals. --inset rather than --well because it is an alpha over whatever
-   surface it lands on, so it recedes from its parent in both themes instead of only in light:
-   1.03:1 dark and 1.08:1 light against --panel, where --well would give 1.01:1 dark. At that
-   separation the recession is really carried by the hairline, which is why the border is not
-   optional here. */
+   surface it lands on, so it recedes from its parent in both themes instead of only in light.
+   At that separation the recession is really carried by the hairline, which is why the border
+   is not optional here. */
 .card-well {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--inset);
 }
 
@@ -1877,8 +1302,7 @@ table.t { width: 100%; border-collapse: collapse; }
 .status-badge.Failed, .status-badge.Refunded, .status-badge.WrittenOff { color: var(--neg); }
 .status-badge.Draft, .status-badge.Cancelled { color: var(--muted-2); }
 
-/* Page header: one bold line and a muted lede, the register the rest of the product uses. Sibling
-   of .topbar/.page-title, which the current pages still use. */
+/* Page header: one bold line and a muted lede, the register every surface uses. */
 .page-header {
   display: flex;
   flex-wrap: wrap;
@@ -1925,46 +1349,66 @@ table.t { width: 100%; border-collapse: collapse; }
   .page-header h1, .page-header-sub, .page-header-aside { animation: none; }
 }
 
-/* ── the pool vessel ──
- * The drawing is the hero. Strokes carry everything; no fill does structural work. */
-.vessel { margin: 0; display: grid; grid-template-columns: minmax(0,1fr) 190px; gap: 22px; align-items: center;
-  border: 1px solid var(--border); background: var(--panel); padding: 18px 20px; }
-.vessel-svg { width: 100%; height: auto; display: block; overflow: visible; }
-.v-wall { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
-.v-fill { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1; }
-.v-unknown line { stroke: var(--border-2); stroke-width: 1; stroke-dasharray: 3 5; }
-/* A cap is a threshold, not an alarm. Drawn as an ordinary annotation until the level actually
-   approaches it -- permanent red at 0% utilisation would make the colour decorative, which is the
-   one thing the semantic-colour rule forbids. */
-.v-threshold line { stroke: var(--border-2); stroke-width: 1; stroke-dasharray: 6 4; }
-.v-threshold text { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
-.v-threshold.near line { stroke: var(--warn); }
-.v-threshold.near text { fill: var(--warn); }
-.v-threshold.at line { stroke: var(--neg); }
-.v-threshold.at text { fill: var(--neg); }
-.v-empty { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
-.v-unknown text { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
-.v-pipe path { fill: none; stroke: var(--text-2); stroke-width: 1.25; }
-.v-pipe text { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
-.v-pipe-dim path { stroke: var(--border-2); }
-.v-pipe-dim text { fill: var(--muted-2); }
-.v-callout line { stroke: var(--border-2); stroke-width: 1; }
-.vessel-read { border-left: 1px solid var(--border); padding-left: 20px; }
-.vessel-primary { display: flex; align-items: baseline; gap: 6px; }
-.vessel-figure { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.vessel-unit { font-size: 12px; color: var(--muted); }
-.vessel-source { margin: 6px 0 14px; font-size: 11px; color: var(--muted-2); line-height: 1.5; }
-.vessel-facts { margin: 0; display: grid; gap: 9px; }
-.vessel-facts div { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
-.vessel-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.vessel-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+/* ── the capital pool, measured ──
+ *
+ * The first viewport's primary panel. The vessel drawing is gone; what remains is the
+ * information it carried, in ledger form: TVL as the headline figure, utilisation as a meter
+ * with the contract's two caps marked as ticks where they actually sit, and four facts each
+ * naming their source. A cap is a threshold, not an alarm: its tick colours only when the level
+ * actually approaches it, because permanent red at 0% utilisation would make colour decorative.
+ */
+.pool {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 20px 22px;
+}
+.pool-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.pool-title { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.pool-sub { margin: 4px 0 0; font-size: 12px; color: var(--muted-2); line-height: 1.5; }
+.pool-figure { display: flex; align-items: baseline; gap: 7px; }
+.pool-tvl { font-size: 32px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.pool-unit { font-size: 12px; color: var(--muted); }
+
+.pool-meter { margin-top: 20px; }
+.pool-track { position: relative; height: 10px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--border); }
+/* Unknown is not zero: an empty track asserts nothing-is-lent, so an unread track is hatched. */
+.pool-track.is-unknown {
+  background-image: repeating-linear-gradient(
+    135deg, transparent, transparent 4px, var(--border-2) 4px, var(--border-2) 5px
+  );
+}
+.pool-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; background: var(--accent); }
+.pool-tick { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--border-2); }
+.pool-tick.is-near { background: var(--warn); }
+.pool-tick.is-at { background: var(--neg); }
+/* Tick labels sit under their tick, anchored so neither can overflow the track's ends: the 10%
+   label starts at its tick, the 80% label ends at its tick. */
+.pool-scale { position: relative; margin-top: 7px; height: 16px; font-size: 11px; color: var(--muted-2); }
+.pool-scale span { position: absolute; white-space: nowrap; }
+.pool-scale .is-at-cap { color: var(--warn); font-weight: 600; }
+.pool-meter-note { margin: 8px 0 0; font-size: 11.5px; color: var(--muted-2); line-height: 1.5; }
+
+/* The facts: value first, then where it came from. Four columns on a wide viewport, two on a
+   narrow one, hairline-separated from the meter. */
+.pool-facts {
+  margin: 18px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.pool-fact dt { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.pool-fact dd { margin: 6px 0 0; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pool-src { display: block; margin-top: 3px; font-size: 11px; font-weight: 400; line-height: 1.45; color: var(--muted-2); }
 /* An absent figure must not carry the same authority as a chain-read one. Same size, so the row
-   still aligns, but dropped to the muted floor so the eye reads it as a note, not a value. */
-.vessel-facts dd.is-absent { color: var(--muted-2); font-variant-numeric: normal; }
-.vessel-note { margin: 12px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted-2); border-top: 1px solid var(--border); padding-top: 10px; }
-@media (max-width: 820px) {
-  .vessel { grid-template-columns: 1fr; }
-  .vessel-read { border-left: 0; border-top: 1px solid var(--border); padding: 16px 0 0; }
+   still aligns, but dropped to the muted floor with tabular figures off, so it can never be
+   mistaken for a value at a glance. */
+.pool-fact dd.is-absent { color: var(--muted-2); font-variant-numeric: normal; font-weight: 500; }
+.pool-note { margin: 14px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); border-top: 1px solid var(--border); padding-top: 12px; }
+@media (max-width: 720px) {
+  .pool-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .mb { margin-bottom: 12px; }
@@ -2025,19 +1469,31 @@ table.t { width: 100%; border-collapse: collapse; }
 
 /* ══ Settlement waterfall (job detail) ══
  *
- * The escrow drawn as a column split in proportion to where it actually goes, so the reader sees
- * that the pool is satisfied before the operator instead of subtracting two numbers. Order is
- * carried by stroke weight, reusing PoolVessel .v-pipe / .v-pipe-dim: colour here would have to
- * mean something, and "first" is not an alarm.
+ * The escrow as one bar split in proportion to where it actually goes, so the reader sees that
+ * the pool is satisfied before the operator instead of subtracting two numbers. The pool leg
+ * sits first and solid, the operator leg is whatever survives it: order is carried by position
+ * and weight, not hue, because "first" is not an alarm. The facts underneath are numbered,
+ * because the order IS the evidence.
  */
 .wf { margin: 12px 0 0; display: grid; gap: 12px; }
-.wf-svg { width: 100%; height: auto; display: block; overflow: visible; }
-/* The single fill in the system idiom: a wash with a real stroke doing the structural work. */
-.wf-pool { fill: var(--accent-wash); stroke: none; }
-.wf-split { stroke: var(--accent); stroke-width: 1.25; }
-.wf-callout line { stroke: var(--border-2); stroke-width: 1; }
-.wf-fig { fill: var(--text); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.wf-lab { fill: var(--muted); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+.wf-track {
+  display: flex; height: 10px; border-radius: 5px; overflow: hidden;
+  background: var(--panel-2); border: 1px solid var(--border);
+}
+/* Unknown is not zero: an empty track asserts nothing-to-split, so an unread split is hatched. */
+.wf-track.is-unknown {
+  background-image: repeating-linear-gradient(
+    135deg, transparent, transparent 4px, var(--border-2) 4px, var(--border-2) 5px
+  );
+}
+.wf-pool { background: var(--accent); }
+.wf-operator { background: var(--border-2); }
+.wf-facts { margin: 0; display: grid; gap: 7px; }
+.wf-facts div { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; border-top: 1px solid var(--border); padding-top: 7px; }
+.wf-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.wf-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
+/* An absent leg says which absence it is, at the muted floor with tabular figures off. */
+.wf-facts dd.is-absent { color: var(--muted-2); font-variant-numeric: normal; }
 .wf-note { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); }
 .wf-terminal { margin: 12px 0 0; font-size: 13px; line-height: 1.55; color: var(--text-2); }
 
@@ -2045,19 +1501,12 @@ table.t { width: 100%; border-collapse: collapse; }
 /* .stat-sub never reset its bottom margin, so four call sites patched the UA 1em by hand with
    four different inline values. One rule instead. */
 .stat-sub { margin-bottom: 0; }
-/* A pill box in a 2px world. The dots stay round: a dot is a dot. */
-.job-chip { border-radius: var(--radius); }
-.job-chip.is-closed { color: var(--muted); border-color: var(--border-2); }
-.job-budget-bar { border-radius: var(--radius); }
 /* Unknown is not zero: an empty bar asserts nothing-spent, so unknown is hatched instead. */
 .job-budget-bar.is-unknown {
   background-image: repeating-linear-gradient(
     135deg, transparent, transparent 4px, var(--border-2) 4px, var(--border-2) 5px
   );
 }
-/* The current stage used box-shadow with --accent-glow-3, which is transparent, so it rendered
-   nothing and left the rail colour-only. A drawn ring instead. */
-.job-stage.is-current .job-stage-dot { box-shadow: none; outline: 1.25px solid var(--accent); outline-offset: 2px; }
 /* Stated in text for AT; the visual state is already carried by the dot and the weight. */
 .job-stage-state { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* .feed-link had no rule anywhere in this file, so both call sites on this page rendered as
@@ -2128,9 +1577,6 @@ table.t { width: 100%; border-collapse: collapse; }
 }
 
 /* ══ Workforce, converted ══ */
-/* The role marks are drawn now, so the container is a box for an SVG rather than a type slot. */
-.active-agent-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--text-2); }
-.role-mark { display: block; }
 /* The section states an authority model, not a live roster, and says so at the muted floor so the
    caveat is present without competing with the roles it qualifies. */
 .workforce-caveat { margin: 14px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); max-width: 68ch; }
@@ -2172,18 +1618,18 @@ table.t { width: 100%; border-collapse: collapse; }
 
 /* ══ Pending approvals, on the Overview ══
  *
- * The first viewport's one coloured region, per the direction contract. --warn because a purchase
- * held for a decision is caution, not alarm, and the colour appears ONLY when something is
- * actually waiting -- a coloured zero would make the hue decorative, which is the one thing the
- * semantic-colour rule forbids.
+ * The first viewport's one coloured region. --warn because a purchase held for a decision is
+ * caution, not alarm, and the colour appears ONLY when something is actually waiting -- a
+ * coloured zero would make the hue decorative, which is the one thing the semantic-colour rule
+ * forbids.
  */
-.pending { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2); padding: 16px 20px; }
-.pending.is-quiet { background: none; }
+.pending { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: 16px 20px; }
+.pending.is-quiet { background: none; border-style: dashed; }
 .pending.is-waiting {
   display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
   border-color: var(--warn-border); background: var(--warn-bg);
 }
-.pending-count { flex: none; font-size: 30px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--warn); }
+.pending-count { flex: none; font-size: 26px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--warn); }
 .pending-text { flex: 1; min-width: 220px; }
 .pending-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
 .pending-body { margin: 3px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
@@ -2191,23 +1637,17 @@ table.t { width: 100%; border-collapse: collapse; }
 /* The primary action of the first viewport. Sized as a real control, not a text link. */
 .pending-action {
   flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 36px;
-  padding: 8px 16px; border: 1px solid var(--warn-border); border-radius: var(--radius);
+  padding: 8px 16px; border: 1px solid var(--warn-border); border-radius: var(--radius-sm);
   color: var(--warn); font-size: 12.5px; font-weight: 600;
 }
 .pending-action:hover { border-color: var(--warn); }
 .pending-action:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 
-/* Per-fact provenance on the vessel: the value, then where it came from. */
-.vessel-facts dd { display: grid; gap: 2px; justify-items: end; }
-.vessel-val { font-variant-numeric: tabular-nums; }
-.vessel-facts dd.is-absent .vessel-val { font-variant-numeric: normal; }
-.vessel-src { font-size: 10px; line-height: 1.4; color: var(--muted-2); text-align: right; }
-.v-callout text { fill: var(--muted-2); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; }
-
 /* ══ Landing ══
  *
- * The sheet the instruments sit on. Same world -- flat, hairlines, 2px, semantic colour only --
- * but given room, because this reader is being told what the product is rather than operating it.
+ * The product's ledger, shown to a stranger. Same register as the dashboard -- flat, hairlines,
+ * semantic colour only -- but given room, because this reader is being told what the product is
+ * rather than operating it. The settlement bar is the job detail page's own .wf-* idiom.
  *
  * .app is a 224px + 1fr grid for the dashboard. Sidebar returns null on "/" and on the portal, so
  * without this the landing would sit behind an empty 224px gutter.
@@ -2220,9 +1660,6 @@ table.t { width: 100%; border-collapse: collapse; }
 .lp-brand { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.14em; color: var(--accent); }
 .lp-title { margin: 18px 0 0; font-size: clamp(30px, 5vw, 46px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 600; max-width: 16ch; }
 .lp-lede { margin: 18px 0 0; font-size: 17px; line-height: 1.6; color: var(--text-2); max-width: 52ch; }
-/* The product's own two words. Set as annotation lettering, not as a slogan. */
-.lp-tag { margin: 22px 0 0; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.16em; color: var(--muted-2); }
-
 .lp-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 32px; }
 .lp-cta {
   display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 10px 22px;
@@ -2241,42 +1678,26 @@ table.t { width: 100%; border-collapse: collapse; }
 .lp-body code, .lp-ref code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12.5px; color: var(--text); }
 
 .lp-figure { margin-top: 44px; }
-.lp-honest { margin-top: 52px; }
+/* The money path as a numbered schedule: the order is the evidence, so it is numbered. */
+.lp-steps { list-style: none; margin: 0; padding: 0; }
+.lp-steps li { display: flex; align-items: baseline; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border); }
+.lp-steps li > span { color: var(--muted-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.lp-steps p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--text-2); max-width: 64ch; }
+.lp-steps strong { color: var(--text); font-weight: 600; }
+/* The split, drawn with the job detail page's own bar (.wf-track/.wf-pool/.wf-operator), a
+   little taller here because on this page it is the hero rather than one card among several. */
+.lp-split { margin-top: 22px; display: grid; gap: 12px; }
+.lp-split .wf-track { height: 14px; }
 /* The caption sits under the drawing and does the explaining the drawing cannot. */
-.lp-caption { margin: 8px 0 0; font-size: 14px; line-height: 1.7; color: var(--muted); max-width: 74ch; }
+.lp-caption { margin: 18px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted); max-width: 74ch; }
 .lp-caption code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; color: var(--text-2); }
-.lp-svg { width: 100%; height: auto; display: block; overflow: visible; }
-.lp-wall { fill: none; stroke: var(--text-2); stroke-width: 1.5; }
-.lp-fill { fill: var(--accent-wash); stroke: none; }
-.lp-pipe path { fill: none; stroke: var(--text-2); stroke-width: 1.5; }
-.lp-pipe .lp-head { fill: var(--text-2); stroke: none; }
-/* Order carried by weight, not hue: the operator's leg is whatever survives the pool's. */
-.lp-pipe-dim path { stroke: var(--border-2); }
-.lp-pipe-dim .lp-head { fill: var(--border-2); }
-.lp-pipe-dim text { fill: var(--muted-2); }
-.lp-name { fill: var(--text); font-size: 16px; font-weight: 600; }
-.lp-note { fill: var(--muted); font-size: 11px; letter-spacing: 0.04em; }
-.lp-label { fill: var(--muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
-/* The money, on the drawing. This is the page's largest lettering after the headline, because
-   the split IS the argument and it should be readable before any prose is. */
-.lp-fig { fill: var(--text); font-size: 26px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.lp-pipe-dim .lp-fig { fill: var(--text-2); }
-
-/* The two settlement legs. Numbered, because the order IS the evidence. */
-.lp-legs { list-style: none; margin: 0 0 16px; padding: 0; }
-.lp-legs li { display: grid; grid-template-columns: 78px 1fr auto; gap: 14px; align-items: baseline; padding: 12px 0; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
-.lp-leg-i { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.lp-leg-to { font-size: 14px; font-weight: 600; }
-.lp-leg-amt { font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
 .lp-ref { display: inline-block; color: var(--accent); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
 .lp-ref:hover { color: var(--accent-bright); }
 
-.lp-honest { border-top: 1px solid var(--border); padding-top: 40px; }
+.lp-honest { border-top: 1px solid var(--border); padding-top: 40px; margin-top: 52px; }
 .lp-foot { display: flex; flex-wrap: wrap; gap: 20px; align-items: baseline; margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted-2); }
 .lp-foot a { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
 .lp-foot a:hover { color: var(--text); }
 @media (max-width: 640px) {
   .lp { padding: 48px 20px 60px; }
-  .lp-legs li { grid-template-columns: 1fr auto; }
-  .lp-leg-i { grid-column: 1 / -1; }
 }
