@@ -134,9 +134,12 @@ you are asked.
 
 ## 5. Can we see it run?
 
-Be straight about the state of this. As of 3 Aug 2026 no end-to-end spine run has been logged
-(`docs/spine-runs/` holds only `.gitkeep`), and no agent purchase has settled through x402 — the
-facilitator client exists and has never run against Circle, so the seller records `NOT_BROADCAST`.
+Be straight about the state of this. As of 8 Aug 2026 spine runs have been logged (`docs/spine-runs/`;
+first automated settlement 2026-08-07), and a 0.04 USDC agent purchase has settled through x402,
+self-facilitated (`docs/spine-runs/2026-08-08-first-x402-settlement.md`) — the authorization was
+broadcast directly, not through Gateway. Separately, the Circle Gateway facilitator client is built
+and has never run against Circle's live service; under that facilitator with no key the seller
+records `NOT_BROADCAST`. Two independent facts: settlement happened, and it did not use Gateway.
 
 What *has* happened, on chain, is the full money lifecycle for two jobs: fund → advance → expense →
 delivery → accept → waterfall → rate rise. What has not happened is the agent-payment leg settling

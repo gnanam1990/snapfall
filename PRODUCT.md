@@ -38,7 +38,7 @@ The demo thesis, in the team's own words: *"We gave our AI business zero dollars
 - Nine surfaces: Overview, Jobs, job detail, Approvals, Float, Portal (customer), Audit, Workforce, Settings.
 - Money is always atomic USDC — six decimal places, carried as base-10 strings or integers. Never a float, anywhere, including in display code.
 - Contracts are frozen: JobVault (escrow), FloatPool (advance vault), AuditAnchor. An advance is capped at 10% of pool TVL per org and 80% utilisation pool-wide; the fee is 2% of principal and 20% of that fee goes to a first-loss reserve.
-- **No payment has settled through the x402 agent-purchase path, and no end-to-end run has ever been logged.** The facilitator client exists but has never run against Circle. Surfaces must not imply otherwise.
+- **A 0.04 USDC agent purchase has settled end to end through the x402 path, self-facilitated (`docs/spine-runs/2026-08-08-first-x402-settlement.md`). Separately, the Circle Gateway facilitator client is built and has never run against Circle's live service.** These are two independent facts — settlement did not require Gateway — and surfaces must state both, implying neither's reverse.
 - Two figures on Overview are read live from the chain and are real today (pool TVL, advance rate). Most other panels have no data until a run happens.
 - Sample data is permitted **only** behind an explicit flag stripped from the deployed artifact, following the existing `SNAPFALL_DEMO_STREAM` precedent. This was a deliberate operator decision, taken after the risk was raised.
 
@@ -53,7 +53,7 @@ The demo thesis, in the team's own words: *"We gave our AI business zero dollars
 
 - Real settlement transactions on Arc testnet, with block numbers and explorer links (`docs/CP2-SUBMISSION.md`, `docs/addresses.md`). Two jobs have run the full on-chain lifecycle: funded, worked, delivered, accepted, settled.
 - Live contract reads: pool TVL (~20.02 USDC at time of writing), advance rate, utilisation, fees accrued.
-- **Absences that must never be fabricated:** no x402 purchase has settled; no spine run has been logged (`docs/spine-runs/` holds only `.gitkeep`); the compliance screen is a labelled stub returning `not-screened`; discovery is a local TF-IDF ranker, not the Circle Agent Marketplace; USYC is a mock strategy. These are documented as honest gaps and the interface must not contradict them.
+- **Absences that must never be fabricated:** the Circle Gateway facilitator has never run against the live service (settlement so far is self-facilitated); the compliance screen is a labelled stub returning `not-screened`; discovery is a local TF-IDF ranker, not the Circle Agent Marketplace; USYC is a mock strategy. These are documented as honest gaps and the interface must not contradict them.
 
 ## Product Principles
 

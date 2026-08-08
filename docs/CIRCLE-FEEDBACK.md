@@ -115,15 +115,21 @@ itself the feedback.
 loop was the easy part; the settlement onboarding is where we stalled. The broadcast path is
 built — `sidecar/src/facilitator.ts` (landed 2 Aug) calls Circle's Gateway `settle` endpoint
 and reads `CIRCLE_API_KEY` — but it has **never run against the live Circle service**. It is
-dormant without a key, so our seller reports `settlement: NOT_BROADCAST` and **no x402 purchase
-has ever settled**; the loop is cryptographically end to end and financially a dry run, stated
-plainly in `docs/CP2-SUBMISSION.md` and `docs/PRD.md` §0.1. Two honest consequences: the wire
+dormant without a key, so with Gateway as the configured facilitator the seller reports
+`settlement: NOT_BROADCAST` and **the Gateway path has never settled a payment**. We reached
+SETTLED a different way — **self-facilitating the EIP-3009 authorization** (broadcasting
+`transferWithAuthorization` directly, no Gateway): a real 0.04 USDC x402 payment settled on Arc
+(`docs/spine-runs/2026-08-08-first-x402-settlement.md`). So the loop is now end to end both
+cryptographically and financially; what has never run is the Gateway integration specifically,
+stated plainly in `docs/CP2-SUBMISSION.md` and `docs/PRD.md` §0.1. Two honest consequences: the wire
 contract we coded against Circle's documented interface — the request/response field names — is
 an **assumption until that first live call**, which is the actual test; and a *green CI check on
 the facilitator path is not evidence the broadcast works*, because that path has never touched
-the real endpoint. Getting to a live settlement needs a human-gated setup we could not complete
+the real endpoint. Getting to a live *Gateway* settlement needs a human-gated setup we could not complete
 in the timebox: a Circle account, terms acceptance, an API key, a funded Agent Wallet, and a
-spend policy (`docs/V3-CIRCLE-SETUP.md`). Two smaller frictions compound it: the protocol ships
+spend policy (`docs/V3-CIRCLE-SETUP.md`). **x402 settlement itself required none of that** — an
+EIP-3009 authorization is a bearer instrument, so we broadcast it ourselves; the gate is on
+Gateway, not on x402. Two smaller frictions compound it: the protocol ships
 in **two coexisting transport versions** (v1 carries the challenge in the 402 *body*, v2 in a
 `payment-required` *header*) that a seller must emit both of; and Circle's Gateway facilitator
 lives at a **distinct endpoint** (`gateway-api-testnet.circle.com/gateway/v1/x402/*`) separate
