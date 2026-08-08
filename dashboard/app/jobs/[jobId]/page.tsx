@@ -418,7 +418,7 @@ export default function JobDetailPage() {
 
       {/* budget */}
       <div className="card mt">
-        <p className="card-title">Operating budget</p>
+        <p className="card-title">On-chain recorded expenses</p>
         <div className="job-budget">
           {/* A null budgetUsedBps is not 0%: `?? 0` drew an empty bar meaning "nothing spent"
               directly above a legend reading a dash. Unknown is drawn as unknown. */}
@@ -435,7 +435,7 @@ export default function JobDetailPage() {
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={Math.min(100, Math.round(job.budgetUsedBps / 100))}
-              aria-label="Share of the operating budget already spent on chain"
+              aria-label="Share of the operating budget already recorded on chain"
             >
               <div
                 className="job-budget-fill"
@@ -445,7 +445,7 @@ export default function JobDetailPage() {
           )}
           <div className="job-budget-legend">
             <span>
-              <b>{job.onchainExpensesUsdc === null ? '—' : formatUsdcExact(job.onchainExpensesUsdc)}</b> spent
+              <b>{job.onchainExpensesUsdc === null ? '—' : formatUsdcExact(job.onchainExpensesUsdc)}</b> recorded on chain
             </span>
             <span>
               {job.budgetRemainingUsdc === null ? '—' : formatUsdcExact(job.budgetRemainingUsdc)} remaining
@@ -456,8 +456,10 @@ export default function JobDetailPage() {
           </div>
         </div>
         <p className="stat-sub">
-          Expenses recorded on chain against the budget bound (SC-JV-003). Purchases are paid from the
-          advance in the treasury, so escrow stays whole for the waterfall.
+          Expenses recorded on chain via <code>recordExpense</code>, bounded by SC-JV-003. Agent
+          purchases are paid off-chain from the advance in the treasury via x402, so they are not
+          counted here and escrow stays whole for the waterfall; the daemon does not yet record them
+          on chain (issue #49).
         </p>
       </div>
 
