@@ -23,7 +23,11 @@
     "verify:circle-facilitator-fixture": "tsx src/verify-circle-facilitator-fixture.ts",
     "capture:v1-fixture": "tsx src/capture-v1-fixture.ts",
     "typecheck": "tsc --noEmit",
-    "test:release-policy": "tsx --test src/release-policy-test.ts"
+    "test:release-policy": "tsx --test src/release-policy-test.ts",
+    "test:self-facilitator": "tsx --test src/self-facilitator-test.ts",
+    "test:usdc-domain": "tsx --test src/usdc-domain-chain-test.ts",
+    "x402:simulate": "tsx src/x402-simulate.ts",
+    "x402:broadcast": "tsx src/x402-broadcast.ts"
   },
   "dependencies": {
     "viem": "^2.21.0"

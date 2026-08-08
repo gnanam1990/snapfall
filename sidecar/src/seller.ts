@@ -27,12 +27,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { verifyTypedData, type Address, type Hex } from 'viem';
 import { releaseDecision } from './release-policy.js';
 import {
-  CircleFacilitator,
   settlementFor,
   NOT_BROADCAST,
   type PaymentRequirements,
   type SettleOutcome,
 } from './facilitator.js';
+import { selectFacilitator } from './facilitator-select.js';
+import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
 import {
   encodeBase64Json,
   decodeBase64Json,
@@ -48,7 +49,7 @@ const PORT = Number(process.env.PAID_API_PORT ?? 4021);
 // One client for the process. Unconfigured until CIRCLE_API_KEY exists (V3), and while
 // unconfigured the seller does not attempt a broadcast at all -- an attempted-and-failed
 // broadcast is a different, worse claim than an honest "no facilitator configured".
-const facilitator = new CircleFacilitator();
+const facilitator = selectFacilitator();
 // Loopback, matching service.ts. Overridable for a container, but never silently 0.0.0.0.
 const HOST = process.env.PAID_API_HOST ?? '127.0.0.1';
 
@@ -195,7 +196,7 @@ function challengeFor(path: string, resource: Resource): PaymentChallenge {
     payTo: PAY_TO,
     maxTimeoutSeconds: MAX_TIMEOUT_SECONDS,
     description: `${resource.description} (${formatUsdc(resource.price)} USDC)`,
-    extra: { name: 'USD Coin', version: '2' },
+    extra: { name: USDC_EIP712_DOMAIN.name, version: USDC_EIP712_DOMAIN.version },
   };
   return { x402Version: 2, accepts: [accept] };
 }
@@ -292,8 +293,8 @@ async function verifySignature(payment: PaymentPayload, a: PaymentPayload['paylo
   return verifyTypedData({
     address: a.from as Address,
     domain: {
-      name: 'USD Coin',
-      version: '2',
+      name: USDC_EIP712_DOMAIN.name,
+      version: USDC_EIP712_DOMAIN.version,
       chainId: CHAIN_ID,
       verifyingContract: USDC_ADDRESS,
     },
@@ -325,7 +326,7 @@ function paymentRequirements(path: string, resource: Resource): PaymentRequireme
     payTo: PAY_TO,
     asset: USDC_ADDRESS,
     maxTimeoutSeconds: MAX_TIMEOUT_SECONDS,
-    extra: { name: 'USD Coin', version: '2' },
+    extra: { name: USDC_EIP712_DOMAIN.name, version: USDC_EIP712_DOMAIN.version },
   };
 }
 

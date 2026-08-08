@@ -123,6 +123,14 @@ jobs:
         run: npm run test:facilitator
       - name: Facilitator wiring, seller to facilitator, against a local stub
         run: npm run test:facilitator-wiring
+      - name: Self-facilitator (permissionless EIP-3009 broadcast) in isolation
+        # The path that settles x402 without Circle Gateway's access gate. Broadcast is injected,
+        # so a real receipt hash is the only thing that settles and no fake hash can be minted.
+        run: npm run test:self-facilitator
+      - name: USDC EIP-712 domain matches the deployed contract
+        # Derives the domain from the deployed USDC DOMAIN_SEPARATOR — catches a chain that
+        # disagrees with the name/version we sign, not only a typo. Skips if the RPC is unreachable.
+        run: npm run test:usdc-domain
       - name: Seller survives malformed payments
         # Twelve bodies that each used to exit the process, including a well-formed payment whose
         # signature does not recover. A dead seller mid-demo is unrecoverable on stage.

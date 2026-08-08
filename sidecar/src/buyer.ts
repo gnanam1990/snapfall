@@ -27,6 +27,7 @@
 
 import { privateKeyToAccount } from 'viem/accounts';
 import { toHex, type Address, type Hex, type LocalAccount } from 'viem';
+import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
 import {
   encodeBase64Json,
   decodeBase64Json,
@@ -290,8 +291,8 @@ async function signAuthorization(
 
   const signature = await account.signTypedData({
     domain: {
-      name: accept.extra?.name ?? 'USD Coin',
-      version: accept.extra?.version ?? '2',
+      name: accept.extra?.name ?? USDC_EIP712_DOMAIN.name,
+      version: accept.extra?.version ?? USDC_EIP712_DOMAIN.version,
       chainId,
       verifyingContract: accept.asset as Address,
     },
