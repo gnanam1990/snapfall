@@ -4,9 +4,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import ThemeToggle from '@/components/ThemeToggle';
 import Logo from '@/components/Logo';
-import NavIcon from '@/components/NavIcon';
 
-const NAV: { href: string; label: string; pill?: string }[] = [
+const NAV: { href: string; label: string }[] = [
   { href: '/overview', label: 'Overview' },
   { href: '/jobs', label: 'Jobs' },
   { href: '/workforce', label: 'Workforce' },
@@ -26,7 +25,7 @@ export default function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <Logo size={24} />
+        <Logo size={22} />
         <div className="brand-name">Snapfall</div>
       </div>
       <nav>
@@ -39,18 +38,16 @@ export default function Sidebar() {
               className={`nav-link${active ? ' active' : ''}`}
               aria-current={active ? 'page' : undefined}
             >
-              <span className="nav-label">
-                <NavIcon href={n.href} />
-                {n.label}
-              </span>
-              {n.pill ? <span className="pill">{n.pill}</span> : null}
+              {n.label}
             </Link>
           );
         })}
       </nav>
       <div className="sidebar-foot">
         <div className="sidebar-foot-row">
-          <div className="dot-live">● Arc testnet</div>
+          <div className="sidebar-net">
+            <span className="sidebar-net-dot" aria-hidden="true" /> Arc testnet
+          </div>
           <ThemeToggle />
         </div>
         <div style={{ marginTop: 4 }}>capital in a snap,<br />settlement in a waterfall</div>

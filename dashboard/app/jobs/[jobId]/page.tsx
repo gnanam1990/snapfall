@@ -477,34 +477,31 @@ export default function JobDetailPage() {
         ) : (
           <ol className="job-timeline">
             {timeline.map((item) => (
-              <li key={item.id} className={`job-event tone-${item.tone}`}>
-                <span className="job-event-dot" />
-                <div className="job-event-body">
-                  <div className="job-event-head">
-                    <span className="job-event-actor">{item.actor}</span>
-                    <span className="job-event-text">{item.text}</span>
-                    {item.amountUsdc ? (
-                      <span className="job-event-amount">{formatUsdcExact(item.amountUsdc)}</span>
-                    ) : null}
-                  </div>
-                  <div className="job-event-meta">
-                    <span className="mono">{item.kind}</span>
-                    <span>·</span>
-                    <span>{relativeTime(item.at)}</span>
-                    {item.explorerUrl ? (
-                      <>
-                        <span>·</span>
-                        <a
-                          className="job-txlink"
-                          href={item.explorerUrl}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                        >
-                          transaction
-                        </a>
-                      </>
-                    ) : null}
-                  </div>
+              <li key={item.id} className="job-event">
+                <div className="job-event-head">
+                  <span className="job-event-actor">{item.actor}</span>
+                  <span className="job-event-text">{item.text}</span>
+                  {item.amountUsdc ? (
+                    <span className="job-event-amount">{formatUsdcExact(item.amountUsdc)}</span>
+                  ) : null}
+                </div>
+                <div className="job-event-meta">
+                  <span className="mono">{item.kind}</span>
+                  <span>·</span>
+                  <span>{relativeTime(item.at)}</span>
+                  {item.explorerUrl ? (
+                    <>
+                      <span>·</span>
+                      <a
+                        className="job-txlink"
+                        href={item.explorerUrl}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        transaction
+                      </a>
+                    </>
+                  ) : null}
                 </div>
               </li>
             ))}

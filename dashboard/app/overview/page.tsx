@@ -16,7 +16,7 @@ function payloadString(payload: unknown, key: string): string | null {
 }
 import { formatUsdc, formatUsdcExact, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
-import PoolVessel from '@/components/PoolVessel';
+import PoolCapacity from '@/components/PoolCapacity';
 import MoneyGraph from '@/components/MoneyGraph';
 import ScoreRing from '@/components/ScoreRing';
 import Card, { CardHeader, CardBody } from '@/components/Card';
@@ -207,7 +207,7 @@ export default function OverviewPage() {
   // unavailable read shows a dash, never a wrong or fabricated value.
   const treasuryAndPool = (
     <>
-      <PoolVessel
+      <PoolCapacity
         tvlUsdc={float ? formatUsdc(float.totalAssetsUsdc) : null}
         utilizationBps={float?.utilizationBps ?? null}
         orgRateBps={float?.orgRateBps ?? null}
@@ -217,17 +217,10 @@ export default function OverviewPage() {
         feesAccruedUsdc={float?.feesAccruedUsdc ? formatUsdcExact(float.feesAccruedUsdc) : null}
         reserveUsdc={float?.reserveUsdc ? formatUsdcExact(float.reserveUsdc) : null}
       />
-      {/*
-        The stat-tile grid that used to sit here is GONE, not restyled.
-        The direction contract's THESIS names "the stat-tile grid and the hero-metric template"
-        as precisely what this world refuses, and it shipped anyway, directly under the vessel,
-        for the whole redesign. Two of its four tiles (Pool TVL, Utilization) only restated
-        figures the vessel already draws; the other two have moved onto the drawing as facts that
-        name their source. Restyling it would have laundered the refusal rather than honoured it.
-
-        What remains here is the one thing the FIRST VIEWPORT clause asks for and the tiles could
-        not give: pending approvals as the single place colour appears, carrying the action.
-      */}
+      {/* Pending approvals are the first viewport's single coloured region, and they carry its
+          primary action: go and decide. The deciding itself stays on /approvals, because a
+          second implementation of an irreversible money action is how two implementations
+          drift. */}
       <PendingApprovals
         count={snap?.pendingApprovals ?? null}
         daemonConnected={snap?.daemonConnected !== false}
@@ -253,8 +246,10 @@ export default function OverviewPage() {
   if (!snap) {
     return (
       <>
-        <div className="topbar">
-          <h1 className="page-title">Overview</h1>
+        <div className="page-header">
+          <div className="page-header-text">
+            <h1>Overview</h1>
+          </div>
         </div>
         {treasuryAndPool}
         <div className="loading mt">Connecting to the daemon event stream…</div>
@@ -269,10 +264,10 @@ export default function OverviewPage() {
   if (snap.daemonConnected === false) {
     return (
       <>
-        <div className="topbar">
-          <div>
-            <h1 className="page-title">Overview</h1>
-            <p className="page-sub">One founder, a workforce that finances itself.</p>
+        <div className="page-header">
+          <div className="page-header-text">
+            <h1>Overview</h1>
+            <p className="page-header-sub">One founder, a workforce that finances itself.</p>
           </div>
         </div>
         {rateHero}
@@ -312,16 +307,18 @@ export default function OverviewPage() {
 
   return (
     <>
-      <div className="topbar">
-        <div>
-          <h1 className="page-title">Overview</h1>
-          <p className="page-sub">One founder, a workforce that finances itself.</p>
+      <div className="page-header">
+        <div className="page-header-text">
+          <h1>Overview</h1>
+          <p className="page-header-sub">One founder, a workforce that finances itself.</p>
         </div>
-        {status === 'live' ? (
-          <span className="badge-live">{demo ? 'demo replay' : 'live'} · updates in &lt;2s</span>
-        ) : (
-          <span className="badge-live badge-reconnecting">reconnecting…</span>
-        )}
+        <span className="page-header-aside">
+          {status === 'live' ? (
+            <span className="badge-live">{demo ? 'demo replay' : 'live'} · updates in &lt;2s</span>
+          ) : (
+            <span className="badge-live badge-reconnecting">reconnecting…</span>
+          )}
+        </span>
       </div>
 
       {rateHero}

@@ -22,6 +22,9 @@ const RATE = {
   cap: 8_500,
 };
 
+/* FloatPool.sol's pool-wide cap, marked on the meter rather than described. */
+const UTILISATION_CAP = 0.8; // UTILIZATION_CAP_BPS 8000
+
 const FLOAT_EVENTS = new Set(['AdvanceIssued', 'AdvanceRepaid', 'AdvanceWrittenOff', 'RateChanged']);
 
 function shortIdentifier(value: string, start = 8, end = 6): string {
@@ -34,26 +37,21 @@ function sumAtomic(advances: OpenAdvance[]): bigint {
 }
 
 function MetricModule({
-  tone,
-  symbol,
   label,
   value,
   note,
+  absent,
 }: {
-  tone: 'liquidity' | 'fees' | 'reserve';
-  symbol: string;
   label: string;
   value: React.ReactNode;
   note: string;
+  absent?: boolean;
 }) {
   return (
-    <article className={`float-metric ${tone}`}>
-      <span className="float-metric-symbol" aria-hidden="true">{symbol}</span>
-      <div>
-        <p>{label}</p>
-        <strong>{value}</strong>
-        <small>{note}</small>
-      </div>
+    <article className="float-metric">
+      <p>{label}</p>
+      <strong className={absent ? 'is-absent' : undefined}>{value}</strong>
+      <small>{note}</small>
     </article>
   );
 }
@@ -76,8 +74,8 @@ function RateEngine({ snapshot, fallbackRateBps }: { snapshot: FloatSnapshot; fa
     <section className="rate-engine" aria-labelledby="rate-engine-title">
       <div className="float-section-head">
         <div>
-          <p className="float-eyebrow">Credit mechanics</p>
           <h2 id="rate-engine-title">Rate engine</h2>
+          <p className="float-section-sub">The advance rate, derived from delivery history.</p>
         </div>
         {snapshot.orgAddress ? (
           <a
@@ -96,8 +94,12 @@ function RateEngine({ snapshot, fallbackRateBps }: { snapshot: FloatSnapshot; fa
       <div className="rate-engine-grid">
         <div className="rate-current">
           <span>Advance rate</span>
-          <strong>{rate === null ? '—' : formatBps(rate)}</strong>
-          <div
+          <strong className={rate === null ? 'is-absent' : undefined}>
+            {rate === null ? 'not reported' : formatBps(rate)}
+          </strong>
+          {/* The delta is a state claim, so it is one hue and no box: pos when history lifted the
+              rate, neg when it cut it, muted when there is no rate to speak of. */}
+          <p
             className={`rate-delta${
               rate === null ? ' is-absent' : delta !== null && delta < 0 ? ' is-negative' : ''
             }`}
@@ -110,46 +112,60 @@ function RateEngine({ snapshot, fallbackRateBps }: { snapshot: FloatSnapshot; fa
             ) : (
               <>{delta > 0 ? '↑' : '↓'} {Math.abs(delta) / 100} pts from delivery history</>
             )}
-          </div>
+          </p>
         </div>
 
         <div className="rate-derivation">
+          {/* The derivation as one line of arithmetic. A term the history scan has not reported
+              yet says so, at the muted floor — a missing term is not a zero. */}
           <div className="rate-equation" aria-label="Advance-rate derivation">
-            <div className="rate-term base">
+            <div className="rate-term">
               <strong>50%</strong>
               <span>base</span>
             </div>
             <span className="rate-operator">+</span>
-            <div className="rate-term growth">
-              <strong>{accepted === null ? '—' : `${accepted * 5}%`}</strong>
-              <span>5% × {accepted ?? '—'} accepted</span>
+            <div className="rate-term">
+              <strong className={accepted === null ? 'is-absent' : undefined}>
+                {accepted === null ? 'unknown' : `${accepted * 5}%`}
+              </strong>
+              <span>5% × {accepted === null ? 'unknown' : accepted} accepted</span>
             </div>
             <span className="rate-operator">−</span>
-            <div className="rate-term penalty">
-              <strong>{writtenOff === null ? '—' : `${writtenOff * 15}%`}</strong>
-              <span>15% × {writtenOff ?? '—'} write-offs</span>
+            <div className="rate-term">
+              <strong className={writtenOff === null ? 'is-absent' : undefined}>
+                {writtenOff === null ? 'unknown' : `${writtenOff * 15}%`}
+              </strong>
+              <span>15% × {writtenOff === null ? 'unknown' : writtenOff} write-offs</span>
             </div>
             <span className="rate-operator">=</span>
             <div className="rate-term result">
-              <strong>{rate === null ? '—' : formatBps(rate)}</strong>
+              <strong className={rate === null ? 'is-absent' : undefined}>
+                {rate === null ? 'unknown' : formatBps(rate)}
+              </strong>
               <span>current rate</span>
             </div>
           </div>
 
+          {/* The rate plotted where it sits between the protocol floor and cap. The track's ends
+              ARE the bounds, so the only standing tick is the base rate; the marker is the
+              current figure. */}
           <div className="rate-scale">
-            <div className="rate-scale-line" />
-            {rate !== null ? (
-              <div className="rate-marker" style={{ left: `${ratePosition}%` }}>
-                <strong>{formatBps(rate)}</strong>
-                <span />
-              </div>
-            ) : null}
-            <div className="rate-scale-label floor"><strong>30%</strong><span>floor</span></div>
-            <div className="rate-scale-label base"><strong>50%</strong><span>base</span></div>
-            <div className="rate-scale-label cap"><strong>85%</strong><span>cap</span></div>
+            <div className="rate-track">
+              <span className="rate-tick" style={{ left: '36.36%' }} />
+              {rate !== null ? (
+                <span className="rate-marker" style={{ left: `${ratePosition}%` }}>
+                  <span className="rate-marker-fig">{formatBps(rate)}</span>
+                </span>
+              ) : null}
+            </div>
+            <div className="rate-scale-labels">
+              <span style={{ left: 0 }}>30% floor</span>
+              <span style={{ left: '36.36%', transform: 'translateX(-50%)' }}>50% base</span>
+              <span style={{ left: '100%', transform: 'translateX(-100%)' }}>85% cap</span>
+            </div>
           </div>
-          {/* The scale, its line and all three bounds render unconditionally, so without this the
-              absent case is a fully drawn gauge with no needle and nothing saying why. */}
+          {/* The scale and its bounds render unconditionally, so without this the absent case is
+              a fully drawn scale with no marker and nothing saying why. */}
           {rate === null ? (
             <p className="rate-scale-note">No rate to plot until an organisation is resolved.</p>
           ) : null}
@@ -166,8 +182,8 @@ function RateEngine({ snapshot, fallbackRateBps }: { snapshot: FloatSnapshot; fa
         </p>
       ) : mayClaimOnChain(provenance) ? (
         <p className="rate-proof-note">
-          <span aria-hidden="true">✓</span>
-          Rate is computed entirely on-chain. No oracle, no manual credit score.
+          <span aria-hidden="true">✓</span> Rate is computed entirely on-chain. No oracle, no
+          manual credit score.
         </p>
       ) : (
         <p className="rate-proof-note is-absent">
@@ -196,8 +212,8 @@ function OpenAdvances({
       <section className="float-advances" aria-labelledby="open-advances-title">
         <div className="float-section-head">
           <div>
-            <p className="float-eyebrow">Active exposure</p>
             <h2 id="open-advances-title">Open advances</h2>
+            <p className="float-section-sub">Capital currently deployed against jobs.</p>
           </div>
           <p className="float-advance-summary">
             {advances === null ? 'History unavailable' : (
@@ -246,7 +262,9 @@ function OpenAdvances({
                     <td><strong>{formatUsdcExact(advance.principalUsdc)}</strong> <span className="u">USDC</span></td>
                     <td>{formatUsdcExact(advance.feeUsdc)} <span className="u">USDC</span></td>
                     <td>{formatBps(advance.rateBps)}</td>
-                    <td>{openedAt ? relativeTime(openedAt) : '—'}</td>
+                    {/* A cell the history scan did not fill says so, at the muted floor with
+                        tabular figures off — a blank here is not a zero. */}
+                    <td>{openedAt ? relativeTime(openedAt) : <span className="is-absent">not reported</span>}</td>
                     {/* Was a hand-rolled dot-plus-label span, .float-issued, which painted every
                         row in the positive tint. advance.status is AdvanceStatus, so it can also be
                         Repaid or WrittenOff, and a written-off advance rendering green is a lie the
@@ -256,7 +274,7 @@ function OpenAdvances({
                       {explorerUrl && isSafeExplorerUrl(explorerUrl) ? (
                         <a href={explorerUrl} target="_blank" rel="noreferrer">View ↗</a>
                       ) : (
-                        '—'
+                        <span className="is-absent">not reported</span>
                       )}
                     </td>
                   </tr>
@@ -268,11 +286,14 @@ function OpenAdvances({
         )}
       </section>
 
+      {/* The loss waterfall as a schedule. The order is the evidence, so it is numbered, and the
+          amounts are tabular. No connecting line: the numerals carry the sequence. */}
       <section className="loss-waterfall" aria-labelledby="loss-waterfall-title">
-        <div className="loss-copy">
-          <p className="float-eyebrow">Default protection</p>
-          <h2 id="loss-waterfall-title">Loss waterfall</h2>
-          <p>Absorbs defaults in that order.</p>
+        <div className="float-section-head">
+          <div>
+            <h2 id="loss-waterfall-title">Loss waterfall</h2>
+            <p className="float-section-sub">Absorbs defaults in that order.</p>
+          </div>
           <strong className={totalLosses === 0n ? 'is-clear' : totalLosses === null ? '' : 'has-loss'}>
             {totalLosses === null
               ? 'History unavailable'
@@ -284,15 +305,18 @@ function OpenAdvances({
         <ol className="loss-stages">
           <li>
             <span>1</span>
-            <div><strong>Operator bond</strong><small>{losses ? `${formatUsdcExact(losses.bondSlashedUsdc)} USDC` : '—'}</small></div>
+            <strong>Operator bond</strong>
+            <small>{losses ? `${formatUsdcExact(losses.bondSlashedUsdc)} USDC` : 'not reported'}</small>
           </li>
           <li>
             <span>2</span>
-            <div><strong>First-loss reserve</strong><small>{losses ? `${formatUsdcExact(losses.reserveUsedUsdc)} USDC` : '—'}</small></div>
+            <strong>First-loss reserve</strong>
+            <small>{losses ? `${formatUsdcExact(losses.reserveUsedUsdc)} USDC` : 'not reported'}</small>
           </li>
           <li>
             <span>3</span>
-            <div><strong>LP capital</strong><small>{losses ? `${formatUsdcExact(losses.socializedUsdc)} USDC` : '—'}</small></div>
+            <strong>LP capital</strong>
+            <small>{losses ? `${formatUsdcExact(losses.socializedUsdc)} USDC` : 'not reported'}</small>
           </li>
         </ol>
       </section>
@@ -348,15 +372,29 @@ export default function FloatPage() {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  const header = (
+    <div className="page-header">
+      <div className="page-header-text">
+        <h1>Float</h1>
+        <p className="page-header-sub">Working capital, priced by delivery history.</p>
+      </div>
+      {snapshot ? (
+        <span className="page-header-aside">
+          <span className="float-live-meta">
+            <span className={`badge-live${streamStatus !== 'live' ? ' badge-reconnecting' : ''}`}>
+              Arc testnet · {streamStatus === 'live' ? 'live' : 'chain polling'}
+            </span>
+            <small>block {snapshot.blockNumber.toLocaleString('en-US')}</small>
+          </span>
+        </span>
+      ) : null}
+    </div>
+  );
+
   if (!snapshot) {
     return (
       <>
-        <div className="topbar">
-          <div>
-            <h1 className="page-title">Float</h1>
-            <p className="page-sub">Working capital, priced by delivery history.</p>
-          </div>
-        </div>
+        {header}
         {error ? (
           <div className="float-error" role="alert">
             <strong>FloatPool data is unavailable.</strong>
@@ -372,7 +410,10 @@ export default function FloatPage() {
     );
   }
 
-  const utilizationWithinCap = Math.max(0, Math.min(100, (snapshot.utilizationBps / 8_000) * 100));
+  const used = snapshot.utilizationBps / 10_000;
+  /* A cap is a threshold, not an alarm: its tick colours only when the level actually approaches
+     it — the same rule the Overview's pool meter follows. */
+  const capState = used >= UTILISATION_CAP ? 'at' : used >= UTILISATION_CAP - 0.1 ? 'near' : '';
   // Chain scan only: the H2 stream reports 0 fees (it doesn't compute chain fees), and a
   // non-null 0 masked the honest "Awaiting…" placeholder — an unknown rendered as a
   // measured 0.00. Unknown must read as unknown. (review: chain-authoritative fee path)
@@ -382,69 +423,73 @@ export default function FloatPage() {
 
   return (
     <div className="float-page">
-      <div className="topbar float-topbar">
-        <div>
-          <h1 className="page-title">Float</h1>
-          <p className="page-sub">Working capital, priced by delivery history.</p>
-        </div>
-        <div className="float-live-meta">
-          <span className={`float-live${streamStatus !== 'live' ? ' is-waiting' : ''}`}>
-            Arc testnet · {streamStatus === 'live' ? 'live' : 'chain polling'}
-          </span>
-          <small>block {snapshot.blockNumber.toLocaleString('en-US')}</small>
-        </div>
-      </div>
+      {header}
 
-      {error ? <div className="float-stale" role="status">Latest refresh failed · showing block {snapshot.blockNumber.toLocaleString('en-US')}</div> : null}
+      {error ? (
+        <p className="float-stale" role="status">
+          Latest refresh failed · showing block {snapshot.blockNumber.toLocaleString('en-US')}
+        </p>
+      ) : null}
 
-      <section className="float-capital" aria-labelledby="pool-capital-title">
-        <div className="float-capital-top">
+      {/* The capital panel is the same meter the Overview draws, at the same semantics: fill is
+          the share of the pool lent out, the tick is the contract's 80% cap. */}
+      <section className="pool" aria-labelledby="pool-capital-title">
+        <div className="pool-head">
           <div>
-            <p className="float-eyebrow">Pool capital</p>
-            <h2 id="pool-capital-title">
-              {formatUsdcExact(snapshot.totalAssetsUsdc)} <span>USDC</span>
-            </h2>
-            <p>{formatUsdcExact(snapshot.totalOutstandingUsdc)} USDC deployed</p>
+            <h2 className="pool-title" id="pool-capital-title">Pool capital</h2>
+            <p className="pool-sub">Read live from FloatPool on Arc testnet</p>
           </div>
-          <a className="float-proof-link" href={snapshot.explorerUrl} target="_blank" rel="noreferrer">
-            Verify pool ↗
-          </a>
-        </div>
-        <div className="utilization-labels">
-          <strong>{formatBps(snapshot.utilizationBps)} <span>utilized</span></strong>
-          <span>80% protocol cap</span>
+          <div className="pool-figure">
+            <span className="pool-tvl">{formatUsdcExact(snapshot.totalAssetsUsdc)}</span>
+            <span className="pool-unit">USDC</span>
+          </div>
         </div>
         <div
-          className="utilization-track"
-          role="progressbar"
-          aria-label="Pool utilization against the protocol cap"
-          aria-valuemin={0}
-          aria-valuemax={8_000}
-          aria-valuenow={snapshot.utilizationBps}
+          className="pool-meter"
+          role="img"
+          aria-label={
+            `Pool holding ${formatUsdcExact(snapshot.totalAssetsUsdc)} USDC, of which ` +
+            `${(used * 100).toFixed(1)} percent is lent out. Lending is capped at 80 percent ` +
+            'of the pool.'
+          }
         >
-          <span style={{ width: `${utilizationWithinCap}%` }} />
-          <i /><i /><i /><i /><i /><i /><i />
+          <div className="pool-track">
+            {used > 0 ? (
+              <div className="pool-fill" style={{ width: `${Math.min(100, used * 100)}%` }} />
+            ) : null}
+            <span className={`pool-tick${capState ? ` is-${capState}` : ''}`} style={{ left: '80%' }} />
+          </div>
+          <div className="pool-scale">
+            <span
+              style={{ left: '80%', transform: 'translateX(-100%)' }}
+              className={capState ? 'is-at-cap' : undefined}
+            >
+              80% utilisation cap
+            </span>
+          </div>
+          <p className="pool-meter-note">
+            {formatUsdcExact(snapshot.totalOutstandingUsdc)} USDC deployed ·{' '}
+            {formatBps(snapshot.utilizationBps)} of the pool ·{' '}
+            <a className="float-proof-link" href={snapshot.explorerUrl} target="_blank" rel="noreferrer">
+              Verify on the explorer ↗
+            </a>
+          </p>
         </div>
       </section>
 
       <div className="float-metrics">
         <MetricModule
-          tone="liquidity"
-          symbol="≈"
           label="Available liquidity"
           value={<>{formatUsdcExact(snapshot.availableLiquidityUsdc)} <span className="u">USDC</span></>}
           note="LP capital ready to deploy"
         />
         <MetricModule
-          tone="fees"
-          symbol="↗"
           label="Fees earned"
-          value={feesAccrued === null ? '—' : <>{formatUsdcExact(feesAccrued)} <span className="u">USDC</span></>}
+          absent={feesAccrued === null}
+          value={feesAccrued === null ? 'not reported' : <>{formatUsdcExact(feesAccrued)} <span className="u">USDC</span></>}
           note={feesAccrued === null ? 'Awaiting H2 or private RPC history' : 'Cumulative AdvanceRepaid fees'}
         />
         <MetricModule
-          tone="reserve"
-          symbol="◇"
           label="First-loss reserve"
           value={<>{formatUsdcExact(snapshot.reserveUsdc)} <span className="u">USDC</span></>}
           note="20% of fees retained"
@@ -452,7 +497,6 @@ export default function FloatPage() {
       </div>
 
       <p className="float-accounting-note">
-        <span aria-hidden="true">i</span>
         LP-owned capital excludes the reserve. Values observed at Arc block {snapshot.blockNumber.toLocaleString('en-US')}.
         {/* One caption cannot honestly cover both when they are read at different blocks. The
             view figures are always at blockNumber; history comes from a cache whose scan may
