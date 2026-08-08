@@ -139,9 +139,10 @@ export default function OverviewPage() {
       setActivity((prev) => [next, ...prev.filter((item) => item.id !== next.id)].slice(0, 30));
 
       // A live RateChanged chain frame folds its new rate into the pool aggregate the ScoreRing
-      // reads (MoneyGraph passes pool.orgRateBps to the ring) — one source of truth (`pool`), and
-      // ScoreRing stays a scalar renderer that never learns this event kind exists. Chain frames
-      // carry no aggregates, so without this the ring only moved on reconnect. Two guards, both
+      // reads (the rateHero ScoreRing reads pool.orgRateBps directly) — one source of truth
+      // (`pool`), and ScoreRing stays a scalar renderer that never learns this event kind exists.
+      // Chain frames carry no aggregates, so without this the ring only moved on reconnect. Two
+      // guards, both
       // load-bearing: the rate is applied ONLY when the frame's org matches the operator org the
       // ring shows (another org's RateChanged is ignored), and rateBps is a base-10 STRING on the
       // wire (indexer decode.go) so a non-numeric value is dropped rather than turning the ring
