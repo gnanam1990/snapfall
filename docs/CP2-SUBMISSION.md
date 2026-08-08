@@ -110,9 +110,10 @@ movement and the hashes that anchor it.
 - **USDC** — escrow, advances, waterfall settlement, agent purchases
 - **x402 nanopayments** — agents pay per-call for data through the sidecar, under
   deterministic per-category spending caps with human approval escalation
-- **Circle facilitator** — the sidecar calls Circle's Gateway x402 `verify` and `settle`
-  endpoints, and the endpoints themselves are contract-asserted in CI (AT-18). **No x402 payment
-  has settled on chain yet**; see gaps.
+- **Circle facilitator** — the sidecar's Gateway client calls Circle's Gateway x402 `verify` and
+  `settle` endpoints, and the endpoints themselves are contract-asserted in CI (AT-18). **A 0.04
+  USDC x402 payment has settled on chain — self-facilitated, not through Gateway; the Gateway
+  `settle` call is built and has never run against the live service. See gaps.**
 - **USYC** — idle-float yield strategy (currently a mock strategy; see gaps)
 
 ### Both tracks, one system
@@ -149,14 +150,18 @@ We would rather state these than have them found.
   expense, but it is not yet joined to the daemon's own purchase provenance — so an
   expense recorded via CLI surfaces correctly as outside-policy in the invoice. Settlement
   ordering is enforced; expense origination is not yet fully attested.
-- **No x402 purchase has settled.** This is the honest state of the agent-payment leg. The full
-  402 → sign → retry → 200 loop is real and runs end to end, with the EIP-3009 authorization
-  signed by a real key and verified by the seller. What has never happened is the broadcast: the
-  Circle facilitator client was written on 2 Aug 2026 (`sidecar/src/facilitator.ts`) and has
-  never run against the live service, because that needs a Circle account and API key we do not
-  have yet. Without a key the seller reports `settlement: NOT_BROADCAST` and the fixture capture
-  refuses to write evidence. So the loop is cryptographically end-to-end and financially a dry
-  run, and the settlement code is unproven rather than proven.
+- **A 0.04 USDC x402 purchase has settled, self-facilitated. The Circle Gateway path is built and
+  has never run.** Two independent facts. The full 402 → sign → retry → 200 loop is real and runs
+  end to end, with the EIP-3009 authorization signed by a real key and verified by the seller —
+  and that authorization was then **broadcast directly** (`transferWithAuthorization`), settling
+  0.04 USDC operator → seller on Arc ([`0x0d39b5…dccc`](https://testnet.arcscan.app/tx/0x0d39b5738f7042ae82ae0a17f24474e67c27db0cd837b791c112f8d264b6dccc);
+  `docs/spine-runs/2026-08-08-first-x402-settlement.md`). Settlement did not require Gateway.
+  Separately, the Circle Gateway facilitator client (written 2 Aug, `sidecar/src/facilitator.ts`)
+  has never run against the live service — that path needs a Circle account, key, and Gateway
+  allowlisting we do not have. A self-facilitated settlement is marked as such (`self:` facilitator
+  markers), and the fixture capture (AT-18) refuses it as *Circle* evidence. So the loop is now
+  end to end both cryptographically and financially; what stays unexercised is the Gateway path
+  specifically, not settlement itself.
 - **No end-to-end spine run has been logged.** `docs/spine-runs/` is empty. The harness exists
   (`scripts/spine_run`) and can now run against the pool we already hold (`--scaled`), but the
   claim "green on N consecutive days" is not one we can make.

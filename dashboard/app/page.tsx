@@ -188,10 +188,12 @@ export default function LandingPage() {
           What is not proven yet
         </h2>
         <p className="lp-body">
-          No agent purchase has settled through the x402 payment path, no end-to-end run has been
-          logged, and compliance screening is a labelled stub that fabricates no result. A product
-          about verifiability should be easiest to check where it is weakest, so the full list is
-          on the audit page beside the evidence.
+          A 0.04 USDC agent purchase has settled end to end on Arc through the x402 path,
+          self-facilitated — its transaction is on the audit page. What is still not proven: the
+          Circle Gateway facilitator path is built and has never run against the live service, and
+          compliance screening is a labelled stub that fabricates no result. A product about
+          verifiability should be easiest to check where it is weakest, so the full list is on the
+          audit page beside the evidence.
         </p>
         <Link className="lp-alt" href="/audit">
           Read the gaps

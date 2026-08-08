@@ -81,8 +81,13 @@ accepted job and does not depend on the amount.
 
 It does **not** close the done-when clauses that name PRD figures or a settled purchase:
 
-- **V1** (a real four-cent purchase that *settles*) stays open — beats 3/5 are `NOT_BROADCAST`
-  without a Circle facilitator key (`docs/V3-CIRCLE-SETUP.md`).
+- **V1** (a real four-cent purchase that *settles*) was open at this run — beats 3/5 rested at
+  `NOT_BROADCAST`. **Update (2026-08-08):** the settlement half is now proven — a real 0.04 USDC
+  x402 payment settled on Arc, self-facilitated (tx [`0x0d39b5…dccc`](https://testnet.arcscan.app/tx/0x0d39b5738f7042ae82ae0a17f24474e67c27db0cd837b791c112f8d264b6dccc),
+  seller `0 → 40000` atomic); see [`2026-08-08-first-x402-settlement.md`](2026-08-08-first-x402-settlement.md).
+  That settlement was self-facilitated, not through Circle Gateway — the Gateway path is built and
+  has never run against the live service, so the Circle-specific V1 fixture (`capture-v1-fixture`,
+  which requires Circle's endpoints) stays open.
 - **V7 / V10 / V11 / V12** name the 25.00 PRD figures or two consecutive clean runs; this is a
   single 0.60 run, logged in the scale column so it is never counted as a PRD-figure proof.
 

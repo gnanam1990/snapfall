@@ -218,12 +218,16 @@ codes to `RECONCILING`, so the distinction holds the moment a key exists.)
 | 401 | `UNAUTHENTICATED` | bad bearer token |
 | 404 | `PAYMENT_NOT_FOUND` | no record for `paymentId` |
 
-`status` is safe to poll. **Reality as of 2 Aug 2026:** the facilitator broadcast is wired but
-dormant without `CIRCLE_API_KEY`, and no payment has settled yet. With no key, `DELIVERED` is the
-committed-final success state (§5, §7) and consumers MUST NOT treat `SETTLED` as reachable.
-With a key, `SETTLED` becomes reachable — but the reconciliation transitions
-(`RECONCILING → SETTLED|FAILED`) still need a settlement-status read the client does not have, so
-an unconfirmed settlement is reconciled by an operator rather than automatically.
+`status` is safe to poll. **Reality of the Gateway facilitator path:** the Gateway broadcast is
+wired but dormant without `CIRCLE_API_KEY`. With no key, `DELIVERED` is the committed-final success
+state (§5, §7) and consumers MUST NOT treat `SETTLED` as reachable *through Gateway*. With a key,
+`SETTLED` becomes reachable — but the reconciliation transitions (`RECONCILING → SETTLED|FAILED`)
+still need a settlement-status read the client does not have, so an unconfirmed settlement is
+reconciled by an operator rather than automatically. **Update (2026-08-08):** a payment **has**
+settled — through the *self-facilitator* (`SNAPFALL_SELF_FACILITATOR=1`), a different, permissionless
+path that broadcasts the EIP-3009 authorization directly and reaches `SETTLED` with a real tx hash
+(`docs/spine-runs/2026-08-08-first-x402-settlement.md`). The Gateway-path statements above are
+unchanged: that facilitator specifically has still never run.
 
 ### 2.4 Stable error-code enum (frozen)
 `UNAUTHENTICATED`, `BAD_REQUEST`, `RESOURCE_NOT_FOUND`, `NO_MATCHING_NETWORK`, `CHALLENGE_UNAVAILABLE`, `UPSTREAM_UNREACHABLE`, `PAYMENT_IN_PROGRESS`, `APPROVAL_TOKEN_INVALID`, `INTENT_HASH_MISMATCH`, `INTENT_NOT_APPROVED`, `APPROVAL_EXPIRED`, `APPROVED_AMOUNT_MISMATCH`, `MERCHANT_CHANGED`, `ASSET_CHANGED`, `PRICE_CHANGED`, `PRICE_EXCEEDS_RESERVED`, `PAYMENT_REJECTED`, `FACILITATOR_ERROR`, `PAYMENT_NOT_FOUND`, `INTERNAL`.
@@ -363,10 +367,11 @@ fact: with no key the sidecar behaves exactly as the dry run described below.
 - **SIGNED** — EIP-3009 authorization signed once (deterministic `authNonce`). A key has been used exactly once. **First persisted state.**
 - **SIGNED** — EIP-3009 authorization signed once (deterministic `authNonce`). A key has been used exactly once.
 - **SUBMITTED** — `X-PAYMENT` sent; awaiting seller/facilitator response.
-- **DELIVERED** — seller returned `200` with `{data, receipt}`; goods in hand. Without a Circle
-  key `settlement == "NOT_BROADCAST"` and **this is the committed-final success state** (see §7).
-  With a key the seller only returns `200` once the facilitator has confirmed settlement, so
-  `settlement` carries the transaction hash.
+- **DELIVERED** — seller returned `200` with `{data, receipt}`; goods in hand. With no settlement
+  facilitator configured (no Circle key, `SNAPFALL_SELF_FACILITATOR` unset) `settlement ==
+  "NOT_BROADCAST"` and **this is the committed-final success state** (see §7). With a facilitator —
+  the Circle key, or the self-facilitator that broadcasts the authorization directly — the seller
+  only returns `200` once settlement is confirmed, so `settlement` carries the transaction hash.
 - **RECONCILING** — a transport failure occurred **after** submit; the authorization may or may
   not have settled. Non-terminal; requires facilitator reconciliation before any budget release.
   Reachable once a key is configured. **Both** `FACILITATOR_ERROR` and `PAYMENT_REJECTED` route
@@ -469,7 +474,7 @@ This is exactly the AT-03 (`INTENT_NOT_APPROVED`, immediate full release, no sig
 A signed EIP-3009 `transferWithAuthorization` is a bearer instrument: once `pay` hands the `X-PAYMENT` to the resource/seller host, that host can submit it to any facilitator/relayer. H3 at the buyer layer **cannot** constrain which facilitator settles. Two consequences the spec states plainly rather than papering over:
 
 1. **"Circle-facilitator-only" is enforced by the OUTER guard**, not H3: Circle's Agent-Wallet spend policy (payee/amount allowlist at the wallet layer) is what actually binds settlement to the approved merchant and Circle's rails. H3's contribution is the pre-sign payee-equality check (§2.2 step 8), which ensures the treasury only ever signs an authorization payable to the approved `intent.merchant`. Fixing the AT-05 payee hole is therefore a **prerequisite** for this invariant to mean anything.
-2. **Facilitator reconciliation is unimplemented in the dry run.** `DELIVERED → SETTLED` and `RECONCILING → SETTLED|FAILED` require a real broadcast; until it is wired, `settlement` stays `NOT_BROADCAST` and `SETTLED` is unreachable. §2.3/§5 mark this; consumers must not treat `SETTLED` as reachable yet.
+2. **Facilitator reconciliation is unimplemented in the *Gateway* dry run.** `DELIVERED → SETTLED` and `RECONCILING → SETTLED|FAILED` require a real broadcast. With no facilitator configured, `settlement` stays `NOT_BROADCAST`. This is not a claim that `SETTLED` is out of reach: the self-facilitator (`SNAPFALL_SELF_FACILITATOR=1`) broadcasts the authorization directly and a real payment has reached `SETTLED` that way (`docs/spine-runs/2026-08-08-first-x402-settlement.md`) — consistent with point 1, since a bearer authorization can be settled by *any* facilitator. What remains unexercised is Gateway-confirmed reconciliation specifically: the Circle path is built and has never run against the live service.
 
 This matches the two-layer authorization model in §0: inner guard (H3 + policy + approval) proposes and signs only approved terms; outer guard (Agent-Wallet policy) is the settlement-route and payee enforcer.
 
