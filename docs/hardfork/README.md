@@ -116,12 +116,21 @@ The invariant to check after the fork is conservation, and the pre-file has ever
 
 ## 5. Verified green before the fork, at `103f0be`
 
-| | |
+| Layer | Result |
 |---|---|
 | `forge build` | clean |
 | `forge test` | 119 passed, 0 failed |
 | `go build ./...` | clean |
 | `go test ./...` | exit 0, 33 packages ok |
+| `sidecar: tsc --noEmit` | clean |
+| `sidecar: h3-vectors` | 4 assertions pass |
+| `sidecar: post-sign` | 5 assertions pass |
+| `sidecar: seller-hostile` | 13 assertions pass |
+| `sidecar: facilitator` | 18 assertions pass |
+| `sidecar: facilitator-wiring` | 7 assertions pass |
+
+All three layers are green on the pre-fork network. Anything red afterwards is the fork,
+not accumulated drift — which is the whole reason to have run them today.
 
 ## 6. After 15:00 UTC
 
