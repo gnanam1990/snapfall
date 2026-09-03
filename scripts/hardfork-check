@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Read-only chain fingerprint of the live Snapfall deployment.
+#
+# Run it before a network upgrade and again after, then diff the two files: anything that
+# moved without a Snapfall transaction in between is the upgrade's doing, not ours.
+#
+#   ./scripts/hardfork-check > /tmp/pre.txt
+#   ...upgrade...
+#   ./scripts/hardfork-check > /tmp/post.txt
+#   diff /tmp/pre.txt /tmp/post.txt
+#
+# Submits nothing and needs no key. Calls are paced: Arc's public RPC rate-limits a tight
+# loop with -32011 (docs/RUNBOOK.md).
+set -uo pipefail
+
+ARC="${ARC_TESTNET_RPC:-https://rpc.testnet.arc.network}"
+JOBVAULT=0xF3830D7C3B8ca873bB0b277c0e179999e3d52681
+FLOATPOOL=0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5
+AUDITANCHOR=0x7CDBF8a6D33d4c4C55fb94447E7E90905b3672c6
+USDC=0x3600000000000000000000000000000000000000
+OPERATOR=0x99B723eD097721036C08dd9DEe307286Df3A792D
+CUSTOMER=0x9c27EEde9De36cCb0447B87B48BE88739DAf7608
+LP=0x27Ff8025a0Ddc800D58e0F6169Ed5c166406Eb03
+# job-004, the lifecycle documented in docs/addresses.md §3
+JOB=0x736e617066616c6c2d6a6f622d30303400000000000000000000000000000000
+# its settlement tx — §4's waterfall proof
+SETTLEMENT=0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b
+
+pace() { sleep 1; }
+
+# Print "label = value", or "label = ERROR: ..." — a reverting call must be visible in the
+# diff, never silently absent.
+q() {
+  local label="$1"; shift
+  local out
+  if out=$("$@" --rpc-url "$ARC" 2>&1); then
+    printf '%-46s = %s\n' "$label" "$(echo "$out" | head -1)"
+  else
+    printf '%-46s = ERROR: %s\n' "$label" "$(echo "$out" | tr '\n' ' ' | cut -c1-110)"
+  fi
+  pace
+}
+
+echo "# Snapfall chain fingerprint"
+echo "# taken     $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+echo "# rpc       $ARC"
+echo "# repo      $(git -C "$(dirname "${BASH_SOURCE[0]}")/.." rev-parse HEAD 2>/dev/null || echo 'not a git checkout')"
+echo
+
+echo "## network"
+q "chainId"                 cast chain-id
+q "gasPrice"                cast gas-price
+echo "# blockNumber deliberately omitted — it always differs; it is not a defect signal."
+echo
+
+echo "## code is still live at each address"
+for pair in "AuditAnchor:$AUDITANCHOR" "JobVault:$JOBVAULT" "FloatPool:$FLOATPOOL" "USDC:$USDC"; do
+  name="${pair%%:*}"; addr="${pair#*:}"
+  code=$(cast code "$addr" --rpc-url "$ARC" 2>/dev/null)
+  printf '%-46s = %s bytes\n' "$name codesize" "$(( (${#code} - 2) / 2 ))"
+  pace
+done
+echo
+
+echo "## USDC (ERC-20 surface)"
+q "USDC.symbol"             cast call "$USDC" "symbol()(string)"
+q "USDC.decimals"           cast call "$USDC" "decimals()(uint8)"
+echo
+
+echo "## wiring — one-shot, must never change"
+q "JobVault.usdc"           cast call "$JOBVAULT" "usdc()(address)"
+q "JobVault.floatPool"      cast call "$JOBVAULT" "floatPool()(address)"
+q "JobVault.admin"          cast call "$JOBVAULT" "admin()(address)"
+q "FloatPool.usdc"          cast call "$FLOATPOOL" "usdc()(address)"
+q "FloatPool.jobVault"      cast call "$FLOATPOOL" "jobVault()(address)"
+q "FloatPool.admin"         cast call "$FLOATPOOL" "admin()(address)"
+q "AuditAnchor.operatorAuthority" cast call "$AUDITANCHOR" "operatorAuthority()(address)"
+echo
+
+echo "## FloatPool constants — immutable; any drift is an execution-layer defect"
+for f in BASE_BPS GROWTH_BPS PENALTY_BPS FLOOR_BPS CAP_BPS FEE_BPS RESERVE_CUT_BPS ORG_EXPOSURE_CAP_BPS UTILIZATION_CAP_BPS; do
+  q "FloatPool.$f" cast call "$FLOATPOOL" "$f()(uint16)"
+done
+echo
+
+echo "## FloatPool accounting"
+q "FloatPool.totalAssets"       cast call "$FLOATPOOL" "totalAssets()(uint256)"
+q "FloatPool.totalOutstanding"  cast call "$FLOATPOOL" "totalOutstanding()(uint256)"
+q "FloatPool.reserve"           cast call "$FLOATPOOL" "reserve()(uint256)"
+q "FloatPool.advanceRate(op)"   cast call "$FLOATPOOL" "advanceRate(address)(uint16)" "$OPERATOR"
+q "FloatPool.acceptedJobs(op)"  cast call "$FLOATPOOL" "acceptedJobs(address)(uint32)" "$OPERATOR"
+q "FloatPool.writtenOffJobs(op)" cast call "$FLOATPOOL" "writtenOffJobs(address)(uint32)" "$OPERATOR"
+q "FloatPool.orgOutstanding(op)" cast call "$FLOATPOOL" "orgOutstanding(address)(uint256)" "$OPERATOR"
+echo
+
+echo "## custody"
+q "USDC.balanceOf(JobVault)"    cast call "$USDC" "balanceOf(address)(uint256)" "$JOBVAULT"
+q "USDC.balanceOf(FloatPool)"   cast call "$USDC" "balanceOf(address)(uint256)" "$FLOATPOOL"
+q "native.balance(operator)"    cast balance "$OPERATOR"
+q "native.balance(customer)"    cast balance "$CUSTOMER"
+q "native.balance(lp)"          cast balance "$LP"
+echo
+
+echo "## job-004 — the settled lifecycle in docs/addresses.md must read back unchanged"
+q "JobVault.jobStatus(job-004)"     cast call "$JOBVAULT" "jobStatus(bytes32)(uint8)" "$JOB"
+q "FloatPool.openAdvanceOf(job-004)" cast call "$FLOATPOOL" "openAdvanceOf(bytes32)(uint256,uint256,bool)" "$JOB"
+echo
+
+echo "## history still readable"
+#
+# The public RPC no longer serves transactions or receipts BY HASH — verified 3 Sep 2026,
+# BEFORE the Zero8 fork, so this is not fork damage. `eth_getTransactionByHash` and
+# `eth_getTransactionReceipt` both return null for every hash in docs/addresses.md, while
+# the blocks themselves are still served. The tx-hash index is pruned; the chain is not.
+#
+# Two consequences this section checks:
+#   1. logs are still readable BY BLOCK on the public RPC — this is what keeps the
+#      settlement proof verifiable without an archive provider;
+#   2. an archive endpoint, if ARC_ARCHIVE_RPC is set, still resolves the hash.
+#
+SETTLEMENT_BLOCK=0x33212d8   # 53,613,272 — verify: cast to-hex 53613272
+
+# The waterfall claim itself, re-derived from logs rather than trusted: JobVault repays the
+# pool at logIndex 12 and pays the operator at 15, on the 6-decimal ERC-20 surface. Pool
+# lower than operator is the whole credit claim (docs/addresses.md §4). If a fork reorders
+# or re-values these, the submission's central proof is broken and it must be caught here.
+logs=$(cast rpc eth_getLogs "{\"fromBlock\":\"$SETTLEMENT_BLOCK\",\"toBlock\":\"$SETTLEMENT_BLOCK\",\"address\":\"$USDC\"}" --rpc-url "$ARC" 2>/dev/null)
+pace
+if [ -n "$logs" ]; then
+  echo "$logs" | python3 -c '
+import json,sys
+TRANSFER="0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+POOL="0xde9f58a997cf7a3258d09a797eb5546877dc86e5"
+OPERATOR="0x99b723ed097721036c08dd9dee307286df3a792d"
+try:
+    logs=json.load(sys.stdin)
+except Exception as e:
+    print("%-46s = ERROR: unparseable log response" % "waterfall"); raise SystemExit
+by={int(l["logIndex"],16):l for l in logs}
+def row(i,label,expect_to,expect_val):
+    l=by.get(i)
+    if l is None or l["topics"][0]!=TRANSFER:
+        print("%-46s = MISSING at logIndex %d" % (label,i)); return None
+    to="0x"+l["topics"][2][-40:]; val=int(l["data"],16)
+    ok = (to==expect_to and val==expect_val)
+    print("%-46s = logIndex %d -> %s value %d%s" % (label,i,to,val,"" if ok else"  <<< DEVIATES"))
+    return i
+a=row(12,"waterfall: pool repaid",POOL,561000)
+b=row(15,"waterfall: operator paid",OPERATOR,439000)
+if a is not None and b is not None:
+    print("%-46s = %s" % ("waterfall: pool before operator","YES" if a<b else "NO  <<< ORDERING BROKEN"))
+'
+else
+  printf '%-46s = ERROR: eth_getLogs returned nothing\n' "waterfall"
+fi
+
+blk=$(cast rpc eth_getBlockByNumber "$SETTLEMENT_BLOCK" false --rpc-url "$ARC" 2>&1)
+pace
+case "$blk" in
+  *'"hash"'*) printf '%-46s = %s\n' "settlement block hash" "$(echo "$blk" | sed -n 's/.*"hash":"\([^"]*\)".*/\1/p' | head -1)" ;;
+  *)          printf '%-46s = ERROR: block not served\n' "settlement block hash" ;;
+esac
+
+# By hash: null on the public RPC as of 3 Sep 2026, BEFORE the fork. Recorded so the diff
+# shows whether the fork moved it in either direction.
+byhash=$(cast rpc eth_getTransactionReceipt "$SETTLEMENT" --rpc-url "$ARC" 2>&1)
+pace
+case "$byhash" in
+  *'"status"'*) printf '%-46s = served\n'  "public RPC receipt by hash" ;;
+  *null*)       printf '%-46s = null (pruned tx-hash index)\n' "public RPC receipt by hash" ;;
+  *)            printf '%-46s = ERROR: %s\n' "public RPC receipt by hash" "$(echo "$byhash" | tr '\n' ' ' | cut -c1-90)" ;;
+esac
+
+if [ -n "${ARC_ARCHIVE_RPC:-}" ]; then
+  arch=$(cast rpc eth_getTransactionReceipt "$SETTLEMENT" --rpc-url "$ARC_ARCHIVE_RPC" 2>&1)
+  pace
+  case "$arch" in
+    *'"status":"0x1"'*) printf '%-46s = served, status 0x1\n' "archive RPC receipt by hash" ;;
+    *null*)             printf '%-46s = null\n'               "archive RPC receipt by hash" ;;
+    *)                  printf '%-46s = ERROR: %s\n' "archive RPC receipt by hash" "$(echo "$arch" | tr '\n' ' ' | cut -c1-90)" ;;
+  esac
+else
+  printf '%-46s = skipped (ARC_ARCHIVE_RPC unset)\n' "archive RPC receipt by hash"
+fi
