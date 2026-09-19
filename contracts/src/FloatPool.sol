@@ -39,6 +39,22 @@ contract FloatPool is ReentrancyGuard {
     IJobVaultView public jobVault;      // set once; SC-FP-010: repay/writeOff callable only by vault
     address public admin;
 
+    // ── Added Sep 2026 (post-freeze): mainnet capital controls ──
+    //
+    // ADR-014 froze this contract for the hackathon. Mainnet is a different risk surface: the
+    // caps above are percentages of TVL, so they bound the SHAPE of the book but not its SIZE.
+    // These four are absolute and admin-controlled, and they hold no matter how the daemon,
+    // the dashboard or the operator behave, which is the only property that makes an exposure
+    // limit meaningful. See docs/MAINNET.md.
+    //
+    // All of them FAIL CLOSED: a pool that has never been configured lends nothing and accepts
+    // deposits from nobody but its deployer. Forgetting to set a limit cannot mean "unlimited".
+    bool public paused;                 // blocks NEW risk only; every exit stays open
+    uint256 public maxTotalExposure;    // absolute ceiling on totalOutstanding; 0 = never set
+    uint256 public maxAdvance;          // absolute ceiling on a single advance; 0 = never set
+    bool public depositAllowlistEnabled;
+    mapping(address => bool) public allowedDepositor;
+
     mapping(bytes32 => Advance) public advances;           // one advance per job (SC-FP-003)
     mapping(address => uint32) public acceptedJobs;        // org → count
     mapping(address => uint32) public writtenOffJobs;      // org → count
@@ -63,6 +79,11 @@ contract FloatPool is ReentrancyGuard {
     event BondSlashed(bytes32 indexed jobId, uint256 amount);       // SC-FP-008 stage 1
     event ReserveDrawn(bytes32 indexed jobId, uint256 amount);      // SC-FP-008 stage 2
     event LossSocialized(bytes32 indexed jobId, uint256 amount);    // SC-FP-008 stage 3
+    // ── Added Sep 2026 (post-freeze): mainnet capital controls ──
+    event PauseSet(bool paused);
+    event CapsSet(uint256 maxTotalExposure, uint256 maxAdvance);
+    event DepositAllowlistSet(bool enabled);
+    event DepositorAllowed(address indexed depositor, bool allowed);
 
     error NotJobVault();
     error JobNotFunded();
@@ -78,8 +99,64 @@ contract FloatPool is ReentrancyGuard {
     error WrongRepayment();
     error ZeroAmount();
     error InsufficientLiquidity();
+    // ── Added Sep 2026 (post-freeze): mainnet capital controls ──
+    error EnforcedPause();
+    error CapNotSet();
+    error AdvanceTooLarge();
+    error ExposureCapExceeded();
+    error DepositorNotAllowed();
 
-    constructor(IERC20 _usdc) { usdc = _usdc; admin = msg.sender; }
+    constructor(IERC20 _usdc) {
+        usdc = _usdc;
+        admin = msg.sender;
+        // Fail closed. The deployer can seed its own pool; everyone else needs an explicit
+        // grant, and the caps start unset so no advance can issue until one is chosen.
+        depositAllowlistEnabled = true;
+        allowedDepositor[msg.sender] = true;
+    }
+
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert NotAuthorized();
+        _;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Mainnet capital controls (post-freeze, Sep 2026)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice Emergency stop. Blocks new deposits and new advances.
+    /// @dev Deliberately does NOT gate withdraw, repayAdvance or writeOff. A stop that trapped
+    ///      LP capital or blocked an in-flight settlement would be worse than no stop at all —
+    ///      it would turn an incident into a fund freeze. Pause stops money going IN and risk
+    ///      going ON; every path that takes money OUT stays open. Asserted in Caps.t.sol.
+    function setPaused(bool value) external onlyAdmin {
+        paused = value;
+        emit PauseSet(value);
+    }
+
+    /// @notice Set the absolute exposure ceilings, in USDC base units.
+    /// @dev Both must be non-zero: zero is reserved for "never configured", which fails closed
+    ///      in requestAdvance. To stop lending, pause — do not zero the caps.
+    function setCaps(uint256 _maxTotalExposure, uint256 _maxAdvance) external onlyAdmin {
+        if (_maxTotalExposure == 0 || _maxAdvance == 0) revert ZeroAmount();
+        maxTotalExposure = _maxTotalExposure;
+        maxAdvance = _maxAdvance;
+        emit CapsSet(_maxTotalExposure, _maxAdvance);
+    }
+
+    /// @notice Turn the deposit allowlist on or off.
+    /// @dev Off means anyone may supply capital to the pool. That is a deliberate decision to
+    ///      take third-party money, not a default — it starts on.
+    function setDepositAllowlistEnabled(bool enabled) external onlyAdmin {
+        depositAllowlistEnabled = enabled;
+        emit DepositAllowlistSet(enabled);
+    }
+
+    function setDepositorAllowed(address depositor, bool allowed) external onlyAdmin {
+        if (depositor == address(0)) revert ZeroAddress();
+        allowedDepositor[depositor] = allowed;
+        emit DepositorAllowed(depositor, allowed);
+    }
 
     /// SPEC-04 — set-once wiring. SC-FP-010 depends on this being set: repayAdvance and
     /// writeOff are callable only by the registered JobVault, and "registered" means here.
@@ -131,6 +208,8 @@ contract FloatPool is ReentrancyGuard {
 
     /// @notice LP deposits USDC and receives proportional shares.
     function deposit(uint256 assets, address receiver) external nonReentrant returns (uint256 shares) {
+        if (paused) revert EnforcedPause();
+        if (depositAllowlistEnabled && !allowedDepositor[msg.sender]) revert DepositorNotAllowed();
         if (assets == 0) revert ZeroAmount();
         if (receiver == address(0)) revert ZeroAddress();
 
@@ -181,7 +260,10 @@ contract FloatPool is ReentrancyGuard {
     /// come up short. `testFuzz_advance_neverExceedsEscrow` asserts this over the whole
     /// rate range and random org histories.
     function requestAdvance(bytes32 jobId) external nonReentrant returns (uint256 amount) {
+        if (paused) revert EnforcedPause();
         if (address(jobVault) == address(0)) revert NotWired();
+        // Fail closed: an unconfigured pool lends nothing.
+        if (maxTotalExposure == 0 || maxAdvance == 0) revert CapNotSet();
 
         // SC-FP-001: read the vault's own view of the job. The caller is never trusted for
         // status, economics, or identity — all three come from the vault.
@@ -200,6 +282,9 @@ contract FloatPool is ReentrancyGuard {
         if (principal == 0) revert ZeroAmount();
         uint256 fee = (principal * uint256(FEE_BPS)) / 10_000;
 
+        // Absolute per-advance ceiling, checked before anything is committed.
+        if (principal > maxAdvance) revert AdvanceTooLarge();
+
         // Liquidity: only idle LP cash can be lent.
         if (principal > totalAssets - totalOutstanding) revert InsufficientLiquidity();
 
@@ -214,6 +299,10 @@ contract FloatPool is ReentrancyGuard {
         });
         orgOutstanding[org] += principal;
         totalOutstanding += principal;
+
+        // The absolute ceiling is checked FIRST and is authoritative: the percentage caps below
+        // scale with TVL, so in a large pool they may not bind at all. This one always does.
+        if (totalOutstanding > maxTotalExposure) revert ExposureCapExceeded();
 
         // SC-FP-006: caps are checked against the post-issuance position, so an advance that
         // would breach either one never lands.
