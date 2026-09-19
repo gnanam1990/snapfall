@@ -92,6 +92,32 @@ export SNAPFALL_MAX_JOB_PAYMENT=25000000      # 25.00 USDC per job
 The ceiling is the most you can lose to a total failure of everything off-chain. Pick a number
 you would be willing to lose outright, not a number you expect to need.
 
+## Use a new key. Not the testnet one.
+
+The testnet operator key lives in cleartext in a shell file on the development machine, which
+was fine for a network where the worst case costs nothing. It must never become a mainnet
+admin: that key can pause, set caps, refund jobs, and manage the deposit allowlist. Generate a
+fresh key for mainnet, keep it in an encrypted keystore or on a hardware wallet, and let it
+touch nothing else.
+
+There is a second reason, and it is the sharper one.
+
+**Contract addresses are derived from the deployer address and its nonce, so deploying from the
+same key at the same nonce produces the same addresses on both networks.** The mainnet deploy
+simulated on 19 Sep 2026 predicted exactly the addresses already live on testnet:
+
+```
+nonce 0  0x7CDBF8a6D33d4c4C55fb94447E7E90905b3672c6   (AuditAnchor on testnet)
+nonce 1  0xF3830D7C3B8ca873bB0b277c0e179999e3d52681   (JobVault on testnet)
+nonce 2  0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5   (FloatPool on testnet)
+```
+
+Identical addresses on two networks make a misconfiguration invisible. An RPC pointed at the
+wrong chain still resolves every address, every view call still returns plausible numbers, and
+the explorer link still opens a real contract. Nothing looks wrong until real money settles
+against a network you did not mean. A distinct mainnet deployer makes the two sets of addresses
+visibly different, and a mix-up becomes an obvious error instead of a silent one.
+
 ## Deploying
 
 ```bash
@@ -100,6 +126,20 @@ export ARC_USDC_ADDRESS=0x3600000000000000000000000000000000000000
 cast wallet import snapfall-mainnet --interactive
 export DEPLOYER_ADDRESS=$(cast wallet address --account snapfall-mainnet)
 ```
+
+Fund that address before deploying. The full deployment simulated at **4,844,161 gas**, which
+at the 40 gwei seen on 19 Sep 2026 is about **0.19 USDC**. Gas is paid in native USDC on the
+18-decimal surface; check the balance with `cast balance "$DEPLOYER_ADDRESS" --ether`.
+
+Dry-run first. This executes the whole script against live mainnet state and broadcasts
+nothing:
+
+```bash
+cd contracts && forge script script/Deploy.s.sol --rpc-url "$ARC_RPC" --sender "$DEPLOYER_ADDRESS"
+```
+
+Read the logged caps in its output before going further. If they are not the numbers you
+intended, fix the environment — not the script.
 
 The RPC hostname is `rpc.mainnet.arc.io`. `rpc.mainnet.arc.network` does **not** resolve —
 unlike testnet, where both work.
