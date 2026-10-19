@@ -33,7 +33,10 @@ function floatConfig(): { config: FloatChainConfig; includeHistory: boolean } {
     },
     // The public endpoint's historical eth_getLogs path is heavily rate-limited. A private
     // override enables the (now incremental, cached) scan; otherwise H2 supplies aggregates.
-    includeHistory: Boolean(privateRPC) || process.env.SNAPFALL_FLOAT_SCAN_PUBLIC_RPC === '1',
+    // The in-process scanner requires a persistent server. Vercel may suspend it
+    // after the response and discard its cache between invocations.
+    includeHistory: process.env.VERCEL !== '1' &&
+      (Boolean(privateRPC) || process.env.SNAPFALL_FLOAT_SCAN_PUBLIC_RPC === '1'),
   };
 }
 

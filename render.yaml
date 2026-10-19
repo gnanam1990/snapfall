@@ -1,0 +1,16 @@
+# Public Arc testnet dashboard. See docs/HOSTING.md before connecting an owner API.
+services:
+  - type: web
+    name: snapfall-dashboard
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /overview
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
