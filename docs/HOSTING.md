@@ -8,7 +8,24 @@ The dashboard stays on Next.js 15 with patched dependencies. Its scoped PostCSS
 override keeps Next's pinned transitive version on 8.5.31; recheck the override when
 upgrading Next. Validate dependency changes with the dashboard tests and production build.
 
-## Render
+## Vercel Hobby: public testnet dashboard
+
+Import the migration branch from GitHub, select the Next.js preset, and set Root
+Directory to `dashboard`. Enable inclusion of files outside the root directory so
+`deployments/arc-testnet.json` is available. Node 22 is selected by package.json.
+Do not set owner API credentials or enable demo fixtures on this public project.
+
+The disconnected SSE response finishes immediately and asks EventSource to reconnect
+after 60 seconds, avoiding an idle billed function. Current chain reads work normally.
+On Vercel the process-local background history scan is disabled, even with a custom
+RPC: historical aggregates explicitly report unavailable. A durable indexer/storage
+service is needed to add historical aggregation reliably in a serverless deployment.
+The Go daemon and sidecar are not deployed by this project.
+
+Hobby is for personal non-commercial use, within its usage limits. See
+[Vercel Hobby](https://vercel.com/docs/plans/hobby).
+
+## Render (alternative Docker host)
 
 Create a Blueprint from the branch containing `render.yaml`, or create a Docker Web
 Service from this repository with Dockerfile `./Dockerfile` and context `.`.
