@@ -30,6 +30,11 @@ No signer keys are required to serve the public dashboard. The committed Arc tes
 RPC and contract addresses are the defaults. Leave `SNAPFALL_DEMO_STREAM` unset during
 the build so fabricated activity fixtures are excluded.
 
+The public RPC is `https://rpc.testnet.arc.io`, as listed in the
+[official Arc endpoint reference](https://docs.arc.io/arc/references/rpc-endpoints).
+The former `rpc.testnet.arc.network` hostname no longer resolved in the migration check.
+Existing contract addresses and testnet chain ID 5042002 are unchanged.
+
 Optionally set `ARC_TESTNET_RPC` as a private runtime environment variable to enable
 historical chain scans. The provider must support the necessary `eth_getLogs` range;
 set `SNAPFALL_FLOAT_SCAN_CHUNK` to match that provider's limit. Without a private RPC,
