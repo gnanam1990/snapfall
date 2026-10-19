@@ -29,6 +29,7 @@ dashboard/out/
 # Local env — never bake secrets into the image.
 **/.env
 **/.env.local
+**/.env.*
 
 # Vercel linkage from the other deploy path.
 **/.vercel/
