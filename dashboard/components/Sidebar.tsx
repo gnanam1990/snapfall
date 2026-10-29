@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import ThemeToggle from '@/components/ThemeToggle';
 import Logo from '@/components/Logo';
+import { networkLabel } from '@/lib/network';
 
 const NAV: { href: string; label: string }[] = [
   { href: '/overview', label: 'Overview' },
@@ -46,7 +47,7 @@ export default function Sidebar() {
       <div className="sidebar-foot">
         <div className="sidebar-foot-row">
           <div className="sidebar-net">
-            <span className="sidebar-net-dot" aria-hidden="true" /> Arc testnet
+            <span className="sidebar-net-dot" aria-hidden="true" /> {networkLabel()}
           </div>
           <ThemeToggle />
         </div>

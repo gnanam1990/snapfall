@@ -15,10 +15,12 @@ import { test } from 'node:test';
 import { createPublicClient, encodeAbiParameters, http, keccak256, toHex, type Hex } from 'viem';
 
 import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
+import { resolveArcNetwork } from './arc-network.js';
 
-const RPC = process.env.ARC_TESTNET_RPC ?? 'https://rpc.testnet.arc.network';
+const ARC_NETWORK = resolveArcNetwork();
+const RPC = ARC_NETWORK.rpcUrl;
 const USDC = (process.env.ARC_USDC_ADDRESS ?? '0x3600000000000000000000000000000000000000') as `0x${string}`;
-const CHAIN_ID = Number(process.env.ARC_TESTNET_CHAIN_ID ?? process.env.ARC_CHAIN_ID ?? 5042002);
+const CHAIN_ID = ARC_NETWORK.chainId;
 
 const EIP712_DOMAIN_TYPEHASH = keccak256(toHex('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)'));
 

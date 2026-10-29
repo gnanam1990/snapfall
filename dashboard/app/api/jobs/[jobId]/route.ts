@@ -8,8 +8,8 @@
  *
  *  A job the vault has never seen is a 404 with an explicit body, not a zero-valued job. */
 
-import deployment from '../../../../../deployments/arc-testnet.json';
 import { loadJobSnapshot } from '@/lib/jobChain';
+import { chainNetwork, requireAddress } from '@/lib/network';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -18,12 +18,14 @@ const CACHE_MS = 4_000;
 const cache = new Map<string, { expiresAt: number; body: string }>();
 
 function config() {
+  // The selected network's RPC (ARC_TESTNET_RPC or ARC_MAINNET_RPC) and addresses; lib/network.
+  const net = chainNetwork();
   return {
-    chainId: deployment.network.chainId,
-    rpcUrl: process.env.ARC_TESTNET_RPC ?? deployment.network.rpcUrl,
-    jobVaultAddress: process.env.SNAPFALL_JOB_VAULT_ADDRESS ?? deployment.contracts.jobVault.address,
-    floatPoolAddress: process.env.SNAPFALL_FLOAT_POOL_ADDRESS ?? deployment.contracts.floatPool.address,
-    explorerUrl: deployment.network.explorerUrl,
+    chainId: net.chainId,
+    rpcUrl: net.rpcUrl,
+    jobVaultAddress: requireAddress('jobVault'),
+    floatPoolAddress: requireAddress('floatPool'),
+    explorerUrl: net.explorerUrl,
   };
 }
 

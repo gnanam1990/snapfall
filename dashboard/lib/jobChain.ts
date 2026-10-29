@@ -155,6 +155,13 @@ export async function loadJobSnapshot(
   };
   const observedAt = new Date().toISOString();
 
+  // The RPC must serve the chain this build is for. Without this, a testnet URL under a mainnet
+  // build (or the reverse) reads a different chain's vault and reports a real job as absent.
+  const servedChainId = Number(hexToBigInt(await rpc<string>('eth_chainId', []), 'chain ID'));
+  if (servedChainId !== config.chainId) {
+    throw new Error(`Arc RPC chain ID ${servedChainId} does not match configured chain ID ${config.chainId}`);
+  }
+
   const raw = await rpc<string>('eth_call', [
     { to: jobVault, data: encodeWordCall(SELECTOR.jobs, jobId) },
     'latest',

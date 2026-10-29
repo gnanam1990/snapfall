@@ -17,28 +17,32 @@
  */
 
 import Link from 'next/link';
-import deployment from '../../../deployments/arc-testnet.json';
+import { contractAddress, deploymentFor, networkLabel } from '@/lib/network';
 
 export const metadata = { title: 'Audit · Snapfall' };
 
+// The contracts are this build's network (SNAPFALL_NETWORK). The settlement below is a fixed
+// testnet transaction, so it always links to the testnet explorer whatever this build reads.
+const deployment = deploymentFor();
 const EXPLORER = deployment.network.explorerUrl.replace(/\/$/, '');
 const address = (a: string) => `${EXPLORER}/address/${a}`;
-const tx = (h: string) => `${EXPLORER}/tx/${h}`;
+const SETTLEMENT_EXPLORER = deploymentFor('arc-testnet').network.explorerUrl.replace(/\/$/, '');
+const tx = (h: string) => `${SETTLEMENT_EXPLORER}/tx/${h}`;
 
 const CONTRACTS = [
   {
     name: 'JobVault',
-    address: deployment.contracts.jobVault.address,
+    address: contractAddress('jobVault'),
     role: 'Holds the customer’s escrow and runs the settlement waterfall on acceptance.',
   },
   {
     name: 'FloatPool',
-    address: deployment.contracts.floatPool.address,
+    address: contractAddress('floatPool'),
     role: 'Advances working capital against an escrowed receivable, and is repaid first.',
   },
   {
     name: 'AuditAnchor',
-    address: deployment.contracts.auditAnchor.address,
+    address: contractAddress('auditAnchor'),
     role: 'Commits hashes of off-chain records so they cannot be edited after the fact.',
   },
 ];
@@ -127,10 +131,15 @@ export default function AuditPage() {
                 <span className="audit-name">{c.name}</span>
                 <p className="audit-role">{c.role}</p>
               </div>
-              <a className="audit-ref" href={address(c.address)} target="_blank" rel="noreferrer">
-                <code>{`${c.address.slice(0, 10)}…${c.address.slice(-6)}`}</code>
-                <span aria-hidden="true"> ↗</span>
-              </a>
+              {c.address ? (
+                <a className="audit-ref" href={address(c.address)} target="_blank" rel="noreferrer">
+                  <code>{`${c.address.slice(0, 10)}…${c.address.slice(-6)}`}</code>
+                  <span aria-hidden="true"> ↗</span>
+                </a>
+              ) : (
+                // No committed address on this network yet (the mainnet record before its deploy).
+                <span className="audit-ref">not deployed on {networkLabel()}</span>
+              )}
             </li>
           ))}
         </ul>
