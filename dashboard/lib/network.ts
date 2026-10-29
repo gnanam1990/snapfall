@@ -98,6 +98,25 @@ export function privateRpcUrl(env: Env = process.env, name: NetworkName = networ
   return nonBlank(env[RECORDS[name].network.rpcUrlEnv]);
 }
 
+/**
+ * Server-side: an error from a chain read, safe to hand to a client.
+ *
+ * A private RPC URL usually embeds its API key (arc-mainnet.g.alchemy.com/v2/<key>), and a
+ * provider or fetch error may echo the URL it called. The routes and the Audit page show these
+ * messages to whoever loads them, so the configured RPC URL and anything shaped like a
+ * provider key path are replaced before the message leaves the server. The rest of the message
+ * stays, because "set SNAPFALL_FLOAT_POOL_ADDRESS" or "chain ID does not match" is the point.
+ */
+export function clientSafeError(error: unknown, fallback: string, env: Env = process.env, name: NetworkName = networkName()): string {
+  let message = error instanceof Error ? error.message : fallback;
+  const rpc = privateRpcUrl(env, name);
+  if (rpc) message = message.split(rpc).join('[rpc]');
+  // Provider key paths and query keys, wherever they appear (also covers a URL we did not configure).
+  message = message.replace(/\/v[23]\/[A-Za-z0-9_-]{8,}/g, '/v2/[redacted]');
+  message = message.replace(/([?&](?:api[-_]?key|key|token)=)[^&\s]+/gi, '$1[redacted]');
+  return message;
+}
+
 /** Server-side: the network half of a chain read. Addresses are resolved per route with
  *  requireAddress, so a route only fails on a contract it actually reads. */
 export function chainNetwork(env: Env = process.env, name: NetworkName = networkName()) {

@@ -6,7 +6,7 @@
 
 import { createRPCTransport } from '@/lib/floatChain';
 import { loadGovernance } from '@/lib/governanceChain';
-import { chainNetwork, networkName, requireAddress } from '@/lib/network';
+import { chainNetwork, clientSafeError, networkName, requireAddress } from '@/lib/network';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -21,7 +21,7 @@ export async function GET(): Promise<Response> {
     );
     return Response.json(snapshot, { headers });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'governance read failed';
+    const message = clientSafeError(error, 'governance read failed');
     return Response.json({ code: 'GOVERNANCE_UNAVAILABLE', message }, { status: 503, headers });
   }
 }

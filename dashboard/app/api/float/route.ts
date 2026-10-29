@@ -7,7 +7,7 @@ import {
   type FloatChainConfig,
 } from '@/lib/floatChain';
 import type { FloatSnapshot } from '@/lib/types';
-import { chainNetwork, networkName, requireAddress } from '@/lib/network';
+import { chainNetwork, clientSafeError, networkName, requireAddress } from '@/lib/network';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -71,7 +71,7 @@ export async function GET(): Promise<Response> {
     void scanFloatHistory(config, rpc, views.headBlock).catch(() => {});
     return json(assembleSnapshot(views, null, 'pending'));
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'FloatPool snapshot unavailable';
+    const message = clientSafeError(error, 'FloatPool snapshot unavailable');
     return Response.json(
       { code: 'FLOAT_UNAVAILABLE', message },
       { status: 503, headers: { 'cache-control': 'no-store' } },
