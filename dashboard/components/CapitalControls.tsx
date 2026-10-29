@@ -10,7 +10,7 @@
 import { createRPCTransport } from '@/lib/floatChain';
 import { formatUsdcExact } from '@/lib/format';
 import { loadGovernance, type GovernanceSnapshot, type PendingAdmin } from '@/lib/governanceChain';
-import { chainNetwork, contractAddress, networkLabel } from '@/lib/network';
+import { chainNetwork, clientSafeError, contractAddress, networkLabel } from '@/lib/network';
 
 const READ_TIMEOUT_MS = 6_000;
 
@@ -28,7 +28,7 @@ async function read(): Promise<Outcome> {
     ]);
     return { kind: 'read', snapshot };
   } catch (error) {
-    return { kind: 'error', message: error instanceof Error ? error.message : 'read failed' };
+    return { kind: 'error', message: clientSafeError(error, 'read failed') };
   }
 }
 

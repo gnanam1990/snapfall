@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chainNetwork, contractAddress, deploymentFor, networkLabel, networkName, requireAddress } from './network';
+import { chainNetwork, clientSafeError, contractAddress, deploymentFor, networkLabel, networkName, requireAddress } from './network';
 import { isSafeExplorerUrl } from './format';
 
 const ALCHEMY_MAINNET = 'https://arc-mainnet.g.alchemy.com/v2/test-key';
@@ -60,4 +60,21 @@ test('both networks\' explorer links survive the href allowlist, and look-alikes
   assert.ok(isSafeExplorerUrl('https://explorer.testnet.arc.io/tx/0xabc'));
   assert.ok(!isSafeExplorerUrl('https://explorer.arc.io.evil.example/tx/0xabc'));
   assert.ok(!isSafeExplorerUrl('http://explorer.arc.io/tx/0xabc'));
+});
+
+test('chain errors shown to clients never carry the RPC URL or a provider key', () => {
+  const env = { ARC_MAINNET_RPC: 'https://arc-mainnet.g.alchemy.com/v2/sEcReTkEy123456' };
+  const leaky = new Error('request to https://arc-mainnet.g.alchemy.com/v2/sEcReTkEy123456 failed, reason: ECONNRESET');
+  const safe = clientSafeError(leaky, 'x', env, 'arc-mainnet');
+  assert.doesNotMatch(safe, /sEcReTkEy123456/);
+  assert.match(safe, /\[rpc\] failed, reason: ECONNRESET/);
+
+  // A URL we did not configure, and query-string keys, are caught by shape.
+  assert.doesNotMatch(clientSafeError(new Error('https://other.example/v3/abcdefgh12345 down'), 'x', {}, 'arc-mainnet'), /abcdefgh12345/);
+  assert.doesNotMatch(clientSafeError(new Error('GET https://rpc.example/?apikey=topsecret1 403'), 'x', {}, 'arc-mainnet'), /topsecret1/);
+
+  // The useful part of an operator-facing message survives.
+  assert.equal(clientSafeError(new Error('floatPool has no address on arc-mainnet: set SNAPFALL_FLOAT_POOL_ADDRESS'), 'x', env, 'arc-mainnet'),
+    'floatPool has no address on arc-mainnet: set SNAPFALL_FLOAT_POOL_ADDRESS');
+  assert.equal(clientSafeError('not an error', 'fallback text', env, 'arc-mainnet'), 'fallback text');
 });

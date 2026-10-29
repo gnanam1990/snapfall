@@ -9,7 +9,7 @@
  *  A job the vault has never seen is a 404 with an explicit body, not a zero-valued job. */
 
 import { loadJobSnapshot } from '@/lib/jobChain';
-import { chainNetwork, requireAddress } from '@/lib/network';
+import { chainNetwork, clientSafeError, requireAddress } from '@/lib/network';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -58,7 +58,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ jobId: 
     });
   } catch (error) {
     // A malformed job id is the caller's fault; anything else is an upstream failure.
-    const message = error instanceof Error ? error.message : 'chain read failed';
+    const message = clientSafeError(error, 'chain read failed');
     const badRequest = /bytes32 hex|not an address/.test(message);
     return new Response(JSON.stringify({ error: message, jobId }), {
       status: badRequest ? 400 : 502,
