@@ -184,7 +184,7 @@ to `https://rpc.mainnet.arc.io` (public, rate-limited; use a private one such as
 |---|---|---|---|
 | daemon | `-deployment deployments/arc-mainnet.json` | `ARC_MAINNET_RPC` (the record's `rpcUrlEnv`) | the contract address env vars the record names; invoices and H3 payments then use chain 5042 |
 | sidecar | `ARC_CHAIN_ID=5042` | `ARC_MAINNET_RPC` | the seller needs `SNAPFALL_SELF_FACILITATOR=1`: its Circle Gateway client is testnet-only and refuses to start on mainnet |
-| dashboard | `SNAPFALL_NETWORK=arc-mainnet` **at build time** (`--build-arg` for the Dockerfile) | `ARC_MAINNET_RPC`, read at runtime | `SNAPFALL_JOB_VAULT_ADDRESS`, `SNAPFALL_FLOAT_POOL_ADDRESS`, `SNAPFALL_AUDIT_ANCHOR_ADDRESS` until the record commits them |
+| dashboard | `SNAPFALL_NETWORK=arc-mainnet` **at build time** (`--build-arg` for the Dockerfile) | `ARC_MAINNET_RPC`, read at runtime | `SNAPFALL_JOB_VAULT_ADDRESS`, `SNAPFALL_FLOAT_POOL_ADDRESS`, `SNAPFALL_AUDIT_ANCHOR_ADDRESS` until the record commits them, and `SNAPFALL_DEPLOYMENT_BLOCK`: the record's `startBlock` is 0, so with a private RPC the first Float history scan would otherwise start at genesis |
 
 An unknown `ARC_CHAIN_ID` or `SNAPFALL_NETWORK` value refuses to start (the dashboard refuses
 to build) instead of defaulting to testnet. The dashboard checks `eth_chainId` before every

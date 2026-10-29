@@ -9,9 +9,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import type { Hex } from 'viem';
+
 import { resolveArcNetwork } from './arc-network.js';
 import { selectFacilitator } from './facilitator-select.js';
 import { SelfFacilitator } from './self-facilitator.js';
+import { TRANSFER_WITH_AUTHORIZATION_TYPES, type PaymentPayload } from './x402.js';
+import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
+import type { PaymentRequirements } from './facilitator.js';
 
 const ALCHEMY_MAINNET = 'https://arc-mainnet.g.alchemy.com/v2/test-key';
 const ALCHEMY_TESTNET = 'https://arc-testnet.g.alchemy.com/v2/test-key';
@@ -60,4 +66,53 @@ test('the testnet-only Circle Gateway facilitator refuses mainnet; self-relay is
   assert.throws(() => selectFacilitator({ ARC_CHAIN_ID: '5042' }), /testnet-only/);
   assert.ok(selectFacilitator({ ARC_CHAIN_ID: '5042', SNAPFALL_SELF_FACILITATOR: '1' }) instanceof SelfFacilitator);
   assert.ok(!(selectFacilitator({}) instanceof SelfFacilitator));
+});
+
+// The relayer itself. Its RPC and chain are private, so these read them the way a regression
+// would show up: the URL it would broadcast to, and the domain it verifies against.
+const rpcOf = (f: SelfFacilitator): string => (f as unknown as { rpcUrl: string }).rpcUrl;
+
+function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  for (const [k, v] of Object.entries(vars)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+  try {
+    return fn();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+  }
+}
+
+test('the self-relayer on mainnet broadcasts to the mainnet RPC, never ARC_TESTNET_RPC', () => {
+  withEnv({ ARC_CHAIN_ID: '5042', ARC_TESTNET_RPC: ALCHEMY_TESTNET, ARC_MAINNET_RPC: undefined, ARC_TESTNET_CHAIN_ID: undefined }, () => {
+    assert.equal(rpcOf(new SelfFacilitator()), 'https://rpc.mainnet.arc.io');
+  });
+  withEnv({ ARC_CHAIN_ID: '5042', ARC_MAINNET_RPC: ALCHEMY_MAINNET, ARC_TESTNET_CHAIN_ID: undefined }, () => {
+    assert.equal(rpcOf(new SelfFacilitator()), ALCHEMY_MAINNET);
+  });
+  // An injected mainnet chain id takes its RPC from mainnet too, whatever the process env says.
+  withEnv({ ARC_CHAIN_ID: '5042002', ARC_TESTNET_RPC: ALCHEMY_TESTNET, ARC_MAINNET_RPC: undefined }, () => {
+    assert.equal(rpcOf(new SelfFacilitator({ chainId: 5042 })), 'https://rpc.mainnet.arc.io');
+  });
+  assert.throws(() => new SelfFacilitator({ chainId: 1 }), /not an Arc network/);
+});
+
+test('the self-relayer verifies against the chain it is on: a mainnet authorization fails on testnet', async () => {
+  const USDC = '0x3600000000000000000000000000000000000000' as const;
+  const PAYEE = '0x000000000000000000000000000000000000fee1' as const;
+  const account = privateKeyToAccount(generatePrivateKey());
+  const authorization = {
+    from: account.address, to: PAYEE, value: '40000', validAfter: '0',
+    validBefore: String(Math.floor(Date.now() / 1000) + 3600), nonce: `0x${'ab'.repeat(32)}` as Hex,
+  };
+  const signature = await account.signTypedData({
+    domain: { ...USDC_EIP712_DOMAIN, chainId: 5042, verifyingContract: USDC },
+    types: TRANSFER_WITH_AUTHORIZATION_TYPES,
+    primaryType: 'TransferWithAuthorization',
+    message: { from: account.address, to: PAYEE, value: 40000n, validAfter: 0n, validBefore: BigInt(authorization.validBefore), nonce: authorization.nonce },
+  });
+  const payment: PaymentPayload = { x402Version: 2, scheme: 'exact', network: 'eip155:5042', payload: { signature, authorization } };
+  const requirements: PaymentRequirements = { scheme: 'exact', network: 'eip155:5042', maxAmountRequired: '40000', resource: '/r', payTo: PAYEE, asset: USDC };
+
+  assert.equal((await new SelfFacilitator({ chainId: 5042, usdcAddress: USDC }).verify(payment, requirements)).valid, true);
+  assert.equal((await new SelfFacilitator({ chainId: 5042002, usdcAddress: USDC }).verify(payment, requirements)).valid, false);
 });

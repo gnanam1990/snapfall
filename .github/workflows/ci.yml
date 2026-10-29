@@ -177,3 +177,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Mainnet build (SNAPFALL_NETWORK=arc-mainnet)
+        # The network is inlined at build time, so the mainnet pages only exist in a mainnet
+        # build. This renders them with no mainnet addresses set, the state before the deploy.
+        run: npm run build
+        env:
+          SNAPFALL_NETWORK: arc-mainnet

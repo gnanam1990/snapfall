@@ -31,6 +31,10 @@ const deployment = deploymentFor();
 
 export const metadata = { title: 'Settings · Snapfall' };
 
+// Rendered per request: this page reports which runtime env is set, and contract addresses can be
+// runtime env too. Prerendered at `next build`, it described the build machine's environment.
+export const dynamic = 'force-dynamic';
+
 const isSet = (name: string): boolean => {
   const v = process.env[name];
   return typeof v === 'string' && v.trim() !== '';
