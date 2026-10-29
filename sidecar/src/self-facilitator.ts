@@ -37,10 +37,9 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { PaymentRequirements, SettleOutcome, VerifyOutcome } from './facilitator.js';
 import { TRANSFER_WITH_AUTHORIZATION_TYPES, type Authorization, type PaymentPayload } from './x402.js';
 import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
+import { resolveArcNetwork } from './arc-network.js';
 
 const DEFAULT_USDC = '0x3600000000000000000000000000000000000000';
-const DEFAULT_RPC = 'https://rpc.testnet.arc.network';
-const DEFAULT_CHAIN_ID = 5042002;
 
 /** The canonical EIP-3009 `transferWithAuthorization` (the v,r,s overload — original EIP-3009, the
  *  most broadly implemented). If a chain exposes only the packed-signature overload, this is where
@@ -87,14 +86,23 @@ export interface SelfFacilitatorConfig {
 export class SelfFacilitator {
   private readonly usdcAddress: Address;
   private readonly chainId: number;
+  private readonly chainLabel: string;
   private readonly rpcUrl: string;
   private readonly privateKey?: string;
   private readonly injectedBroadcast?: Broadcast;
 
   constructor(cfg: SelfFacilitatorConfig = {}) {
     this.usdcAddress = (cfg.usdcAddress ?? process.env.ARC_USDC_ADDRESS ?? DEFAULT_USDC) as Address;
-    this.chainId = cfg.chainId ?? Number(process.env.ARC_TESTNET_CHAIN_ID ?? process.env.ARC_CHAIN_ID ?? DEFAULT_CHAIN_ID);
-    this.rpcUrl = cfg.rpcUrl ?? process.env.ARC_TESTNET_RPC ?? DEFAULT_RPC;
+    // An explicit chainId still wins (tests), but the RPC is only ever defaulted from the network
+    // that chainId names, so an injected mainnet id cannot inherit a testnet endpoint.
+    const network = resolveArcNetwork(
+      cfg.chainId === undefined
+        ? process.env
+        : { ...process.env, ARC_CHAIN_ID: String(cfg.chainId), ARC_TESTNET_CHAIN_ID: undefined },
+    );
+    this.chainId = network.chainId;
+    this.chainLabel = network.label;
+    this.rpcUrl = cfg.rpcUrl ?? network.rpcUrl;
     // The relayer key. Never logged, never returned.
     this.privateKey = cfg.privateKey ?? process.env.BROADCASTER_PRIVATE_KEY ?? undefined;
     this.injectedBroadcast = cfg.broadcast;
@@ -194,7 +202,7 @@ export class SelfFacilitator {
     if (!this.privateKey) throw new Error('no broadcaster key configured');
     const chain = defineChain({
       id: this.chainId,
-      name: 'Arc testnet',
+      name: this.chainLabel,
       nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
       rpcUrls: { default: { http: [this.rpcUrl] } },
     });

@@ -1,6 +1,6 @@
 # Snapfall dashboard — repo-root Dockerfile.
 #
-# The dashboard imports deployments/arc-testnet.json (the canonical contract addresses) from
+# The dashboard imports deployments/arc-*.json (the canonical contract addresses) from
 # the repo root, so the build must see BOTH dashboard/ and deployments/ as siblings. That is
 # why this builds from the repo root rather than from dashboard/. Contracts are NOT needed:
 # the chain libs carry inline ABIs, so only dashboard/ and deployments/ are copied.
@@ -23,7 +23,13 @@ COPY deployments ./deployments
 
 # SNAPFALL_DEMO_STREAM is unset here, so next.config's IgnorePlugin strips lib/demoStream
 # and lib/mockData: no fabricated fixtures reach the artifact.
-RUN cd dashboard && npm run build
+#
+# SNAPFALL_NETWORK picks the deployment record the build reads and is inlined at build time
+# (next.config), so a mainnet image is built with `--build-arg SNAPFALL_NETWORK=arc-mainnet`.
+# Unset is arc-testnet. The RPC is NOT a build arg: ARC_TESTNET_RPC / ARC_MAINNET_RPC are read
+# at runtime by the API routes and must stay out of the image.
+ARG SNAPFALL_NETWORK=
+RUN cd dashboard && SNAPFALL_NETWORK="$SNAPFALL_NETWORK" npm run build
 
 # ---- run ----
 FROM node:22-slim AS run

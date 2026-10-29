@@ -67,8 +67,10 @@ func (f discoveryFinder) Find(ctx context.Context, need string, maxAmountMicros 
 	return out, nil
 }
 
-// arcTestnetChainID matches deployments/arc-testnet.json ("chainId": 5042002) and the
-// indexer fixtures, the one chain this build's invoices and settlement observer read.
+// arcTestnetChainID matches deployments/arc-testnet.json ("chainId": 5042002). It is the chain
+// invoices and H3 payments name only when NO deployment is configured (the development posture);
+// with -deployment, the loaded record's chainId is used instead, so a mainnet deployment cannot
+// bill or ask the sidecar to pay on testnet.
 const arcTestnetChainID = uint64(5_042_002)
 
 // The H3 payment sidecar's environment. It is read HERE and nowhere else in the daemon:
@@ -869,17 +871,30 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// does not import approval.
 	led.Claimed = executionClaimed(life)
 
+	// The deployment is loaded HERE, before the payment lane and billing, because both name a
+	// chain: they must name the deployment's, not a testnet constant. A bad deployment is still
+	// fatal, exactly as it was when this load sat with the chain lanes below.
+	var dep *chaincfg.Deployment
+	chainID := arcTestnetChainID
+	if deployment != "" {
+		loaded, err := chaincfg.Load(deployment, os.LookupEnv)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("chain deployment: %w", err)
+		}
+		dep, chainID = &loaded, loaded.Network.ChainID
+	}
+
 	// The H3 payment lane, wired onto Funding (the daemon's only holder of a spend
 	// capability) BEFORE the Purchaser exists, because the Purchaser's first act on a
 	// purchase is to ask Funding for a quote (H3 §7 step 1).
-	payer := wirePayer(ctx, log, fund)
+	payer := wirePayer(ctx, log, fund, chainID)
 
 	br.SetPurchaser(purchasing.New(life, st, fund, led, purchasing.RealClock{}, orgID, 5*time.Minute))
 
-	// G12 Billing: the read-side invoice formatter over the shared store's chain rows
-	// (arc-testnet chainId 5042002, deployments/arc-testnet.json). Brain alone holds the
+	// G12 Billing: the read-side invoice formatter over the shared store's chain rows, on the
+	// deployment's chain (arc-testnet 5042002 when none is configured). Brain alone holds the
 	// pointer; GenerateInvoice is its single pinned invocation site.
-	br.SetBilling(billing.New(st, arcTestnetChainID, nil))
+	br.SetBilling(billing.New(st, chainID, nil))
 
 	// The advance's human-authorized path (the snap's daemon half): proposals enter
 	// the approval lifecycle pre-marked for the owner, execution flows through the
@@ -897,11 +912,7 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// success), the keys are env-only, format-validated, and never logged. The
 	// treasury key signs requestAdvance; the customer key signs acceptDelivery
 	// (SC-JV-005, daemon-custodial for the demo, stated openly).
-	if deployment != "" {
-		dep, err := chaincfg.Load(deployment, os.LookupEnv)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("chain deployment: %w", err)
-		}
+	if dep != nil {
 		fpAddr := common.HexToAddress(dep.Contracts.FloatPool.Address)
 		jvAddr := common.HexToAddress(dep.Contracts.JobVault.Address)
 		var advanceLane, settleLane funding.Submitter
@@ -1148,7 +1159,7 @@ func executionClaimed(life *approval.Lifecycle) func(string) bool {
 // The two secrets are read HERE and handed only to internal/funding (the approval key) and
 // internal/h3 (the bearer token). Neither is ever logged: the log lines name the origin, the
 // minimum length and the reason, and nothing else.
-func wirePayer(ctx context.Context, log *slog.Logger, fund *funding.Agent) statusPoller {
+func wirePayer(ctx context.Context, log *slog.Logger, fund *funding.Agent, chainID uint64) statusPoller {
 	rawToken, haveToken := os.LookupEnv(sidecarTokenEnv)
 	rawSecret, haveSecret := os.LookupEnv(approvalSecretEnv)
 	token, secret := strings.TrimSpace(rawToken), strings.TrimSpace(rawSecret)
@@ -1185,8 +1196,8 @@ func wirePayer(ctx context.Context, log *slog.Logger, fund *funding.Agent) statu
 			"purchase.pending_settlement", "base_url", cl.BaseURL(), "reason", err)
 		return nil
 	}
-	fund.SetPayer(cl, []byte(secret), int64(arcTestnetChainID))
-	log.Info("H3 payment lane wired", "base_url", cl.BaseURL(), "chain_id", arcTestnetChainID)
+	fund.SetPayer(cl, []byte(secret), int64(chainID))
+	log.Info("H3 payment lane wired", "base_url", cl.BaseURL(), "chain_id", chainID)
 	return cl
 }
 

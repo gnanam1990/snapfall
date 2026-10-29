@@ -131,6 +131,10 @@ jobs:
         # Derives the domain from the deployed USDC DOMAIN_SEPARATOR — catches a chain that
         # disagrees with the name/version we sign, not only a typo. Skips if the RPC is unreachable.
         run: npm run test:usdc-domain
+      - name: Arc network selection (testnet / mainnet)
+        # ARC_CHAIN_ID picks the network and each network reads only its own RPC variable, so a
+        # mainnet process can never inherit ARC_TESTNET_RPC; unknown chain ids refuse to start.
+        run: npm run test:arc-network
       - name: Seller survives malformed payments
         # Twelve bodies that each used to exit the process, including a well-formed payment whose
         # signature does not recover. A dead seller mid-demo is unrecoverable on stage.
@@ -173,3 +177,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Mainnet build (SNAPFALL_NETWORK=arc-mainnet)
+        # The network is inlined at build time, so the mainnet pages only exist in a mainnet
+        # build. This renders them with no mainnet addresses set, the state before the deploy.
+        run: npm run build
+        env:
+          SNAPFALL_NETWORK: arc-mainnet

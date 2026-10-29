@@ -17,28 +17,41 @@
  */
 
 import Link from 'next/link';
-import deployment from '../../../deployments/arc-testnet.json';
+import { contractAddress, deploymentFor, networkLabel } from '@/lib/network';
 
 export const metadata = { title: 'Audit · Snapfall' };
 
+// Rendered per request, not at `next build`. The network is fixed at build time (SNAPFALL_NETWORK
+// is inlined), but contract addresses can arrive as runtime env (the mainnet record commits none
+// until its deploy), and a prerendered page would say "not deployed" forever on an image whose
+// addresses were set after it was built.
+export const dynamic = 'force-dynamic';
+
+// The contracts are this build's network (SNAPFALL_NETWORK). The settlement below is a fixed
+// testnet transaction, so it always links to the testnet explorer whatever this build reads.
+const deployment = deploymentFor();
 const EXPLORER = deployment.network.explorerUrl.replace(/\/$/, '');
 const address = (a: string) => `${EXPLORER}/address/${a}`;
-const tx = (h: string) => `${EXPLORER}/tx/${h}`;
+const SETTLEMENT_EXPLORER = deploymentFor('arc-testnet').network.explorerUrl.replace(/\/$/, '');
+const tx = (h: string) => `${SETTLEMENT_EXPLORER}/tx/${h}`;
+// On a non-testnet build the settlement is evidence from ANOTHER chain, and the page says so
+// rather than letting a testnet transaction sit under a mainnet chain badge unlabelled.
+const SETTLEMENT_IS_OTHER_CHAIN = deployment.network.name !== 'arc-testnet';
 
 const CONTRACTS = [
   {
     name: 'JobVault',
-    address: deployment.contracts.jobVault.address,
+    address: contractAddress('jobVault'),
     role: 'Holds the customer’s escrow and runs the settlement waterfall on acceptance.',
   },
   {
     name: 'FloatPool',
-    address: deployment.contracts.floatPool.address,
+    address: contractAddress('floatPool'),
     role: 'Advances working capital against an escrowed receivable, and is repaid first.',
   },
   {
     name: 'AuditAnchor',
-    address: deployment.contracts.auditAnchor.address,
+    address: contractAddress('auditAnchor'),
     role: 'Commits hashes of off-chain records so they cannot be edited after the fact.',
   },
 ];
@@ -103,8 +116,10 @@ export default function AuditPage() {
         <div className="page-header-text">
           <h1>Audit</h1>
           <p className="page-header-sub">
-            What can be checked without trusting us, and what cannot. Every address and hash below
-            links to the public explorer for {deployment.network.name}.
+            What can be checked without trusting us, and what cannot.{' '}
+            {SETTLEMENT_IS_OTHER_CHAIN
+              ? `Every contract address below links to the public explorer for ${deployment.network.name}; the settlement links to the Arc testnet explorer, where it ran.`
+              : `Every address and hash below links to the public explorer for ${deployment.network.name}.`}
           </p>
         </div>
         <span className="page-header-aside">
@@ -127,10 +142,15 @@ export default function AuditPage() {
                 <span className="audit-name">{c.name}</span>
                 <p className="audit-role">{c.role}</p>
               </div>
-              <a className="audit-ref" href={address(c.address)} target="_blank" rel="noreferrer">
-                <code>{`${c.address.slice(0, 10)}…${c.address.slice(-6)}`}</code>
-                <span aria-hidden="true"> ↗</span>
-              </a>
+              {c.address ? (
+                <a className="audit-ref" href={address(c.address)} target="_blank" rel="noreferrer">
+                  <code>{`${c.address.slice(0, 10)}…${c.address.slice(-6)}`}</code>
+                  <span aria-hidden="true"> ↗</span>
+                </a>
+              ) : (
+                // No committed address on this network yet (the mainnet record before its deploy).
+                <span className="audit-ref">not deployed on {networkLabel()}</span>
+              )}
             </li>
           ))}
         </ul>
@@ -139,7 +159,14 @@ export default function AuditPage() {
       <section className="card mt" aria-labelledby="audit-ordering">
         <h2 className="card-title" id="audit-ordering">
           The pool is repaid before the operator
+          {SETTLEMENT_IS_OTHER_CHAIN ? ' (Arc testnet settlement)' : ''}
         </h2>
+        {SETTLEMENT_IS_OTHER_CHAIN && (
+          <p className="audit-lede">
+            This transaction ran on Arc testnet (chain 5042002), not on {networkLabel()}. No
+            settlement on this network is recorded here yet.
+          </p>
+        )}
         <p className="audit-lede">
           This is the claim the whole product rests on, and it is checkable in one transaction. In
           the settlement below, the capital pool is paid at log index {SETTLEMENT.legs[0].logIndex}{' '}

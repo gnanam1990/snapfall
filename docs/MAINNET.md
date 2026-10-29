@@ -173,6 +173,28 @@ the deployment block in `deployments/arc-mainnet.json` and `docs/addresses.md`.
 
 The wiring setters are one-shot. A botched deploy is redeployed, never repointed.
 
+## Pointing the services at mainnet
+
+Each component picks its network once and reads only that network's RPC variable, so a
+testnet URL can never end up under chain 5042 by sharing a name. Unset RPC variables fall back
+to `https://rpc.mainnet.arc.io` (public, rate-limited; use a private one such as
+`https://arc-mainnet.g.alchemy.com/v2/<key>` for anything real).
+
+| Component | Selects mainnet with | RPC from | Also needs |
+|---|---|---|---|
+| daemon | `-deployment deployments/arc-mainnet.json` | `ARC_MAINNET_RPC` (the record's `rpcUrlEnv`) | the contract address env vars the record names; invoices and H3 payments then use chain 5042 |
+| sidecar | `ARC_CHAIN_ID=5042` | `ARC_MAINNET_RPC` | the seller needs `SNAPFALL_SELF_FACILITATOR=1`: its Circle Gateway client is testnet-only and refuses to start on mainnet |
+| dashboard | `SNAPFALL_NETWORK=arc-mainnet` **at build time** (`--build-arg` for the Dockerfile) | `ARC_MAINNET_RPC`, read at runtime | `SNAPFALL_JOB_VAULT_ADDRESS`, `SNAPFALL_FLOAT_POOL_ADDRESS`, `SNAPFALL_AUDIT_ANCHOR_ADDRESS` until the record commits them, and `SNAPFALL_DEPLOYMENT_BLOCK`: the record's `startBlock` is 0, so with a private RPC the first Float history scan would otherwise start at genesis |
+
+An unknown `ARC_CHAIN_ID` or `SNAPFALL_NETWORK` value refuses to start (the dashboard refuses
+to build) instead of defaulting to testnet. The dashboard checks `eth_chainId` before every
+read, and the daemon checks it before signing (`internal/chain`) and before indexing.
+
+Not yet mainnet-ready, stated so nobody assumes otherwise: `capture-v1-fixture.ts` and the
+demo loop are testnet-only by design (SEC-010), and `sidecar/.env.example` still says
+`TREASURY_PRIVATE_KEY` must never be a funded mainnet key. Lifting that is a decision, not a
+config change.
+
 ## Emergency stop
 
 If anything looks wrong — an unexpected advance, an unrecognised depositor, a daemon behaving

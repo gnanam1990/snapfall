@@ -18,8 +18,10 @@ dashboard process. It remains server-side and is never exposed to browser JavaSc
 
 ## Float page
 
-`/float` reads the committed Arc testnet `FloatPool` directly through the server-side
-`/api/float` adapter. `ARC_TESTNET_RPC`, `SNAPFALL_FLOAT_POOL_ADDRESS`, and
+`/float` reads the selected deployment's `FloatPool` directly through the server-side
+`/api/float` adapter. `SNAPFALL_NETWORK` picks the deployment at build time (`arc-testnet`
+when unset, or `arc-mainnet`; see `lib/network.ts`). The RPC override is the variable that
+deployment names, `ARC_TESTNET_RPC` or `ARC_MAINNET_RPC`; `SNAPFALL_FLOAT_POOL_ADDRESS` and
 `SNAPFALL_DEPLOYMENT_BLOCK` retain the deployment-config override behavior. Set
 `SNAPFALL_TREASURY_ADDRESS` to select the organization whose accepted-job/write-off
 history derives the displayed advance rate. Relevant H2 chain events trigger an immediate

@@ -16,6 +16,7 @@ function payloadString(payload: unknown, key: string): string | null {
 }
 import { formatUsdc, formatUsdcExact, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import { networkLabel } from '@/lib/network';
 import PoolCapacity from '@/components/PoolCapacity';
 import MoneyGraph from '@/components/MoneyGraph';
 import ScoreRing from '@/components/ScoreRing';
@@ -277,7 +278,7 @@ export default function OverviewPage() {
           <CardHeader title="No daemon connected — showing on-chain data only" />
           <CardBody>
             <p>
-              The treasury and pool figures above are read live from Arc testnet. The live agent
+              The treasury and pool figures above are read live from {networkLabel()}. The live agent
               feed, workforce and approvals come from the owner’s daemon, which does not run on this
               public site — so they are omitted rather than fabricated. Everything Snapfall shows is
               meant to be verifiable.
@@ -286,7 +287,7 @@ export default function OverviewPage() {
             <ul className="disconnected-links mt">
               <li>
                 <Link href="/float">Float</Link> — live pool, advance rate and history, read
-                directly from Arc testnet.
+                directly from {networkLabel()}.
               </li>
               <li>
                 <a

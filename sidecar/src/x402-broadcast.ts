@@ -11,12 +11,14 @@ import { privateKeyToAccount } from 'viem/accounts';
 
 import { TRANSFER_WITH_AUTHORIZATION_TYPES, type PaymentPayload } from './x402.js';
 import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
+import { resolveArcNetwork } from './arc-network.js';
 import { SelfFacilitator } from './self-facilitator.js';
 import type { PaymentRequirements } from './facilitator.js';
 
-const RPC = process.env.ARC_TESTNET_RPC ?? 'https://rpc.testnet.arc.network';
+const ARC_NETWORK = resolveArcNetwork();
+const RPC = ARC_NETWORK.rpcUrl;
 const USDC = (process.env.ARC_USDC_ADDRESS ?? '0x3600000000000000000000000000000000000000') as Address;
-const CHAIN_ID = Number(process.env.ARC_TESTNET_CHAIN_ID ?? process.env.ARC_CHAIN_ID ?? 5042002);
+const CHAIN_ID = ARC_NETWORK.chainId;
 const SELLER = process.env.SELLER_ADDRESS as Address | undefined;
 const VALUE = BigInt(process.env.X402_SIM_VALUE ?? '40000');
 
