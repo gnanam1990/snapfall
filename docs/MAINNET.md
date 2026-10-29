@@ -35,7 +35,7 @@ until the numbers are set.
 
 | Control | Contract | Effect |
 |---|---|---|
-| `maxTotalExposure` | FloatPool | absolute ceiling on `totalOutstanding`; an advance that would breach it reverts `ExposureCapExceeded()` |
+| `maxTotalExposure` | FloatPool | absolute ceiling on `totalOutstanding + totalWrittenOff`: open principal **plus every loss already taken**; an advance that would breach it reverts `ExposureCapExceeded()` |
 | `maxAdvance` | FloatPool | absolute ceiling on one advance; reverts `AdvanceTooLarge()` |
 | `maxJobPayment` | JobVault | absolute ceiling on one job's escrow; reverts `JobTooLarge()` |
 | `depositAllowlistEnabled` + `allowedDepositor` | FloatPool | who may supply capital; reverts `DepositorNotAllowed()` |
@@ -91,6 +91,17 @@ export SNAPFALL_MAX_JOB_PAYMENT=25000000      # 25.00 USDC per job
 
 The ceiling is the most you can lose to a total failure of everything off-chain. Pick a number
 you would be willing to lose outright, not a number you expect to need.
+
+It holds across losses, not only at one instant. `totalWrittenOff` records every principal
+written off and keeps counting it against the ceiling, so a compromised operator key cannot
+loop draw → `refund` → `writeOff` to lose the ceiling again and again: once losses plus open
+principal reach `maxTotalExposure`, `requestAdvance` reverts until an admin deliberately raises
+the cap with `setCaps`. `Caps.t.sol` runs that loop (`test_ceilingBoundsCumulativeLossAcrossDrawRefundLoops`).
+
+The bound is against everything off-chain **except the admin key**. `setCaps` has no upper
+limit or delay, admin can create a job for any operator and refund any job, and there is no
+admin transfer, so a compromised admin key can raise the ceiling and then lose up to the pool's
+TVL. Keep the admin key offline and separate from every key the daemon holds.
 
 ## Use a new key. Not the testnet one.
 
@@ -226,11 +237,11 @@ pkill -f snapfalld
 
 Work down this list. Nothing here needs a redeployment except the last step.
 
-1. **Establish the size of the problem.** `totalOutstanding` is the money actually at risk;
-   `maxTotalExposure` is the worst it could have become.
+1. **Establish the size of the problem.** `totalOutstanding` is the money actually at risk,
+   `totalWrittenOff` is what has already been lost, and `maxTotalExposure` bounds their sum.
 
    ```bash
-   cast call "$FLOATPOOL" "totalOutstanding()(uint256)" --rpc-url "$ARC_RPC" && cast call "$FLOATPOOL" "totalAssets()(uint256)" --rpc-url "$ARC_RPC" && cast call "$FLOATPOOL" "reserve()(uint256)" --rpc-url "$ARC_RPC"
+   cast call "$FLOATPOOL" "totalOutstanding()(uint256)" --rpc-url "$ARC_RPC" && cast call "$FLOATPOOL" "totalWrittenOff()(uint256)" --rpc-url "$ARC_RPC" && cast call "$FLOATPOOL" "totalAssets()(uint256)" --rpc-url "$ARC_RPC" && cast call "$FLOATPOOL" "reserve()(uint256)" --rpc-url "$ARC_RPC"
    ```
 
 2. **Lower the ceiling rather than unpausing blind.** `setCaps` can be called while paused, so
@@ -264,7 +275,9 @@ Work down this list. Nothing here needs a redeployment except the last step.
 
 There is no admin function that moves another party's funds — no emergency withdraw, no
 sweep, no forced settlement. That is deliberate: such a function is itself the largest risk in
-most lending contracts, and its absence is why `admin` being compromised cannot drain the pool.
+most lending contracts, and its absence means even `admin` cannot simply take the funds. It is
+not a guarantee against a compromised admin key, which can raise the caps and then lose the pool
+through ordinary advances and refunds (see "Choosing the numbers").
 The cost is that recovery runs at the speed of ordinary settlement, and a genuinely stuck
 advance stays stuck until its job is accepted or refunded.
 
