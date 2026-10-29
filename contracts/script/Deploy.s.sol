@@ -98,8 +98,11 @@ contract Deploy is Script {
         console2.log("allowlist enabled ->", pool.depositAllowlistEnabled());
         console2.log("admin: FloatPool  ->", pool.admin());
         console2.log("admin: JobVault   ->", vault.admin());
-        if (newAdmin != address(0)) {
-            console2.log("pending admin     ->", newAdmin);
+        // Read the contracts, not the env: SNAPFALL_ADMIN equal to the deployer cancels instead
+        // of starting a transfer, and telling the operator to call acceptAdmin() then would be wrong.
+        address pending = pool.pendingAdmin();
+        if (pending != address(0)) {
+            console2.log("pending admin     ->", pending);
             console2.log("  acceptAdmin() on FloatPool and JobVault from that signer after", pool.adminTransferAcceptableAt());
         }
     }

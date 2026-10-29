@@ -271,8 +271,9 @@ Work down this list. Nothing here needs a redeployment except the last step.
    incident. Lowering is immediate and cancels any queued raise. Raising it back later takes
    `CAP_RAISE_DELAY`, so do not lower further than you mean to. If the admin key itself is
    suspect, start `transferAdmin` to a clean key at once, watch for a competing
-   `AdminTransferStarted` and cancel it, and accept from the clean key after
-   `ADMIN_TRANSFER_DELAY`. If the attacker keeps contesting, treat it as the stalemate above:
+   `AdminTransferStarted` and cancel it, and after `ADMIN_TRANSFER_DELAY` call `acceptAdmin`
+   from the clean key on **both** FloatPool and JobVault. The suspect key stays admin until
+   that acceptance, and the clean key's admin-only calls revert before it. If the attacker keeps contesting, treat it as the stalemate above:
    keep the pool paused and the caps low, get LP capital out, and retire the deployment.
 
 3. **Close open advances the normal way.** Each one ends through its job: `acceptDelivery`
