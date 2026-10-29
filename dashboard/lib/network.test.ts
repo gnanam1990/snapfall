@@ -67,7 +67,9 @@ test('chain errors shown to clients never carry the RPC URL or a provider key', 
   const leaky = new Error('request to https://arc-mainnet.g.alchemy.com/v2/sEcReTkEy123456 failed, reason: ECONNRESET');
   const safe = clientSafeError(leaky, 'x', env, 'arc-mainnet');
   assert.doesNotMatch(safe, /sEcReTkEy123456/);
-  assert.match(safe, /\[rpc\] failed, reason: ECONNRESET/);
+  assert.match(safe, /failed, reason: ECONNRESET/);
+  // The bare key, with no URL around it, is removed too.
+  assert.doesNotMatch(clientSafeError(new Error('invalid key sEcReTkEy123456'), 'x', env, 'arc-mainnet'), /sEcReTkEy123456/);
 
   // A URL we did not configure, and query-string keys, are caught by shape.
   assert.doesNotMatch(clientSafeError(new Error('https://other.example/v3/abcdefgh12345 down'), 'x', {}, 'arc-mainnet'), /abcdefgh12345/);
@@ -77,4 +79,18 @@ test('chain errors shown to clients never carry the RPC URL or a provider key', 
   assert.equal(clientSafeError(new Error('floatPool has no address on arc-mainnet: set SNAPFALL_FLOAT_POOL_ADDRESS'), 'x', env, 'arc-mainnet'),
     'floatPool has no address on arc-mainnet: set SNAPFALL_FLOAT_POOL_ADDRESS');
   assert.equal(clientSafeError('not an error', 'fallback text', env, 'arc-mainnet'), 'fallback text');
+});
+
+test('URL redaction covers provider formats beyond /v2/<key>', () => {
+  // QuickNode-style bare token segment, basic-auth userinfo, and a trailing-slash variant.
+  const qn = { ARC_MAINNET_RPC: 'https://wild-name.arc-mainnet.quiknode.pro/0123456789abcdef0123/' };
+  assert.doesNotMatch(clientSafeError(new Error('fetch https://wild-name.arc-mainnet.quiknode.pro/0123456789abcdef0123 failed'), 'x', qn, 'arc-mainnet'), /0123456789abcdef0123/);
+  assert.doesNotMatch(clientSafeError(new Error('token 0123456789abcdef0123 rejected'), 'x', qn, 'arc-mainnet'), /0123456789abcdef0123/);
+
+  const basic = { ARC_MAINNET_RPC: 'https://rpcuser:hunter2hunter2@node.example/rpc' };
+  const msg = clientSafeError(new Error('GET https://rpcuser:hunter2hunter2@node.example/rpc 401'), 'x', basic, 'arc-mainnet');
+  assert.doesNotMatch(msg, /hunter2hunter2|rpcuser/);
+
+  // Unconfigured URLs keep only scheme and host.
+  assert.equal(clientSafeError(new Error('down: https://u:p@x.example/a/b?token=t'), 'x', {}, 'arc-mainnet'), 'down: https://x.example/[redacted]');
 });
