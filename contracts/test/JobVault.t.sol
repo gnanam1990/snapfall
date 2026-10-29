@@ -39,8 +39,12 @@ contract JobVaultTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
-        vm.prank(ADMIN);
+        vm.startPrank(ADMIN);
         vault = new JobVault(IERC20(address(usdc)));
+        // The Sep 2026 per-job ceiling fails closed; opened here so these escrow-lifecycle
+        // assertions test what they always did. The ceiling itself is covered in Caps.t.sol.
+        vault.setMaxJobPayment(type(uint256).max);
+        vm.stopPrank();
 
         deadline = uint64(block.timestamp + 7 days);
 

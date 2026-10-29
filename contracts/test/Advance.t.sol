@@ -45,6 +45,14 @@ contract AdvanceTest is Test {
         pool = new FloatPoolHarness(IERC20(address(usdc)));
         vault.wireFloatPool(address(pool));
         pool.wireJobVault(address(vault));
+        // The Sep 2026 capital controls fail closed, so a fresh deployment lends nothing and
+        // takes no deposits. These tests predate them and are about the PERCENTAGE caps, so
+        // the absolute ceilings are opened all the way and the LP is allowlisted — leaving
+        // exactly the behaviour these assertions were written against. The absolute controls
+        // have their own file, Caps.t.sol.
+        vault.setMaxJobPayment(type(uint256).max);
+        pool.setCaps(type(uint256).max, type(uint256).max);
+        pool.setDepositorAllowed(LP, true);
         vm.stopPrank();
 
         _seedPool(POOL_SEED);
@@ -222,6 +230,10 @@ contract AdvanceTest is Test {
         FloatPool p = new FloatPool(IERC20(address(token)));
         v.wireFloatPool(address(p));
         p.wireJobVault(address(v));
+        // Absolute controls opened; this test is about the percentage caps (see Caps.t.sol).
+        v.setMaxJobPayment(type(uint256).max);
+        p.setCaps(type(uint256).max, type(uint256).max);
+        p.setDepositorAllowed(LP, true);
         vm.stopPrank();
 
         // The PRD's demo pool seed.
@@ -253,6 +265,10 @@ contract AdvanceTest is Test {
         FloatPool p = new FloatPool(IERC20(address(token)));
         v.wireFloatPool(address(p));
         p.wireJobVault(address(v));
+        // Absolute controls opened; this test is about the percentage caps (see Caps.t.sol).
+        v.setMaxJobPayment(type(uint256).max);
+        p.setCaps(type(uint256).max, type(uint256).max);
+        p.setDepositorAllowed(LP, true);
         vm.stopPrank();
 
         token.mint(LP, 125_000_000);
@@ -332,6 +348,10 @@ contract AdvanceTest is Test {
         FloatPool p = new FloatPool(IERC20(address(token)));
         v.wireFloatPool(address(p));
         p.wireJobVault(address(v));
+        // Absolute controls opened; this test is about the percentage caps (see Caps.t.sol).
+        v.setMaxJobPayment(type(uint256).max);
+        p.setCaps(type(uint256).max, type(uint256).max);
+        p.setDepositorAllowed(LP, true);
         vm.stopPrank();
 
         token.mint(CUSTOMER, PAYMENT);

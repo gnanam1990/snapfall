@@ -32,6 +32,7 @@ import Link from 'next/link';
 import type { JobSummary, OpenAdvance, StreamMessage } from '@/lib/types';
 import { formatUsdcExact } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import { networkLabel } from '@/lib/network';
 import Badge from '@/components/Badge';
 
 /**
@@ -113,7 +114,7 @@ export default function JobsPage() {
             <Link className="jobs-open" href="/float">
               Float
             </Link>{' '}
-            are read straight from Arc testnet and do not need a daemon.
+            are read straight from {networkLabel()} and do not need a daemon.
           </p>
         </div>
       ) : jobs === null ? (

@@ -1,4 +1,3 @@
-import deployment from '../../../../deployments/arc-testnet.json';
 import {
   assembleSnapshot,
   createRPCTransport,
@@ -8,22 +7,24 @@ import {
   type FloatChainConfig,
 } from '@/lib/floatChain';
 import type { FloatSnapshot } from '@/lib/types';
+import { chainNetwork, networkName, requireAddress } from '@/lib/network';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 function floatConfig(): { config: FloatChainConfig; includeHistory: boolean } {
-  const privateRPC = process.env.ARC_TESTNET_RPC;
+  // The selected network's RPC (ARC_TESTNET_RPC or ARC_MAINNET_RPC) and addresses; lib/network.
+  const net = chainNetwork();
   return {
     config: {
-      chainId: deployment.network.chainId,
-      rpcUrl: privateRPC ?? deployment.network.rpcUrl,
-      poolAddress: process.env.SNAPFALL_FLOAT_POOL_ADDRESS ?? deployment.contracts.floatPool.address,
-      explorerUrl: deployment.network.explorerUrl,
-      startBlock: Number(process.env.SNAPFALL_DEPLOYMENT_BLOCK ?? deployment.network.startBlock),
+      chainId: net.chainId,
+      rpcUrl: net.rpcUrl,
+      poolAddress: requireAddress('floatPool'),
+      explorerUrl: net.explorerUrl,
+      startBlock: net.startBlock,
       orgAddress: process.env.SNAPFALL_TREASURY_ADDRESS,
       // USDC (ERC-20) address, so the treasury balanceOf can be read at the 6dp surface.
-      usdcAddress: process.env.ARC_USDC_ADDRESS ?? deployment.contracts.usdc.address,
+      usdcAddress: requireAddress('usdc'),
       // Per-request eth_getLogs range cap — provider-dependent (Alchemy PAYG 10000, free 10,
       // public node unlimited-but-rate-limited). Defaults to 10000; the scan shrinks further
       // on a range error if the provider is stricter.
@@ -33,20 +34,22 @@ function floatConfig(): { config: FloatChainConfig; includeHistory: boolean } {
     },
     // The public endpoint's historical eth_getLogs path is heavily rate-limited. A private
     // override enables the (now incremental, cached) scan; otherwise H2 supplies aggregates.
-    includeHistory: Boolean(privateRPC) || process.env.SNAPFALL_FLOAT_SCAN_PUBLIC_RPC === '1',
+    includeHistory: net.hasPrivateRpc || process.env.SNAPFALL_FLOAT_SCAN_PUBLIC_RPC === '1',
   };
 }
 
 function json(snapshot: FloatSnapshot): Response {
   return Response.json(snapshot, {
-    headers: { 'cache-control': 'no-store', 'x-snapfall-source': 'arc-testnet' },
+    headers: { 'cache-control': 'no-store', 'x-snapfall-source': networkName() },
   });
 }
 
 export async function GET(): Promise<Response> {
-  const { config, includeHistory } = floatConfig();
-  const rpc = createRPCTransport(config.rpcUrl);
   try {
+    // Inside the try: a mainnet build with no FloatPool address yet is a 503 that names the
+    // env var to set, not an unhandled throw.
+    const { config, includeHistory } = floatConfig();
+    const rpc = createRPCTransport(config.rpcUrl);
     // The immediate views resolve in ~100ms and never wait on the log scan.
     const views = await loadFloatViews(config, rpc);
 

@@ -30,6 +30,14 @@ contract JobVault is ReentrancyGuard {
     IFloatPool public floatPool;   // set once by admin; repay/writeOff callee
     address public admin;
 
+    // ── Added Sep 2026 (post-freeze): mainnet capital controls ──
+    //
+    // The escrow a single job can hold is the unit of customer exposure, and nothing in the
+    // original contract bounded it. Both controls fail closed and are admin-only, so they hold
+    // regardless of what the daemon or the dashboard does. See docs/MAINNET.md.
+    bool public paused;             // blocks job creation and funding; never blocks an exit
+    uint256 public maxJobPayment;   // absolute ceiling on one job's escrow; 0 = never set
+
     mapping(bytes32 => Job) public jobs;
 
     // ── Events (ABI FREEZE Fri Jul 24 — additions ok, changes need all-three sign-off) ──
@@ -54,11 +62,42 @@ contract JobVault is ReentrancyGuard {
     error ZeroHash();
     error AlreadyWired();
     error NotWired();
+    // ── Added Sep 2026 (post-freeze): mainnet capital controls ──
+    error EnforcedPause();
+    error CapNotSet();
+    error JobTooLarge();
 
     /// SPEC-04 — emitted once, when the FloatPool address is bound.
     event Wired(address indexed floatPool);
+    // ── Added Sep 2026 (post-freeze) ──
+    event PauseSet(bool paused);
+    event MaxJobPaymentSet(uint256 maxJobPayment);
 
     constructor(IERC20 _usdc) { usdc = _usdc; admin = msg.sender; }
+
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert NotAuthorized();
+        _;
+    }
+
+    /// @notice Emergency stop. Blocks job creation and funding.
+    /// @dev Does NOT gate startWork, submitDelivery, acceptDelivery, refund or cancel. Escrow
+    ///      that is already in the contract must always be able to reach its owner — pausing
+    ///      settlement would strand a customer's money behind an operator decision. Asserted
+    ///      in Caps.t.sol.
+    function setPaused(bool value) external onlyAdmin {
+        paused = value;
+        emit PauseSet(value);
+    }
+
+    /// @notice Set the absolute ceiling on a single job's escrow, in USDC base units.
+    /// @dev Zero is reserved for "never configured" and fails closed in createJob. To stop
+    ///      taking new work, pause.
+    function setMaxJobPayment(uint256 value) external onlyAdmin {
+        if (value == 0) revert ZeroAmount();
+        maxJobPayment = value;
+        emit MaxJobPaymentSet(value);
+    }
 
     /// SPEC-04 — set-once wiring, admin only. The waterfall (SC-JV-009) cannot execute
     /// without it, and rebinding mid-flight would let an admin redirect repayments, so
@@ -89,10 +128,14 @@ contract JobVault is ReentrancyGuard {
         bytes32 termsHash,
         uint64 deadline
     ) external {
+        if (paused) revert EnforcedPause();
         if (msg.sender != admin && msg.sender != operator) revert NotAuthorized();
         if (jobs[jobId].customer != address(0)) revert JobExists();
         if (customer == address(0) || operator == address(0)) revert ZeroAddress();
         if (customerPayment == 0) revert ZeroAmount();
+        // Fail closed: an unconfigured vault takes no work.
+        if (maxJobPayment == 0) revert CapNotSet();
+        if (customerPayment > maxJobPayment) revert JobTooLarge();
 
         jobs[jobId] = Job({
             customer: customer,
@@ -118,6 +161,7 @@ contract JobVault is ReentrancyGuard {
     ///      so it is immutable by construction once work starts. CEI: status flips before the
     ///      token pull, and nonReentrant guards the callback surface of a hostile token.
     function fund(bytes32 jobId) external nonReentrant {
+        if (paused) revert EnforcedPause();
         Job storage j = jobs[jobId];
         if (j.customer == address(0)) revert UnknownJob();
         if (msg.sender != j.customer) revert NotAuthorized();          // SC-JV-001
