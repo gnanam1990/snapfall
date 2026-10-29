@@ -50,8 +50,13 @@ contract FloatPool is ReentrancyGuard {
     // All of them FAIL CLOSED: a pool that has never been configured lends nothing and accepts
     // deposits from nobody but its deployer. Forgetting to set a limit cannot mean "unlimited".
     bool public paused;                 // blocks NEW risk only; every exit stays open
-    uint256 public maxTotalExposure;    // absolute ceiling on totalOutstanding; 0 = never set
+    uint256 public maxTotalExposure;    // absolute ceiling on totalOutstanding + totalWrittenOff; 0 = never set
     uint256 public maxAdvance;          // absolute ceiling on a single advance; 0 = never set
+    // Lifetime principal lost to write-offs. It counts against maxTotalExposure FOREVER, so the
+    // ceiling bounds cumulative loss, not just the open book: without it, draw -> refund ->
+    // writeOff returns totalOutstanding to zero and the same ceiling can be lost again, every
+    // cycle, until the pool is empty. Spending the budget again is an explicit admin setCaps.
+    uint256 public totalWrittenOff;
     bool public depositAllowlistEnabled;
     mapping(address => bool) public allowedDepositor;
 
@@ -302,7 +307,8 @@ contract FloatPool is ReentrancyGuard {
 
         // The absolute ceiling is checked FIRST and is authoritative: the percentage caps below
         // scale with TVL, so in a large pool they may not bind at all. This one always does.
-        if (totalOutstanding > maxTotalExposure) revert ExposureCapExceeded();
+        // Losses already taken count too, so the ceiling is the most the pool can EVER lose.
+        if (totalOutstanding + totalWrittenOff > maxTotalExposure) revert ExposureCapExceeded();
 
         // SC-FP-006: caps are checked against the post-issuance position, so an advance that
         // would breach either one never lands.
@@ -372,6 +378,7 @@ contract FloatPool is ReentrancyGuard {
         a.status = AdvanceStatus.WrittenOff;
         orgOutstanding[org] -= loss;
         totalOutstanding -= loss;
+        totalWrittenOff += loss; // permanent: this loss keeps counting against maxTotalExposure
         writtenOffJobs[org] += 1;
 
         // Stage 1 — operator performance bond (SC-FP-011, P1). Not yet implemented.

@@ -275,6 +275,59 @@ contract CapsTest is Test {
         assertEq(usdc.balanceOf(CUSTOMER) - before, PAYMENT, "customer must be made whole while paused");
     }
 
+    /// The refund above has no advance, so it never reaches writeOff. This one does: a refund
+    /// with an advance outstanding pays the customer and then writes the advance off, and both
+    /// halves must work while paused, or a pause traps the customer's escrow behind the pool.
+    function test_pause_doesNotBlockRefundWithAnOpenAdvance() public {
+        _openForBusiness();
+        _seedPool(POOL_SEED);
+
+        bytes32 job = keccak256("j7-advance");
+        _createAndFund(job, PAYMENT);
+        vm.prank(OPERATOR);
+        uint256 principal = pool.requestAdvance(job);
+
+        vm.startPrank(ADMIN);
+        pool.setPaused(true);
+        vault.setPaused(true);
+        vm.stopPrank();
+
+        uint256 before = usdc.balanceOf(CUSTOMER);
+        vm.prank(ADMIN);
+        vault.refund(job);
+
+        assertEq(usdc.balanceOf(CUSTOMER) - before, PAYMENT, "customer must be made whole while paused");
+        (, , bool open) = pool.openAdvanceOf(job);
+        assertFalse(open, "the advance must be written off while paused");
+        assertEq(pool.totalWrittenOff(), principal, "the loss is recorded");
+    }
+
+    /// The escape hatch that does not depend on the operator or admin at all: the customer,
+    /// after the deadline, while paused.
+    function test_pause_doesNotBlockCustomerRefundAfterDeadline() public {
+        _openForBusiness();
+        _seedPool(POOL_SEED);
+
+        bytes32 job = keccak256("j7-deadline");
+        _createAndFund(job, PAYMENT);
+        vm.prank(OPERATOR);
+        pool.requestAdvance(job);
+
+        vm.startPrank(ADMIN);
+        pool.setPaused(true);
+        vault.setPaused(true);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 7 days);
+        uint256 before = usdc.balanceOf(CUSTOMER);
+        vm.prank(CUSTOMER);
+        vault.refund(job);
+
+        assertEq(usdc.balanceOf(CUSTOMER) - before, PAYMENT, "customer refunds itself after the deadline, paused");
+        (, , bool open) = pool.openAdvanceOf(job);
+        assertFalse(open);
+    }
+
     function test_setPaused_isAdminOnly() public {
         vm.prank(STRANGER);
         vm.expectRevert(FloatPool.NotAuthorized.selector);
@@ -474,5 +527,79 @@ contract CapsTest is Test {
 
         assertEq(landed, 2, "only two 12.50 draws fit under a 30.00 ceiling");
         assertLe(pool.totalOutstanding(), 30_000_000, "outstanding must never exceed the ceiling");
+    }
+
+    /// The loop the open-book ceiling alone could not stop. A compromised operator key creates a
+    /// job for a customer it controls, draws the advance, refunds the job (the customer gets its
+    /// escrow back, the pool writes the advance off) and repeats. Each writeOff returned
+    /// totalOutstanding to zero, so before totalWrittenOff the same ceiling could be lost every
+    /// cycle until the pool was empty. Now losses count against it permanently.
+    function test_ceilingBoundsCumulativeLossAcrossDrawRefundLoops() public {
+        _openForBusiness();
+        _seedPool(400_000_000); // deep, so only the absolute ceiling can be what stops it
+
+        uint256 ceiling = 30_000_000;
+        vm.prank(ADMIN);
+        pool.setCaps(ceiling, MAX_ADVANCE);
+
+        address sybil = address(0x5B1);
+        usdc.mint(sybil, PAYMENT * 20);
+        vm.prank(sybil);
+        usdc.approve(address(vault), type(uint256).max);
+
+        uint256 operatorStart = usdc.balanceOf(OPERATOR);
+        uint256 cycles;
+        bool stopped;
+        for (uint256 i = 0; i < 20; i++) {
+            bytes32 job = keccak256(abi.encodePacked("loop", i));
+            vm.prank(OPERATOR); // the operator may create its own jobs, for any customer
+            vault.createJob(job, sybil, OPERATOR, PAYMENT, BUDGET, TERMS, uint64(block.timestamp + 7 days));
+            vm.prank(sybil);
+            vault.fund(job);
+
+            vm.prank(OPERATOR);
+            try pool.requestAdvance(job) returns (uint256) {
+                cycles++;
+            } catch (bytes memory reason) {
+                assertEq(bytes4(reason), FloatPool.ExposureCapExceeded.selector, "stopped by the lifetime ceiling");
+                stopped = true;
+                break;
+            }
+            vm.prank(OPERATOR);
+            vault.refund(job); // sybil made whole; the advance is written off
+        }
+
+        assertTrue(stopped, "the loop must hit the ceiling");
+        assertGt(cycles, 0);
+        assertLe(pool.totalWrittenOff(), ceiling, "lifetime loss never exceeds the ceiling");
+        assertLe(usdc.balanceOf(OPERATOR) - operatorStart, ceiling, "the attacker extracts at most the ceiling");
+        assertEq(pool.totalOutstanding(), 0);
+    }
+
+    /// Re-arming after a loss is a deliberate act: only an admin setCaps above the losses
+    /// already taken lets the pool lend again.
+    function test_lossBudgetIsRestoredOnlyByAnExplicitSetCaps() public {
+        _openForBusiness();
+        _seedPool(400_000_000);
+        vm.prank(ADMIN);
+        pool.setCaps(12_500_000, MAX_ADVANCE); // exactly one 12.50 draw
+
+        bytes32 first = keccak256("budget-1");
+        _createAndFund(first, PAYMENT);
+        vm.prank(OPERATOR);
+        pool.requestAdvance(first);
+        vm.prank(ADMIN);
+        vault.refund(first);
+
+        bytes32 second = keccak256("budget-2");
+        _createAndFund(second, PAYMENT);
+        vm.prank(OPERATOR);
+        vm.expectRevert(FloatPool.ExposureCapExceeded.selector);
+        pool.requestAdvance(second);
+
+        vm.prank(ADMIN);
+        pool.setCaps(50_000_000, MAX_ADVANCE);
+        vm.prank(OPERATOR);
+        assertGt(pool.requestAdvance(second), 0, "an explicit raise re-arms the pool");
     }
 }

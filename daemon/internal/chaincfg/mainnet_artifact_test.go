@@ -25,8 +25,14 @@ func mainnetWallets(k string) (string, bool) {
 // it with none supplied must FAIL — a mainnet config that silently resolved to a zero address
 // would point the indexer, and eventually a signer, at nothing.
 func TestLoad_MainnetArtifactFailsClosedWithoutAddresses(t *testing.T) {
-	if _, err := Load(mainnetArtifact(), mainnetWallets); err == nil {
+	_, err := Load(mainnetArtifact(), mainnetWallets)
+	if err == nil {
 		t.Fatal("arc-mainnet.json must not load while its contract addresses are unknown")
+	}
+	// The failure has to be the missing address, not any error: a typo, a missing ABI or a bad
+	// wallet would also fail Load, and would let this test pass while proving nothing.
+	if !strings.Contains(err.Error(), "no committed address and SNAPFALL_JOB_VAULT_ADDRESS is not set") {
+		t.Fatalf("expected the missing-address failure, got: %v", err)
 	}
 }
 
