@@ -28,6 +28,7 @@ import {FloatPool} from "../src/FloatPool.sol";
 ///   export SNAPFALL_MAX_TOTAL_EXPOSURE=50000000   # 50.00 USDC, 6dp ERC-20 base units
 ///   export SNAPFALL_MAX_ADVANCE=10000000          # 10.00 USDC
 ///   export SNAPFALL_MAX_JOB_PAYMENT=25000000      # 25.00 USDC
+///   export SNAPFALL_ADMIN=0x...                  # optional: admin handoff, accepted later
 ///   forge script script/Deploy.s.sol --rpc-url "$ARC_RPC" \
 ///     --account snapfall-deployer --sender "$DEPLOYER_ADDRESS" --broadcast
 ///
@@ -49,6 +50,11 @@ contract Deploy is Script {
         require(maxAdvance > 0, "SNAPFALL_MAX_ADVANCE must be > 0");
         require(maxJobPayment > 0, "SNAPFALL_MAX_JOB_PAYMENT must be > 0");
         require(maxAdvance <= maxTotalExposure, "per-advance cap cannot exceed the total ceiling");
+
+        // Optional: hand admin off the deployer key in the same run. The new admin still has to
+        // call acceptAdmin() on both contracts from its own signer (a multisig or hardware
+        // wallet), so a wrong address here strands nothing; until then the deployer stays admin.
+        address newAdmin = vm.envOr("SNAPFALL_ADMIN", address(0));
 
         console2.log("usdc            ", usdc);
         console2.log("maxTotalExposure", maxTotalExposure);
@@ -72,6 +78,11 @@ contract Deploy is Script {
         pool.setCaps(maxTotalExposure, maxAdvance);
         vault.setMaxJobPayment(maxJobPayment);
 
+        if (newAdmin != address(0)) {
+            pool.transferAdmin(newAdmin);
+            vault.transferAdmin(newAdmin);
+        }
+
         vm.stopBroadcast();
 
         console2.log("AuditAnchor  ", address(anchor));
@@ -84,5 +95,9 @@ contract Deploy is Script {
         console2.log("cap:   FloatPool.maxAdvance       ->", pool.maxAdvance());
         console2.log("cap:   JobVault.maxJobPayment     ->", vault.maxJobPayment());
         console2.log("allowlist enabled ->", pool.depositAllowlistEnabled());
+        console2.log("admin (both)      ->", pool.admin());
+        if (newAdmin != address(0)) {
+            console2.log("pending admin     ->", newAdmin, "(must call acceptAdmin() on FloatPool and JobVault)");
+        }
     }
 }

@@ -57,6 +57,20 @@ contract FloatPool is ReentrancyGuard {
     // writeOff returns totalOutstanding to zero and the same ceiling can be lost again, every
     // cycle, until the pool is empty. Spending the budget again is an explicit admin setCaps.
     uint256 public totalWrittenOff;
+
+    // ── Admin hardening (Oct 2026) ──
+    //
+    // setCaps used to take effect immediately and without limit, so a compromised admin key
+    // could raise the ceiling and lose the pool in the same block. Now only LOWERING (and the
+    // first-ever configuration) is immediate. A raise is queued for CAP_RAISE_DELAY, which is
+    // the window in which an LP can withdraw idle capital (withdraw is never paused) and the
+    // real key holder can pause or lower the caps back down. Admin itself moves only through a
+    // two-step transfer, so a leaked key can be rotated and a typo cannot brick the role.
+    uint256 public constant CAP_RAISE_DELAY = 2 days;
+    address public pendingAdmin;
+    uint256 public pendingMaxTotalExposure;
+    uint256 public pendingMaxAdvance;
+    uint64 public capRaiseExecutableAt; // 0 = no raise queued
     bool public depositAllowlistEnabled;
     mapping(address => bool) public allowedDepositor;
 
@@ -89,6 +103,11 @@ contract FloatPool is ReentrancyGuard {
     event CapsSet(uint256 maxTotalExposure, uint256 maxAdvance);
     event DepositAllowlistSet(bool enabled);
     event DepositorAllowed(address indexed depositor, bool allowed);
+    // ── Added Oct 2026: admin hardening ──
+    event CapsRaiseQueued(uint256 maxTotalExposure, uint256 maxAdvance, uint64 executableAt);
+    event CapsRaiseCancelled();
+    event AdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
 
     error NotJobVault();
     error JobNotFunded();
@@ -110,6 +129,10 @@ contract FloatPool is ReentrancyGuard {
     error AdvanceTooLarge();
     error ExposureCapExceeded();
     error DepositorNotAllowed();
+    // ── Added Oct 2026: admin hardening ──
+    error NoCapRaiseQueued();
+    error CapRaiseTimelocked();
+    error NotPendingAdmin();
 
     constructor(IERC20 _usdc) {
         usdc = _usdc;
@@ -142,11 +165,70 @@ contract FloatPool is ReentrancyGuard {
     /// @notice Set the absolute exposure ceilings, in USDC base units.
     /// @dev Both must be non-zero: zero is reserved for "never configured", which fails closed
     ///      in requestAdvance. To stop lending, pause — do not zero the caps.
+    ///
+    ///      The first configuration and any change that raises neither cap apply immediately
+    ///      (and clear a queued raise, so lowering is also how a raise is countered). A change
+    ///      that raises either cap is queued whole for CAP_RAISE_DELAY and applied by
+    ///      executeCapsRaise. To lower one cap now and raise the other later, make two calls.
     function setCaps(uint256 _maxTotalExposure, uint256 _maxAdvance) external onlyAdmin {
         if (_maxTotalExposure == 0 || _maxAdvance == 0) revert ZeroAmount();
+        bool configured = maxTotalExposure != 0; // both caps are only ever set together
+        if (configured && (_maxTotalExposure > maxTotalExposure || _maxAdvance > maxAdvance)) {
+            uint64 executableAt = uint64(block.timestamp + CAP_RAISE_DELAY);
+            pendingMaxTotalExposure = _maxTotalExposure;
+            pendingMaxAdvance = _maxAdvance;
+            capRaiseExecutableAt = executableAt;
+            emit CapsRaiseQueued(_maxTotalExposure, _maxAdvance, executableAt);
+            return;
+        }
+        _applyCaps(_maxTotalExposure, _maxAdvance);
+    }
+
+    /// @notice Apply a queued raise once its delay has passed.
+    function executeCapsRaise() external onlyAdmin {
+        uint64 executableAt = capRaiseExecutableAt;
+        if (executableAt == 0) revert NoCapRaiseQueued();
+        if (block.timestamp < executableAt) revert CapRaiseTimelocked();
+        _applyCaps(pendingMaxTotalExposure, pendingMaxAdvance);
+    }
+
+    /// @notice Drop a queued raise without changing the current caps.
+    function cancelCapsRaise() external onlyAdmin {
+        if (capRaiseExecutableAt == 0) revert NoCapRaiseQueued();
+        _clearCapRaise();
+        emit CapsRaiseCancelled();
+    }
+
+    function _applyCaps(uint256 _maxTotalExposure, uint256 _maxAdvance) private {
         maxTotalExposure = _maxTotalExposure;
         maxAdvance = _maxAdvance;
+        if (capRaiseExecutableAt != 0) {
+            _clearCapRaise();
+            emit CapsRaiseCancelled();
+        }
         emit CapsSet(_maxTotalExposure, _maxAdvance);
+    }
+
+    function _clearCapRaise() private {
+        pendingMaxTotalExposure = 0;
+        pendingMaxAdvance = 0;
+        capRaiseExecutableAt = 0;
+    }
+
+    /// @notice Start handing the admin role to `newAdmin`; it takes effect when they accept.
+    /// @dev Two steps so a mistyped address cannot strand the role. Calling again replaces the
+    ///      pending address; transferring to the current admin cancels a pending transfer.
+    function transferAdmin(address newAdmin) external onlyAdmin {
+        if (newAdmin == address(0)) revert ZeroAddress();
+        pendingAdmin = newAdmin == admin ? address(0) : newAdmin;
+        emit AdminTransferStarted(admin, pendingAdmin);
+    }
+
+    function acceptAdmin() external {
+        if (msg.sender != pendingAdmin || msg.sender == address(0)) revert NotPendingAdmin();
+        emit AdminTransferred(admin, msg.sender);
+        admin = msg.sender;
+        pendingAdmin = address(0);
     }
 
     /// @notice Turn the deposit allowlist on or off.

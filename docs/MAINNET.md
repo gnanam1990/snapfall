@@ -40,6 +40,8 @@ until the numbers are set.
 | `maxJobPayment` | JobVault | absolute ceiling on one job's escrow; reverts `JobTooLarge()` |
 | `depositAllowlistEnabled` + `allowedDepositor` | FloatPool | who may supply capital; reverts `DepositorNotAllowed()` |
 | `paused` | both | emergency stop; reverts `EnforcedPause()` |
+| `CAP_RAISE_DELAY` (2 days) | FloatPool | raising either cap is queued (`CapsRaiseQueued`) and applied by `executeCapsRaise` only after the delay; the first configuration and any lowering are immediate, and lowering cancels a queued raise |
+| `transferAdmin` / `acceptAdmin` | both | the admin role moves in two steps, so a leaked key can be rotated and a typo cannot strand the role |
 
 They live in the contract, not the daemon, because the requirement is that the ceiling holds
 *even if the API, the agent, the dashboard or the operator behaves incorrectly*. A limit that
@@ -87,6 +89,7 @@ A deliberately small first deployment — the only kind that should happen — l
 export SNAPFALL_MAX_TOTAL_EXPOSURE=50000000   # 50.00 USDC total at risk, ever
 export SNAPFALL_MAX_ADVANCE=10000000          # 10.00 USDC per advance
 export SNAPFALL_MAX_JOB_PAYMENT=25000000      # 25.00 USDC per job
+export SNAPFALL_ADMIN=0x...                  # optional: queue admin handoff to a multisig/hardware wallet
 ```
 
 The ceiling is the most you can lose to a total failure of everything off-chain. Pick a number
@@ -98,10 +101,21 @@ loop draw → `refund` → `writeOff` to lose the ceiling again and again: once 
 principal reach `maxTotalExposure`, `requestAdvance` reverts until an admin deliberately raises
 the cap with `setCaps`. `Caps.t.sol` runs that loop (`test_ceilingBoundsCumulativeLossAcrossDrawRefundLoops`).
 
-The bound is against everything off-chain **except the admin key**. `setCaps` has no upper
-limit or delay, admin can create a job for any operator and refund any job, and there is no
-admin transfer, so a compromised admin key can raise the ceiling and then lose up to the pool's
-TVL. Keep the admin key offline and separate from every key the daemon holds.
+The admin key is the one thing the ceiling cannot bound outright, because admin sets it. What
+limits a compromised admin key:
+
+- **Raises are delayed.** A raise sits queued for `CAP_RAISE_DELAY` (2 days) before
+  `executeCapsRaise` can apply it, and `CapsRaiseQueued` is emitted the moment it is queued.
+  Watch for that event. In the window the real key holder can lower the caps (which cancels the
+  raise) or pause, and the LP can withdraw idle capital, because `withdraw` is never paused.
+  Until the raise applies, the most a compromised admin can lose is what is left of the current
+  lifetime budget.
+- **The role can be rotated.** `transferAdmin` + `acceptAdmin` move admin to a new key. Move it
+  off the deployer right after deploying (`SNAPFALL_ADMIN` in `Deploy.s.sol`), ideally to a
+  multisig or hardware wallet, and keep it separate from every key the daemon holds.
+
+It is not a guardian system: an attacker holding the same key can re-queue raises and unpause,
+so the delay buys time to get capital out and rotate, not a permanent stalemate.
 
 ## Use a new key. Not the testnet one.
 
@@ -246,7 +260,9 @@ Work down this list. Nothing here needs a redeployment except the last step.
 
 2. **Lower the ceiling rather than unpausing blind.** `setCaps` can be called while paused, so
    the system can be reopened at a smaller size instead of at the size that caused the
-   incident.
+   incident. Lowering is immediate and cancels any queued raise. Raising it back later takes
+   `CAP_RAISE_DELAY`, so do not lower further than you mean to. If the admin key itself is
+   suspect, `transferAdmin` to a clean key first and act from that one.
 
 3. **Close open advances the normal way.** Each one ends through its job: `acceptDelivery`
    settles it and repays the pool, `refund` returns the customer's escrow and writes the
@@ -276,8 +292,9 @@ Work down this list. Nothing here needs a redeployment except the last step.
 There is no admin function that moves another party's funds — no emergency withdraw, no
 sweep, no forced settlement. That is deliberate: such a function is itself the largest risk in
 most lending contracts, and its absence means even `admin` cannot simply take the funds. It is
-not a guarantee against a compromised admin key, which can raise the caps and then lose the pool
-through ordinary advances and refunds (see "Choosing the numbers").
+not a guarantee against a compromised admin key: given `CAP_RAISE_DELAY` uncontested, it can
+raise the caps and then lose the pool through ordinary advances and refunds (see "Choosing the
+numbers").
 The cost is that recovery runs at the speed of ordinary settlement, and a genuinely stuck
 advance stays stuck until its job is accepted or refunded.
 

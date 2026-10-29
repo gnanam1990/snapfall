@@ -577,7 +577,7 @@ contract CapsTest is Test {
     }
 
     /// Re-arming after a loss is a deliberate act: only an admin setCaps above the losses
-    /// already taken lets the pool lend again.
+    /// already taken lets the pool lend again, and only after CAP_RAISE_DELAY.
     function test_lossBudgetIsRestoredOnlyByAnExplicitSetCaps() public {
         _openForBusiness();
         _seedPool(400_000_000);
@@ -598,8 +598,15 @@ contract CapsTest is Test {
         pool.requestAdvance(second);
 
         vm.prank(ADMIN);
-        pool.setCaps(50_000_000, MAX_ADVANCE);
+        pool.setCaps(50_000_000, MAX_ADVANCE); // a raise: queued, not applied
         vm.prank(OPERATOR);
-        assertGt(pool.requestAdvance(second), 0, "an explicit raise re-arms the pool");
+        vm.expectRevert(FloatPool.ExposureCapExceeded.selector);
+        pool.requestAdvance(second);
+
+        vm.warp(block.timestamp + pool.CAP_RAISE_DELAY());
+        vm.prank(ADMIN);
+        pool.executeCapsRaise();
+        vm.prank(OPERATOR);
+        assertGt(pool.requestAdvance(second), 0, "an explicit, delayed raise re-arms the pool");
     }
 }

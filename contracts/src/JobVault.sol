@@ -37,6 +37,8 @@ contract JobVault is ReentrancyGuard {
     // regardless of what the daemon or the dashboard does. See docs/MAINNET.md.
     bool public paused;             // blocks job creation and funding; never blocks an exit
     uint256 public maxJobPayment;   // absolute ceiling on one job's escrow; 0 = never set
+    // ── Added Oct 2026: two-step admin transfer, so a leaked key can be rotated ──
+    address public pendingAdmin;
 
     mapping(bytes32 => Job) public jobs;
 
@@ -66,12 +68,17 @@ contract JobVault is ReentrancyGuard {
     error EnforcedPause();
     error CapNotSet();
     error JobTooLarge();
+    // ── Added Oct 2026: admin hardening ──
+    error NotPendingAdmin();
 
     /// SPEC-04 — emitted once, when the FloatPool address is bound.
     event Wired(address indexed floatPool);
     // ── Added Sep 2026 (post-freeze) ──
     event PauseSet(bool paused);
     event MaxJobPaymentSet(uint256 maxJobPayment);
+    // ── Added Oct 2026: admin hardening ──
+    event AdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
 
     constructor(IERC20 _usdc) { usdc = _usdc; admin = msg.sender; }
 
@@ -97,6 +104,22 @@ contract JobVault is ReentrancyGuard {
         if (value == 0) revert ZeroAmount();
         maxJobPayment = value;
         emit MaxJobPaymentSet(value);
+    }
+
+    /// @notice Start handing the admin role to `newAdmin`; it takes effect when they accept.
+    /// @dev Two steps so a mistyped address cannot strand the role. Calling again replaces the
+    ///      pending address; transferring to the current admin cancels a pending transfer.
+    function transferAdmin(address newAdmin) external onlyAdmin {
+        if (newAdmin == address(0)) revert ZeroAddress();
+        pendingAdmin = newAdmin == admin ? address(0) : newAdmin;
+        emit AdminTransferStarted(admin, pendingAdmin);
+    }
+
+    function acceptAdmin() external {
+        if (msg.sender != pendingAdmin || msg.sender == address(0)) revert NotPendingAdmin();
+        emit AdminTransferred(admin, msg.sender);
+        admin = msg.sender;
+        pendingAdmin = address(0);
     }
 
     /// SPEC-04 — set-once wiring, admin only. The waterfall (SC-JV-009) cannot execute
