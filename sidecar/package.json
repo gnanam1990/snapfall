@@ -27,6 +27,7 @@
     "test:self-facilitator": "tsx --test src/self-facilitator-test.ts",
     "test:usdc-domain": "tsx --test src/usdc-domain-chain-test.ts",
     "test:arc-network": "tsx --test src/arc-network-test.ts",
+    "test:circle-facilitator-service": "tsx --test src/circle-facilitator-service-test.ts",
     "x402:simulate": "tsx src/x402-simulate.ts",
     "x402:broadcast": "tsx src/x402-broadcast.ts"
   },
