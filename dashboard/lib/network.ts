@@ -109,11 +109,37 @@ export function privateRpcUrl(env: Env = process.env, name: NetworkName = networ
  */
 export function clientSafeError(error: unknown, fallback: string, env: Env = process.env, name: NetworkName = networkName()): string {
   let message = error instanceof Error ? error.message : fallback;
+
+  // Secrets of the configured RPC on their own, so they go even where no URL surrounds them:
+  // the whole URL in any normalisation, every path segment that could be a token (Alchemy and
+  // Infura put the key at /v2|v3/<key>, QuickNode as a bare segment), and basic-auth userinfo.
   const rpc = privateRpcUrl(env, name);
-  if (rpc) message = message.split(rpc).join('[rpc]');
-  // Provider key paths and query keys, wherever they appear (also covers a URL we did not configure).
-  message = message.replace(/\/v[23]\/[A-Za-z0-9_-]{8,}/g, '/v2/[redacted]');
-  message = message.replace(/([?&](?:api[-_]?key|key|token)=)[^&\s]+/gi, '$1[redacted]');
+  if (rpc) {
+    const secrets = new Set<string>([rpc]);
+    try {
+      const u = new URL(rpc);
+      secrets.add(u.href);
+      secrets.add(u.host + u.pathname);
+      for (const segment of u.pathname.split('/')) if (segment.length >= 8) secrets.add(segment);
+      if (u.username) secrets.add(decodeURIComponent(u.username));
+      if (u.password) secrets.add(decodeURIComponent(u.password));
+      for (const value of u.searchParams.values()) if (value.length >= 8) secrets.add(value);
+    } catch {
+      // Not a parseable URL: the literal string above is still removed.
+    }
+    for (const secret of [...secrets].sort((a, b) => b.length - a.length)) message = message.split(secret).join('[redacted]');
+  }
+
+  // Any URL left, configured or not, is cut to scheme and host: userinfo, path and query are
+  // exactly where providers carry credentials, and none of them helps an operator.
+  message = message.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"<>()]+/gi, (raw) => {
+    try {
+      const u = new URL(raw);
+      return `${u.protocol}//${u.hostname}/[redacted]`;
+    } catch {
+      return '[url]';
+    }
+  });
   return message;
 }
 
