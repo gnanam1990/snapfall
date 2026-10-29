@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JobVault} from "../src/JobVault.sol";
 import {FloatPool} from "../src/FloatPool.sol";
@@ -16,7 +16,8 @@ import {MockUSDC} from "./mocks/MockUSDC.sol";
 ///   1. raising a cap is queued for CAP_RAISE_DELAY; lowering is immediate and cancels a
 ///      queued raise, so the real key holder and the LPs (withdraw is never paused) get a
 ///      window before a larger loss budget exists;
-///   2. admin moves only by transferAdmin + acceptAdmin, on both contracts.
+///   2. admin moves only by transferAdmin + acceptAdmin after ADMIN_TRANSFER_DELAY, on both
+///      contracts, so a leaked key cannot rotate the real holder out before they can cancel.
 contract AdminHardeningTest is Test {
     JobVault internal vault;
     FloatPool internal pool;
@@ -26,6 +27,7 @@ contract AdminHardeningTest is Test {
     address internal constant NEXT     = address(0xA1);
     address internal constant STRANGER = address(0xBAD);
     address internal constant LP       = address(0x1D);
+    address internal constant ATTACKER = address(0xE71);
 
     uint256 internal constant EXPOSURE = 50_000_000;
     uint256 internal constant ADVANCE  = 10_000_000;
@@ -33,7 +35,8 @@ contract AdminHardeningTest is Test {
     event CapsSet(uint256 maxTotalExposure, uint256 maxAdvance);
     event CapsRaiseQueued(uint256 maxTotalExposure, uint256 maxAdvance, uint64 executableAt);
     event CapsRaiseCancelled();
-    event AdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin);
+    event AdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin, uint64 acceptableAt);
+    event AdminTransferCancelled();
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
 
     function setUp() public {
@@ -88,10 +91,15 @@ contract AdminHardeningTest is Test {
         vm.startPrank(ADMIN);
         pool.setCaps(EXPOSURE * 10, ADVANCE * 2);
         vm.warp(block.timestamp + pool.CAP_RAISE_DELAY());
-        vm.expectEmit(address(pool));
-        emit CapsSet(EXPOSURE * 10, ADVANCE * 2);
+        vm.recordLogs();
         pool.executeCapsRaise();
         vm.stopPrank();
+
+        // A raise taking effect must read as a raise taking effect. A monitor watching for
+        // CapsRaiseCancelled as "countered" must never see it on the execute path.
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 1, "execute emits exactly one event");
+        assertEq(logs[0].topics[0], keccak256("CapsSet(uint256,uint256)"));
 
         assertEq(pool.maxTotalExposure(), EXPOSURE * 10);
         assertEq(pool.maxAdvance(), ADVANCE * 2);
@@ -171,12 +179,14 @@ contract AdminHardeningTest is Test {
     // ── 2. Two-step admin transfer, on both contracts ───────────────────
 
     function test_poolAdminTransferIsTwoStep() public {
+        uint64 at = uint64(block.timestamp + pool.ADMIN_TRANSFER_DELAY());
         vm.expectEmit(address(pool));
-        emit AdminTransferStarted(ADMIN, NEXT);
+        emit AdminTransferStarted(ADMIN, NEXT, at);
         vm.prank(ADMIN);
         pool.transferAdmin(NEXT);
         assertEq(pool.admin(), ADMIN, "nothing moves until the new admin accepts");
 
+        vm.warp(at);
         vm.expectEmit(address(pool));
         emit AdminTransferred(ADMIN, NEXT);
         vm.prank(NEXT);
@@ -195,6 +205,7 @@ contract AdminHardeningTest is Test {
         vm.prank(ADMIN);
         vault.transferAdmin(NEXT);
         assertEq(vault.admin(), ADMIN);
+        vm.warp(block.timestamp + vault.ADMIN_TRANSFER_DELAY());
         vm.prank(NEXT);
         vault.acceptAdmin();
         assertEq(vault.admin(), NEXT);
@@ -246,6 +257,8 @@ contract AdminHardeningTest is Test {
     function test_transferToSelfCancelsAPendingTransfer() public {
         vm.startPrank(ADMIN);
         pool.transferAdmin(NEXT);
+        vm.expectEmit(address(pool));
+        emit AdminTransferCancelled();
         pool.transferAdmin(ADMIN);
         vault.transferAdmin(NEXT);
         vault.transferAdmin(ADMIN);
@@ -253,11 +266,107 @@ contract AdminHardeningTest is Test {
         assertEq(pool.pendingAdmin(), address(0));
         assertEq(vault.pendingAdmin(), address(0));
 
+        vm.warp(block.timestamp + pool.ADMIN_TRANSFER_DELAY());
         vm.startPrank(NEXT);
         vm.expectRevert(FloatPool.NotPendingAdmin.selector);
         pool.acceptAdmin();
         vm.expectRevert(JobVault.NotPendingAdmin.selector);
         vault.acceptAdmin();
         vm.stopPrank();
+    }
+
+    // ── 3. Review findings: lockout, mixed changes, timers ──────────────
+
+    function test_acceptBeforeTheDelayReverts() public {
+        vm.startPrank(ADMIN);
+        pool.transferAdmin(NEXT);
+        vault.transferAdmin(NEXT);
+        vm.stopPrank();
+        vm.warp(block.timestamp + pool.ADMIN_TRANSFER_DELAY() - 1);
+
+        vm.startPrank(NEXT);
+        vm.expectRevert(FloatPool.AdminTransferTimelocked.selector);
+        pool.acceptAdmin();
+        vm.expectRevert(JobVault.AdminTransferTimelocked.selector);
+        vault.acceptAdmin();
+        vm.stopPrank();
+    }
+
+    /// The lockout the delay exists for. An attacker holding the same key starts a rotation to
+    /// an address it controls; the real holder sees AdminTransferStarted and cancels it inside
+    /// the window, keeping pause, lower and cancel. Without the delay, the attacker's accept
+    /// would land first and the holder would be out for good.
+    function test_aLeakedKeyCannotRotateTheHolderOut() public {
+        vm.prank(ADMIN); // the attacker, using the leaked key
+        pool.transferAdmin(ATTACKER);
+        vm.prank(ADMIN); // the attacker, same key
+        vault.transferAdmin(ATTACKER);
+
+        vm.prank(ATTACKER);
+        vm.expectRevert(FloatPool.AdminTransferTimelocked.selector);
+        pool.acceptAdmin();
+
+        vm.startPrank(ADMIN); // the holder, inside the window
+        pool.transferAdmin(ADMIN);
+        vault.transferAdmin(ADMIN);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + pool.ADMIN_TRANSFER_DELAY());
+        vm.startPrank(ATTACKER);
+        vm.expectRevert(FloatPool.NotPendingAdmin.selector);
+        pool.acceptAdmin();
+        vm.expectRevert(JobVault.NotPendingAdmin.selector);
+        vault.acceptAdmin();
+        vm.stopPrank();
+
+        assertEq(pool.admin(), ADMIN);
+        assertEq(vault.admin(), ADMIN);
+        vm.prank(ADMIN);
+        pool.setPaused(true); // the holder still has the emergency stop
+    }
+
+    function test_aSecondTransferReplacesThePendingAdminAndRestartsTheDelay() public {
+        vm.prank(ADMIN);
+        pool.transferAdmin(NEXT);
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(ADMIN);
+        pool.transferAdmin(ATTACKER);
+        assertEq(pool.pendingAdmin(), ATTACKER);
+        assertEq(pool.adminTransferAcceptableAt(), uint64(block.timestamp + pool.ADMIN_TRANSFER_DELAY()));
+
+        vm.warp(block.timestamp + 1 days); // NEXT's original window would have elapsed here
+        vm.prank(NEXT);
+        vm.expectRevert(FloatPool.NotPendingAdmin.selector);
+        pool.acceptAdmin();
+        vm.prank(ATTACKER);
+        vm.expectRevert(FloatPool.AdminTransferTimelocked.selector);
+        pool.acceptAdmin();
+    }
+
+    /// Raising one cap while lowering the other used to queue the whole change, silently
+    /// deferring the lowering by the raise delay. In an incident that is a trap; it reverts.
+    function test_aMixedRaiseAndLowerReverts() public {
+        vm.startPrank(ADMIN);
+        vm.expectRevert(FloatPool.MixedCapChange.selector);
+        pool.setCaps(EXPOSURE + 1, ADVANCE - 1);
+        vm.expectRevert(FloatPool.MixedCapChange.selector);
+        pool.setCaps(EXPOSURE - 1, ADVANCE + 1);
+        vm.stopPrank();
+        assertEq(pool.maxTotalExposure(), EXPOSURE);
+        assertEq(pool.capRaiseExecutableAt(), 0);
+    }
+
+    function test_reQueueingARaiseRestartsTheTimer() public {
+        vm.prank(ADMIN);
+        pool.setCaps(EXPOSURE * 2, ADVANCE);
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(ADMIN);
+        pool.setCaps(EXPOSURE * 3, ADVANCE);
+        assertEq(pool.capRaiseExecutableAt(), uint64(block.timestamp + pool.CAP_RAISE_DELAY()));
+
+        vm.warp(block.timestamp + 1 days); // the first raise's delay would be over
+        vm.prank(ADMIN);
+        vm.expectRevert(FloatPool.CapRaiseTimelocked.selector);
+        pool.executeCapsRaise();
     }
 }

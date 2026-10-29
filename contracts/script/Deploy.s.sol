@@ -51,9 +51,10 @@ contract Deploy is Script {
         require(maxJobPayment > 0, "SNAPFALL_MAX_JOB_PAYMENT must be > 0");
         require(maxAdvance <= maxTotalExposure, "per-advance cap cannot exceed the total ceiling");
 
-        // Optional: hand admin off the deployer key in the same run. The new admin still has to
-        // call acceptAdmin() on both contracts from its own signer (a multisig or hardware
-        // wallet), so a wrong address here strands nothing; until then the deployer stays admin.
+        // Optional: start handing admin off the deployer key in the same run. The new admin calls
+        // acceptAdmin() on both contracts from its own signer (a multisig or hardware wallet)
+        // once ADMIN_TRANSFER_DELAY has passed, so a wrong address here strands nothing: until
+        // then the deployer stays admin and can cancel with transferAdmin(deployer).
         address newAdmin = vm.envOr("SNAPFALL_ADMIN", address(0));
 
         console2.log("usdc            ", usdc);
@@ -95,9 +96,11 @@ contract Deploy is Script {
         console2.log("cap:   FloatPool.maxAdvance       ->", pool.maxAdvance());
         console2.log("cap:   JobVault.maxJobPayment     ->", vault.maxJobPayment());
         console2.log("allowlist enabled ->", pool.depositAllowlistEnabled());
-        console2.log("admin (both)      ->", pool.admin());
+        console2.log("admin: FloatPool  ->", pool.admin());
+        console2.log("admin: JobVault   ->", vault.admin());
         if (newAdmin != address(0)) {
-            console2.log("pending admin     ->", newAdmin, "(must call acceptAdmin() on FloatPool and JobVault)");
+            console2.log("pending admin     ->", newAdmin);
+            console2.log("  acceptAdmin() on FloatPool and JobVault from that signer after", pool.adminTransferAcceptableAt());
         }
     }
 }
