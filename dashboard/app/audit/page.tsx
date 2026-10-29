@@ -18,6 +18,7 @@
 
 import Link from 'next/link';
 import { contractAddress, deploymentFor, networkLabel } from '@/lib/network';
+import CapitalControls from '@/components/CapitalControls';
 
 export const metadata = { title: 'Audit · Snapfall' };
 
@@ -155,6 +156,8 @@ export default function AuditPage() {
           ))}
         </ul>
       </section>
+
+      <CapitalControls />
 
       <section className="card mt" aria-labelledby="audit-ordering">
         <h2 className="card-title" id="audit-ordering">
