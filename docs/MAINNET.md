@@ -115,6 +115,11 @@ limits a compromised admin key:
   leaked key therefore cannot rotate you out before you react: `AdminTransferStarted` is
   emitted at once, and `transferAdmin(<your current admin>)` cancels it. Watch for both
   `CapsRaiseQueued` and `AdminTransferStarted`.
+- **Where to watch.** The dashboard's Audit page has a "Capital controls" section read straight
+  from the contracts: the lifetime budget (lent, lost, left), the caps, pause state, a queued
+  raise and any pending admin, each with its deadline. `GET /api/governance` returns the same
+  as JSON; alert whenever `pendingCapRaise` or a `pendingAdmin` is non-null and you did not
+  start it.
 - **Move admin off the deployer** right after deploying (`SNAPFALL_ADMIN` in `Deploy.s.sol`
   starts the handoff; the new signer accepts after the delay), ideally to a multisig or
   hardware wallet, and keep it separate from every key the daemon holds.
