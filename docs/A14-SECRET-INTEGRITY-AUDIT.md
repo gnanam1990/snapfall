@@ -34,6 +34,14 @@ categories it deliberately does not catch are listed in **What this gate does no
 below; read it before treating a green result as "no secret ever existed". A confirmed
 credential leak requires rotation even if a later local checkout cannot reach the leaked object.
 
+Published history cannot be rewritten, so a reviewed inert fixture that once matched would keep
+the gate red forever. `scripts/a14-audit.inert-blobs` lists such cases as
+`<blob> | exact/path | justification`: one exact file version at one exact path, exempt from
+the **history** scan only. The current tree is never exempt, the same content at another path is
+not covered, and any edit to the file is a new blob that is scanned again. The command prints
+every exemption it applied. An entry is a code-review decision, never a way to keep a real
+credential: a real leak still requires rotation.
+
 ## Secret review
 
 The audit covered:

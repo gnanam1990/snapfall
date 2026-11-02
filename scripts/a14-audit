@@ -81,9 +81,48 @@ while IFS= read -r revision; do
   scan_grep "revision $revision" "$revision" -- . ':(exclude)contracts/lib/**' >>"$history_file"
 done <"$revisions_file"
 sort -u -o "$history_file" "$history_file"
-if [[ -s "$history_file" ]]; then
+
+# Reviewed history-only exceptions: one exact file version (blob) at one exact path, confirmed
+# to hold inert test data. Published history cannot be rewritten, so without this a reviewed
+# fixture would keep the gate red forever. The current tree is never exempt, and any edit to
+# the file is a new blob that is scanned again.
+inert_file="$repo_root/scripts/a14-audit.inert-blobs"
+inert_pairs="$work_dir/inert-pairs"
+: >"$inert_pairs"
+inert_entry_pattern='^[[:space:]]*([0-9a-f]{40}|[0-9a-f]{64})[[:space:]]*[|][[:space:]]*([^|[:space:]]+)[[:space:]]*[|][[:space:]]*[^[:space:]]'
+if [[ -f "$inert_file" ]]; then
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
+    [[ "$entry" =~ ^[[:space:]]*(#|$) ]] && continue
+    if [[ ! "$entry" =~ $inert_entry_pattern ]]; then
+      die_scan "malformed inert-blob entry; expected <blob> | exact/path | justification"
+    fi
+    printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >>"$inert_pairs"
+  done <"$inert_file"
+fi
+history_remaining="$work_dir/history-remaining"
+inert_used="$work_dir/inert-used"
+: >"$history_remaining"
+: >"$inert_used"
+while IFS= read -r hit; do
+  revision="${hit%%:*}"
+  hit_path="${hit#*:}"
+  if ! blob="$(git rev-parse --verify -q "$revision:$hit_path")"; then
+    die_scan "could not resolve the object behind history hit $hit"
+  fi
+  if grep -Fqx -- "$blob $hit_path" "$inert_pairs"; then
+    printf '%s %s\n' "$blob" "$hit_path" >>"$inert_used"
+  else
+    printf '%s\n' "$hit" >>"$history_remaining"
+  fi
+done <"$history_file"
+if [[ -s "$inert_used" ]]; then
+  echo "INFO: reviewed inert history versions (scripts/a14-audit.inert-blobs):"
+  sort -u "$inert_used"
+fi
+
+if [[ -s "$history_remaining" ]]; then
   echo "FAIL: high-confidence secret pattern(s) in reachable Git tree history:"
-  cat "$history_file"
+  cat "$history_remaining"
   failed=1
 else
   echo "PASS: no high-confidence secret patterns in reachable Git tree history"
