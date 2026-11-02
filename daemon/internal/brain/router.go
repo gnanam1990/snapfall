@@ -67,6 +67,10 @@ type Brain struct {
 	// after settlement and reads the resulting organization rate.
 	milestoneOracle           MilestoneOracle
 	milestoneObservationGates map[string]*milestoneObservationGate
+	// settlementLanded reads whether a job already reached Accepted on chain. A customer
+	// with their own wallet settles directly; this is how the Accept that follows learns
+	// the settlement already happened instead of submitting a second, doomed one.
+	settlementLanded func(ctx context.Context, vaultJobID string) (bool, error)
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).

@@ -139,7 +139,7 @@ type bootLanes struct {
 // lane binds one signing client to one contract address as a funding.Submitter -
 // Funding holds the only references; nothing else can name a signer.
 type lane struct {
-	c  *chain.Client
+	c  chainSigner
 	to common.Address
 }
 
@@ -492,6 +492,7 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		}
 		return string(js.Stage), true
 	}
+	api.VaultJobID = br.VaultJobID
 	// The snap's owner-initiated trigger: the proposal lands pending in this same
 	// inbox; the owner's approval mints the Grant and Funding stops honestly at
 	// advance.pending_chain until the deployment lands.
@@ -910,7 +911,8 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// a configured deployment with a MISSING key wires no lane, and the affected flow
 	// stops LOUDLY at *.pending_chain (a labeled pending record, never a fabricated
 	// success), the keys are env-only, format-validated, and never logged. The
-	// treasury key signs requestAdvance; the customer key signs acceptDelivery
+	// treasury signs requestAdvance, with a raw key or a Circle developer-controlled
+	// wallet (openTreasury chooses); the customer key signs acceptDelivery
 	// (SC-JV-005, daemon-custodial for the demo, stated openly).
 	if dep != nil {
 		fpAddr := common.HexToAddress(dep.Contracts.FloatPool.Address)
@@ -918,12 +920,16 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		var advanceLane, settleLane funding.Submitter
 		var reader *chain.Client
 		var operator common.Address
-		if treasury, err := chain.NewFromEnv("TREASURY_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
+		if treasury, treasuryReader, kind, err := openTreasury(ctx, log, dep.Network.RPCURL, dep.Network.ChainID); err != nil {
 			log.Warn("treasury chain lane NOT wired, advances stop at advance.pending_chain", "reason", err)
 		} else {
-			advanceLane, reader = lane{treasury, fpAddr}, treasury
+			advanceLane, reader = lane{treasury, fpAddr}, treasuryReader
 			operator = treasury.Address()
-			log.Info("treasury chain lane wired", "signer", treasury.Address().Hex(), "floatPool", fpAddr.Hex())
+			log.Info("treasury chain lane wired", "signer", treasury.Address().Hex(), "via", kind, "floatPool", fpAddr.Hex())
+			if configured, bad := treasuryAddressMismatch(treasury.Address()); bad {
+				log.Warn("SNAPFALL_TREASURY_ADDRESS is not the treasury signer; the owner API will report another org's rate and advances",
+					"configured", configured, "signer", treasury.Address().Hex())
+			}
 		}
 		if customer, err := chain.NewFromEnv("SNAPFALL_CUSTOMER_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
 			log.Warn("customer chain lane NOT wired, settlements stop at settlement.pending_chain", "reason", err)
@@ -944,6 +950,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 			chainBudgets = &chainBudget{reader: reader, jobVault: jvAddr, led: led, log: log, noted: make(map[string]bool)}
 			oracle := chain.Oracle{Reader: reader, FloatPool: fpAddr, JobVault: jvAddr, Org: operator}
 			adv.SetOracle(oracle)
+			// A customer with their own wallet settles on chain directly; the Accept that
+			// follows must find that out instead of submitting a second acceptDelivery.
+			br.SetSettlementOracle(oracle.SettlementLanded)
 			// Read the org's current advance rate at intent creation so the amount the
 			// owner approves matches what FloatPool draws (no hardcoded-50%-vs-55%
 			// divergence when the rate has climbed).

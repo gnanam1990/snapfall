@@ -18,11 +18,11 @@ const NAV: { href: string; label: string }[] = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  // Two surfaces are not the owner's dashboard and must not carry its navigation.
-  // The customer portal (V9) is a magic-link surface for a different principal. The landing
+  // These surfaces are not the owner's dashboard and must not carry its navigation.
+  // The customer portal (V9) and the customer's /pay page are for a different principal. The landing
   // page at "/" is for someone who does not yet know what this is; showing them an operator
-  // nav before the product has been explained is the wrong first move. Both render full-bleed.
-  if (pathname === '/' || pathname?.startsWith('/portal')) return null;
+  // nav before the product has been explained is the wrong first move. All render full-bleed.
+  if (pathname === '/' || pathname?.startsWith('/portal') || pathname?.startsWith('/pay/')) return null;
   return (
     <aside className="sidebar">
       <div className="brand">

@@ -188,6 +188,70 @@ func BuildPlan(priceMicros *big.Int, rateBps uint64, currentTVLMicros, desiredTV
 	}, nil
 }
 
+// Controls is the absolute capital-control state (docs/MAINNET.md) that JobVault.createJob/fund
+// and FloatPool.requestAdvance check before the percentage caps above. Those caps scale with TVL,
+// so a plan that only models them can print "ready" on a pool that will still refuse the snap.
+//
+// A pool deployed before the controls existed (the Arc testnet pool today) has none of these
+// views. Present is then false and there is nothing to check.
+type Controls struct {
+	Present     bool
+	PoolPaused  bool
+	VaultPaused bool
+	// MaxTotalExposure bounds open principal PLUS every loss already written off (#107), so
+	// TotalWrittenOff is part of the check, not a statistic.
+	MaxTotalExposure *big.Int
+	MaxAdvance       *big.Int
+	TotalWrittenOff  *big.Int
+	MaxJobPayment    *big.Int
+}
+
+// LossBudgetLeft is what the exposure ceiling still allows on top of the pool's open book:
+// maxTotalExposure - totalOutstanding - totalWrittenOff, floored at zero.
+func LossBudgetLeft(c Controls, exposure Exposure) *big.Int {
+	left := new(big.Int).Sub(orZero(c.MaxTotalExposure), orZero(exposure.TotalOutstandingMicros))
+	left.Sub(left, orZero(c.TotalWrittenOff))
+	if left.Sign() < 0 {
+		return new(big.Int)
+	}
+	return left
+}
+
+// ControlBlocker returns why the run would revert under the capital controls, naming the
+// contract's own error, or "" when it would not. Checks follow the contracts' order: createJob
+// and fund on JobVault, then requestAdvance on FloatPool.
+func ControlBlocker(c Controls, plan Plan) string {
+	if !c.Present {
+		return ""
+	}
+	if c.VaultPaused {
+		return "JobVault is paused, so createJob and fund revert EnforcedPause"
+	}
+	if orZero(c.MaxJobPayment).Sign() == 0 {
+		return "JobVault.maxJobPayment is unset, so createJob reverts CapNotSet"
+	}
+	if plan.PriceMicros.Cmp(c.MaxJobPayment) > 0 {
+		return fmt.Sprintf("the job price %s USDC is above JobVault.maxJobPayment %s, so createJob reverts JobTooLarge",
+			FormatUSDC(plan.PriceMicros), FormatUSDC(c.MaxJobPayment))
+	}
+	if c.PoolPaused {
+		return "FloatPool is paused, so the snap reverts EnforcedPause"
+	}
+	if orZero(c.MaxTotalExposure).Sign() == 0 || orZero(c.MaxAdvance).Sign() == 0 {
+		return "FloatPool caps are unset, so the snap reverts CapNotSet"
+	}
+	if plan.AdvanceMicros.Cmp(c.MaxAdvance) > 0 {
+		return fmt.Sprintf("the advance %s USDC is above FloatPool.maxAdvance %s, so the snap reverts AdvanceTooLarge",
+			FormatUSDC(plan.AdvanceMicros), FormatUSDC(c.MaxAdvance))
+	}
+	if left := LossBudgetLeft(c, plan.Exposure); plan.AdvanceMicros.Cmp(left) > 0 {
+		return fmt.Sprintf("the advance %s USDC exceeds what maxTotalExposure %s still allows (%s: %s open, %s already written off), so the snap reverts ExposureCapExceeded",
+			FormatUSDC(plan.AdvanceMicros), FormatUSDC(c.MaxTotalExposure), FormatUSDC(left),
+			FormatUSDC(orZero(plan.Exposure.TotalOutstandingMicros)), FormatUSDC(orZero(c.TotalWrittenOff)))
+	}
+	return ""
+}
+
 // JobID derives the bytes32 vault job id for a run.
 //
 // Every run gets a FRESH id, because JobVault.createJob reverts with JobExists once an id is

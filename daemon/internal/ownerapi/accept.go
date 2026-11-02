@@ -45,9 +45,15 @@ func (s *Server) handleCustomerAcceptance(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusNotFound, "UNKNOWN_JOB", "the daemon has no such job", nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"jobId": r.PathValue("id"), "stage": stage, "accepted": stage == string(brain.StageAccepted),
-	})
+	}
+	if s.VaultJobID != nil {
+		if v := s.VaultJobID(r.PathValue("id")); v != "" {
+			out["vaultJobId"] = v
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // GET /api/v1/customer/jobs/{id}/invoice — the customer's receipt (V9), credential-gated.

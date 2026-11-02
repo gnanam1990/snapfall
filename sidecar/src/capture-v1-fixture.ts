@@ -38,7 +38,8 @@
  *
  * Env (see sidecar/.env.example; runbook: docs/V3-CIRCLE-SETUP.md):
  *   V1_FIXTURE_RESOURCE   full http(s) URL of the 0.04 USDC resource to buy (this file only)
- *   TREASURY_PRIVATE_KEY  testnet-only signer, read by buyer.ts loadSigner()
+ *   TREASURY_PRIVATE_KEY  testnet-only signer, read by buyer.ts loadSigner(); or
+ *   CIRCLE_TREASURY_WALLET_ID (+ CIRCLE_API_KEY, CIRCLE_ENTITY_SECRET) for the Circle wallet
  *   ARC_USDC_ADDRESS      real Arc-testnet USDC; the EIP-712 verifyingContract (seller.ts too)
  *   SELLER_ADDRESS        the real payee the seller quotes (seller.ts too)
  *   ARC_CHAIN_ID          optional, must be 5042002 if set (seller.ts too)
@@ -49,6 +50,7 @@
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { purchase, loadSigner, type ApprovedIntent, type PurchaseResult } from './buyer.js';
+import { ENV_WALLET_ID } from './circle-wallet.js';
 import { DRY_RUN_SETTLEMENTS, isConfirmedSettlement } from './settlement-markers.js';
 import {
   CIRCLE_TESTNET_FACILITATOR_ENDPOINTS,
@@ -239,10 +241,11 @@ function readConfig(): CaptureConfig {
     }
   }
 
-  if (!process.env.TREASURY_PRIVATE_KEY) {
+  // The treasury signer is either the Circle wallet or the raw key, by loadSigner's own rule.
+  if (!process.env[ENV_WALLET_ID]?.trim() && !process.env.TREASURY_PRIVATE_KEY) {
     refusals.push(
-      'TREASURY_PRIVATE_KEY is not set. The fixture must be signed by the real testnet ' +
-        'treasury key, never an ephemeral one (see sidecar/.env.example).',
+      `Neither ${ENV_WALLET_ID} nor TREASURY_PRIVATE_KEY is set. The fixture must be signed by the ` +
+        'real testnet treasury, never an ephemeral key (see sidecar/.env.example).',
     );
   }
 
@@ -376,7 +379,7 @@ async function main(): Promise<void> {
   }
 
   const config = readConfig();
-  const account = loadSigner();
+  const account = await loadSigner();
 
   console.log('\nV1 fixture capture: a REAL four-cent purchase, or nothing.\n');
   console.log(`  resource : ${config.resource}`);

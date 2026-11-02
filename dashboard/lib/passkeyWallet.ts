@@ -1,0 +1,166 @@
+/**
+ * The browser half of the customer's own wallet: a passkey on their device that owns a Circle
+ * modular smart account on Arc, with Circle's paymaster sponsoring gas.
+ *
+ * CUSTODY, stated: the passkey never leaves the customer's device and neither Snapfall nor
+ * Circle can sign with it. The client key below is a PUBLIC key by design (Circle restricts it
+ * to the configured web domain); it identifies the app to Circle's bundler, it authorizes
+ * nothing.
+ *
+ * MINED IS NOT SUCCEEDED, again: a user operation's bundle transaction can succeed while the
+ * call inside it reverted. Only the user-operation receipt's `success` says whether the call
+ * happened, so that is what `send` checks, and a false is an error, never a "done".
+ *
+ * Everything here is loaded lazily from a click handler: the SDK touches `window` and
+ * WebAuthn, so it must never run during server rendering.
+ */
+
+'use client';
+
+import type { Address, Hex } from 'viem';
+import type { WalletCall } from './customerWallet';
+import { ERC20_BALANCE_ABI, MESSAGE_TRANSMITTER_ABI, type CctpNetwork } from './cctp';
+
+/** Circle's documented modular-wallet backend; the same for every app. */
+const DEFAULT_CLIENT_URL = 'https://modular-sdk.circle.com/v1/rpc/w3s/buidl';
+
+/** Circle's path segment for each chain the deployment can name (Arc), keyed by chain id. */
+const CHAIN_PATH: Record<number, string> = { 5042002: 'arcTestnet', 5042: 'arc' };
+
+/** Circle's path segment for each CCTP source chain the portal offers, keyed by viem chain key. */
+const SOURCE_PATH: Record<CctpNetwork['chainKey'], string> = {
+  baseSepolia: 'baseSepolia',
+  sepolia: 'sepolia',
+  arbitrumSepolia: 'arbitrumSepolia',
+  base: 'base',
+  mainnet: 'mainnet',
+  arbitrum: 'arbitrum',
+};
+
+const CREDENTIAL_STORE = 'snapfall.passkeyCredential';
+
+export interface PasskeyConfig {
+  clientKey: string;
+  clientUrl: string;
+}
+
+/** Null when the portal has no Circle client key: the self-custody path is then not offered. */
+export function passkeyConfig(): PasskeyConfig | null {
+  const clientKey = process.env.NEXT_PUBLIC_CIRCLE_CLIENT_KEY ?? '';
+  if (!clientKey) return null;
+  return { clientKey, clientUrl: process.env.NEXT_PUBLIC_CIRCLE_CLIENT_URL || DEFAULT_CLIENT_URL };
+}
+
+export interface ChainWallet {
+  address: string;
+  /** Sends the calls as one sponsored user operation and returns its transaction hash. */
+  send(calls: WalletCall[]): Promise<Hex>;
+  /** ERC-20 balance (6dp surface on Arc, never the 18dp native one). */
+  balanceOf(token: string): Promise<bigint>;
+}
+
+export interface PasskeySession extends ChainWallet {
+  /** The same passkey's smart account on a CCTP source chain. No new passkey is created. */
+  onSource(net: CctpNetwork): Promise<ChainWallet>;
+  /** Whether MessageTransmitterV2 on Arc has already received the message with this nonce. */
+  nonceUsed(transmitter: string, nonce: Hex): Promise<boolean>;
+}
+
+/**
+ * Sign in with an existing passkey ('login') or create one ('register'). The credential's
+ * public part is remembered in this browser so a returning customer is offered the same
+ * account; it is not a secret (the private key stays in the authenticator).
+ */
+export async function connectPasskey(
+  cfg: PasskeyConfig,
+  chainId: number,
+  mode: 'login' | 'register',
+  username?: string,
+): Promise<PasskeySession> {
+  const chainPath = CHAIN_PATH[chainId];
+  if (!chainPath) throw new Error(`Circle modular wallets are not configured for chain ${chainId}`);
+
+  const [sdk, viem, chains, aa] = await Promise.all([
+    import('@circle-fin/modular-wallets-core'),
+    import('viem'),
+    import('viem/chains'),
+    import('viem/account-abstraction'),
+  ]);
+  const chain = chainId === 5042 ? chains.arc : chains.arcTestnet;
+
+  const passkeyTransport = sdk.toPasskeyTransport(cfg.clientUrl, cfg.clientKey);
+  const credential = await sdk.toWebAuthnCredential({
+    transport: passkeyTransport,
+    mode: mode === 'register' ? sdk.WebAuthnMode.Register : sdk.WebAuthnMode.Login,
+    ...(mode === 'register' ? { username: username?.trim() || 'snapfall-customer' } : {}),
+  });
+  try {
+    window.localStorage.setItem(CREDENTIAL_STORE, JSON.stringify({ id: credential.id }));
+  } catch {
+    // Storage blocked: the customer simply signs in with their passkey again next time.
+  }
+
+  const owner = aa.toWebAuthnAccount({ credential });
+
+  // One smart account per chain, all owned by the same passkey. Writes go through Circle's
+  // bundler (with its paymaster); reads use the chain's public RPC, which needs no client key.
+  async function walletOn(chain: import('viem').Chain, path: string): Promise<ChainWallet & { reader: import('viem').PublicClient }> {
+    const transport = sdk.toModularTransport(`${cfg.clientUrl}/${path}`, cfg.clientKey);
+    const client = viem.createPublicClient({ chain, transport });
+    const account = await sdk.toCircleSmartAccount({ client, owner });
+    const bundler = aa.createBundlerClient({ account, chain, transport });
+    const reader = viem.createPublicClient({ chain, transport: viem.http() }) as import('viem').PublicClient;
+    return {
+      address: account.address,
+      reader,
+      async send(calls) {
+        const hash = await bundler.sendUserOperation({ calls, paymaster: true });
+        const receipt = await bundler.waitForUserOperationReceipt({ hash });
+        if (!receipt.success) {
+          throw new Error(
+            `The transaction was included but the call failed (user operation ${hash}). Nothing changed on chain.`,
+          );
+        }
+        return receipt.receipt.transactionHash;
+      },
+      balanceOf(token) {
+        return reader.readContract({
+          address: token as Address,
+          abi: ERC20_BALANCE_ABI,
+          functionName: 'balanceOf',
+          args: [account.address],
+        });
+      },
+    };
+  }
+
+  const arcWallet = await walletOn(chain, chainPath);
+  return {
+    address: arcWallet.address,
+    send: arcWallet.send,
+    balanceOf: arcWallet.balanceOf,
+    async onSource(net) {
+      const src = (chains as unknown as Record<string, import('viem').Chain>)[net.chainKey];
+      if (!src || src.id !== net.chainId) throw new Error(`${net.label} is not a known chain`);
+      return walletOn(src, SOURCE_PATH[net.chainKey]);
+    },
+    async nonceUsed(transmitter, nonce) {
+      const used = await arcWallet.reader.readContract({
+        address: transmitter as Address,
+        abi: MESSAGE_TRANSMITTER_ABI,
+        functionName: 'usedNonces',
+        args: [nonce],
+      });
+      return used !== 0n;
+    },
+  };
+}
+
+/** Whether this browser has signed in with a passkey before (so "Sign in" is the likely path). */
+export function hasRememberedPasskey(): boolean {
+  try {
+    return window.localStorage.getItem(CREDENTIAL_STORE) !== null;
+  } catch {
+    return false;
+  }
+}

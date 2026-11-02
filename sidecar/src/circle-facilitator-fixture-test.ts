@@ -4,8 +4,8 @@ import { validateCircleV1Fixture } from './circle-facilitator-fixture.js';
 const validFixture = {
   x402Version: 1,
   facilitatorEndpoints: {
-    verify: 'https://gateway-api-testnet.circle.com/gateway/v1/x402/verify',
-    settle: 'https://gateway-api-testnet.circle.com/gateway/v1/x402/settle',
+    verify: 'https://gateway-api-testnet.circle.com/v1/x402/verify',
+    settle: 'https://gateway-api-testnet.circle.com/v1/x402/settle',
   },
 };
 
