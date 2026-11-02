@@ -391,3 +391,91 @@ func TestNilExposureIsTreatedAsFresh(t *testing.T) {
 		t.Fatal("plan exposure must be materialized, not nil")
 	}
 }
+
+// controlledPlan is the demo's 25 USDC job at 50% (a 12.50 advance) against a pool that already
+// has 10 USDC open, with controls that let it through.
+func controlledPlan(t *testing.T) (Plan, Controls) {
+	t.Helper()
+	plan, err := BuildPlan(usdc(t, "25"), 5000, usdc(t, "150"), nil,
+		Exposure{OrgOutstandingMicros: usdc(t, "10"), TotalOutstandingMicros: usdc(t, "10")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan, Controls{
+		Present:          true,
+		MaxTotalExposure: usdc(t, "50"),
+		MaxAdvance:       usdc(t, "12.5"),
+		TotalWrittenOff:  usdc(t, "27.5"),
+		MaxJobPayment:    usdc(t, "25"),
+	}
+}
+
+// Every capital control the contracts check is modelled, each at its exact boundary: the
+// contracts revert on STRICTLY greater, so equality passes and one micro more does not.
+func TestControlBlockerMirrorsTheContractChecks(t *testing.T) {
+	plan, ok := controlledPlan(t)
+	if got := ControlBlocker(ok, plan); got != "" {
+		t.Fatalf("a run exactly at every limit was blocked: %s", got)
+	}
+	if left := LossBudgetLeft(ok, plan.Exposure); left.Cmp(usdc(t, "12.5")) != 0 {
+		t.Fatalf("loss budget left = %s, want 12.50 (50 - 10 open - 27.50 written off)", FormatUSDC(left))
+	}
+
+	micro := big.NewInt(1)
+	for _, c := range []struct {
+		name  string
+		tweak func(*Controls)
+		want  string
+	}{
+		{"vault paused", func(c *Controls) { c.VaultPaused = true }, "EnforcedPause"},
+		{"job cap unset", func(c *Controls) { c.MaxJobPayment = new(big.Int) }, "CapNotSet"},
+		{"job too large", func(c *Controls) { c.MaxJobPayment = new(big.Int).Sub(usdc(t, "25"), micro) }, "JobTooLarge"},
+		{"pool paused", func(c *Controls) { c.PoolPaused = true }, "EnforcedPause"},
+		{"total cap unset", func(c *Controls) { c.MaxTotalExposure = nil }, "CapNotSet"},
+		{"advance cap unset", func(c *Controls) { c.MaxAdvance = new(big.Int) }, "CapNotSet"},
+		{"advance too large", func(c *Controls) { c.MaxAdvance = new(big.Int).Sub(usdc(t, "12.5"), micro) }, "AdvanceTooLarge"},
+		// The #107 case: open book alone (10 + 12.50) is far under 50, but losses already taken
+		// count forever, and one more micro of them is enough to refuse.
+		{"lifetime loss budget spent", func(c *Controls) { c.TotalWrittenOff = new(big.Int).Add(usdc(t, "27.5"), micro) }, "ExposureCapExceeded"},
+	} {
+		ctl := ok
+		c.tweak(&ctl)
+		got := ControlBlocker(ctl, plan)
+		if !strings.Contains(got, c.want) {
+			t.Fatalf("%s: blocker %q, want one naming %s", c.name, got, c.want)
+		}
+	}
+
+	// A pool that predates the controls has nothing to check, whatever the zero values say.
+	if got := ControlBlocker(Controls{}, plan); got != "" {
+		t.Fatalf("a pool without controls was blocked: %s", got)
+	}
+}
+
+// The model above is only right while the contracts check exactly this. Pin the checks to the
+// source, the same way TestPoolCapsMatchContract pins the percentage caps.
+func TestControlBlockerMatchesContractSource(t *testing.T) {
+	for file, checks := range map[string][]string{
+		"FloatPool.sol": {
+			`if (paused) revert EnforcedPause();`,
+			`if (maxTotalExposure == 0 || maxAdvance == 0) revert CapNotSet();`,
+			`if (principal > maxAdvance) revert AdvanceTooLarge();`,
+			`if (totalOutstanding + totalWrittenOff > maxTotalExposure) revert ExposureCapExceeded();`,
+		},
+		"JobVault.sol": {
+			`if (paused) revert EnforcedPause();`,
+			`if (maxJobPayment == 0) revert CapNotSet();`,
+			`if (customerPayment > maxJobPayment) revert JobTooLarge();`,
+		},
+	} {
+		src, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "src", file))
+		if err != nil {
+			t.Skipf("contract source not available (%v)", err)
+		}
+		for _, want := range checks {
+			if !strings.Contains(string(src), want) {
+				t.Fatalf("%s no longer contains %q; update ControlBlocker to match", file, want)
+			}
+		}
+	}
+}

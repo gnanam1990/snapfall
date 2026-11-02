@@ -139,6 +139,15 @@ jobs:
         # Request shaping, the keyless seller proof (recovers to payTo over the exact body sent)
         # and settlement honesty: only a real hash is settled; pending, 409 and 5xx are unknown.
         run: npm run test:circle-facilitator-service
+      - name: Circle treasury signer refuses what it cannot safely sign
+        # A fake Circle API decrypts each entity-secret ciphertext and signs the JSON it was sent;
+        # the signer must recover every signature to the wallet before using it, and must never
+        # fall back to TREASURY_PRIVATE_KEY when a Circle wallet is configured.
+        run: npm run test:circle-wallet
+      - name: Circle relayer settles only on our own receipt
+        # The self-facilitator with a Circle wallet submitting transferWithAuthorization: Circle's
+        # COMPLETE is not the verdict, "never broadcast" is rejected, and "may have landed" is unknown.
+        run: npm run test:circle-relayer
       - name: Seller survives malformed payments
         # Twelve bodies that each used to exit the process, including a well-formed payment whose
         # signature does not recover. A dead seller mid-demo is unrecoverable on stage.

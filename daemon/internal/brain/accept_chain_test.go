@@ -3,10 +3,12 @@ package brain
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gnanam1990/snapfall/daemon/internal/billing"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
@@ -258,4 +260,83 @@ func repeat64(s string) string {
 		out += s
 	}
 	return out
+}
+
+// panicLane fails the test if anything submits through it: a job the customer already
+// settled from their own wallet must never get a second acceptDelivery.
+type panicLane struct{ t *testing.T }
+
+func (p panicLane) Submit(context.Context, []byte) (funding.ChainOutcome, error) {
+	p.t.Fatal("the customer lane was used for a job the chain says is already settled")
+	return funding.ChainOutcome{}, nil
+}
+
+// Self-custody customer: their wallet signed acceptDelivery, then the portal sends the
+// credential-gated Accept. The chain is the oracle, so the settlement is recorded as
+// executed by the customer, with the indexed transaction when there is one, and the
+// custodial lane is never touched. Without the check the lane would submit, mine, revert,
+// and report a failed settlement of a job that settled fine.
+func TestAcceptChain_CustomerWalletSettlementIsObservedNotResubmitted(t *testing.T) {
+	for _, indexed := range []bool{true, false} {
+		b, st, jobID := acceptRig(t)
+		vault := "0x" + repeat64("c")
+		if err := b.memory.Update(jobID, func(jm *JobMemory) { jm.VaultJobID = vault }); err != nil {
+			t.Fatal(err)
+		}
+		b.SetBilling(billing.New(st, g12Chain, nil))
+		if indexed {
+			seedChainRow(t, st, "JobSettled", vault, "0x"+repeat64("d"), 77,
+				map[string]string{"advanceRepaidAtomic": "0", "operatorNetAtomic": "1000000"})
+		}
+		b.funding.SetChain(nil, panicLane{t})
+		var asked []string
+		b.SetSettlementOracle(func(_ context.Context, v string) (bool, error) {
+			asked = append(asked, v)
+			return true, nil
+		})
+
+		state, err := b.AcceptDelivery(context.Background(), jobID)
+		if err != nil || state != "accepted-settled" {
+			t.Fatalf("indexed=%v: state=%q err=%v", indexed, state, err)
+		}
+		if len(asked) != 1 || asked[0] != vault {
+			t.Fatalf("oracle asked %v, want the bound vault id", asked)
+		}
+		var actor, payload string
+		if err := st.DB().QueryRow(`SELECT actor, payload_json FROM events WHERE kind='settlement.executed' AND entity_id=?`,
+			jobID).Scan(&actor, &payload); err != nil {
+			t.Fatalf("indexed=%v: %v", indexed, err)
+		}
+		if actor != "customer" {
+			t.Fatalf("actor %q, want customer", actor)
+		}
+		hasHash := strings.Contains(payload, repeat64("d"))
+		if hasHash != indexed || strings.Contains(payload, "tx_hash_pending") == indexed {
+			t.Fatalf("indexed=%v: payload %s", indexed, payload)
+		}
+	}
+}
+
+// Not settled on chain, or an unreadable chain: the Accept takes the customer lane exactly
+// as before this check existed.
+func TestAcceptChain_UnsettledOrUnreadableChainUsesTheLane(t *testing.T) {
+	for _, oracle := range []func(context.Context, string) (bool, error){
+		func(context.Context, string) (bool, error) { return false, nil },
+		func(context.Context, string) (bool, error) { return false, errors.New("rpc down") },
+	} {
+		b, st, jobID := acceptRig(t)
+		if err := b.memory.Update(jobID, func(jm *JobMemory) { jm.VaultJobID = "0x" + repeat64("e") }); err != nil {
+			t.Fatal(err)
+		}
+		b.funding.SetChain(nil, fakeSettleLane{out: funding.ChainOutcome{Submitted: true, TxHash: "0xlane"}})
+		b.SetSettlementOracle(oracle)
+		if state, err := b.AcceptDelivery(context.Background(), jobID); err != nil || state != "accepted-settled" {
+			t.Fatalf("state=%q err=%v", state, err)
+		}
+		var actor string
+		if err := st.DB().QueryRow(`SELECT actor FROM events WHERE kind='settlement.executed' AND entity_id=?`,
+			jobID).Scan(&actor); err != nil || actor != "funding" {
+			t.Fatalf("actor=%q err=%v, want the funding lane's record", actor, err)
+		}
+	}
 }

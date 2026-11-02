@@ -22,6 +22,8 @@
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { formatUsdcExact } from '@/lib/format';
+import { OwnWalletPanel } from '@/components/OwnWalletPanel';
+import { passkeyConfig } from '@/lib/passkeyWallet';
 
 type Gap = { stage: string; cause: string };
 type Line = { kind: string; block: number; payload: Record<string, string> };
@@ -65,6 +67,8 @@ function PortalInner() {
   const token = useSearchParams().get('token') ?? '';
 
   const [stage, setStage] = useState<string | null>(null);
+  /** The job's on-chain id; the customer's own wallet needs it to settle. */
+  const [vaultJobId, setVaultJobId] = useState<string | null>(null);
   const [accepted, setAccepted] = useState(false);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   // A note is either the new state after a successful accept, or a failure. They must not look
@@ -97,6 +101,7 @@ function PortalInner() {
       }
       const body = await res.json().catch(() => ({}));
       setStage(body.stage ?? null);
+      setVaultJobId(typeof body.vaultJobId === 'string' ? body.vaultJobId : null);
       setAccepted(Boolean(body.accepted));
       setStatusUnavailable(false);
     } catch {
@@ -178,6 +183,11 @@ function PortalInner() {
   }
 
   const paid = invoice?.totals?.[CUSTOMER_SAFE.paid] ?? null;
+  // SELF-CUSTODY MODE: with a Circle client key configured, the customer settles from their own
+  // passkey wallet and the daemon-custodial button is not offered at all. Two Accept buttons that
+  // settle through different keys would be a choice the customer cannot make well, and the
+  // custodial one would revert against a job whose customer is the customer's own wallet.
+  const selfCustody = passkeyConfig() !== null;
 
   return (
     <div className="portal-card">
@@ -201,6 +211,15 @@ function PortalInner() {
           been accepted or settled. Please refresh in a moment, or ask the operator for a fresh
           link.
         </p>
+      ) : !accepted && selfCustody ? (
+        vaultJobId ? (
+          <OwnWalletPanel vaultJobId={vaultJobId} onAccepted={accept} />
+        ) : (
+          <p className="portal-body">
+            This delivery is not linked to its on-chain escrow yet, so it cannot be settled from your
+            wallet. Please ask the operator.
+          </p>
+        )
       ) : !accepted ? (
         <>
           <p className="portal-body">

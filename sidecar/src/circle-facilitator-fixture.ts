@@ -1,6 +1,12 @@
+/**
+ * Circle Gateway's x402 facilitator on testnet. The path is `/v1/x402/*` on the Gateway API host
+ * (Circle's OpenAPI spec for VerifyX402Payment / SettleX402Payment). An earlier `/gateway/v1/x402/*`
+ * was checked live on 2026-10-28 and answers 404 "Resource not found", while `/v1/x402/*` answers
+ * 400 asking for paymentPayload and paymentRequirements: the old path could never have worked.
+ */
 export const CIRCLE_TESTNET_FACILITATOR_ENDPOINTS = {
-  verify: 'https://gateway-api-testnet.circle.com/gateway/v1/x402/verify',
-  settle: 'https://gateway-api-testnet.circle.com/gateway/v1/x402/settle',
+  verify: 'https://gateway-api-testnet.circle.com/v1/x402/verify',
+  settle: 'https://gateway-api-testnet.circle.com/v1/x402/settle',
 } as const;
 
 export interface CircleV1Fixture {
