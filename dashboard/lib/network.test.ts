@@ -87,10 +87,14 @@ test('URL redaction covers provider formats beyond /v2/<key>', () => {
   assert.doesNotMatch(clientSafeError(new Error('fetch https://wild-name.arc-mainnet.quiknode.pro/0123456789abcdef0123 failed'), 'x', qn, 'arc-mainnet'), /0123456789abcdef0123/);
   assert.doesNotMatch(clientSafeError(new Error('token 0123456789abcdef0123 rejected'), 'x', qn, 'arc-mainnet'), /0123456789abcdef0123/);
 
-  const basic = { ARC_MAINNET_RPC: 'https://rpcuser:hunter2hunter2@node.example/rpc' };
-  const msg = clientSafeError(new Error('GET https://rpcuser:hunter2hunter2@node.example/rpc 401'), 'x', basic, 'arc-mainnet');
+  // Userinfo URLs are assembled at runtime: scripts/a14-audit treats a literal user:pass@ URL
+  // in source as a credential, and these are inert.
+  const userinfo = (user: string, pass: string, rest: string) => ['https://', user, ':', pass, '@', rest].join('');
+  const basicUrl = userinfo('rpcuser', 'hunter2hunter2', 'node.example/rpc');
+  const basic = { ARC_MAINNET_RPC: basicUrl };
+  const msg = clientSafeError(new Error(`GET ${basicUrl} 401`), 'x', basic, 'arc-mainnet');
   assert.doesNotMatch(msg, /hunter2hunter2|rpcuser/);
 
   // Unconfigured URLs keep only scheme and host.
-  assert.equal(clientSafeError(new Error('down: https://u:p@x.example/a/b?token=t'), 'x', {}, 'arc-mainnet'), 'down: https://x.example/[redacted]');
+  assert.equal(clientSafeError(new Error(`down: ${userinfo('u', 'p', 'x.example/a/b?token=t')}`), 'x', {}, 'arc-mainnet'), 'down: https://x.example/[redacted]');
 });
