@@ -24,9 +24,16 @@ same for the self-facilitator's relayer (`BROADCASTER_PRIVATE_KEY`), so the side
 no raw key at all. `daemon/cmd/circle-setup` registers the entity secret without showing it,
 creates both wallets, and checks the setup read-only (`secret`, `wallets`, `check`).
 
-**Not yet run live:** a Circle signature, a Circle contract execution, or a daemon advance
-through Circle. All three are tested against a fake Circle API that decrypts the ciphertext and
-signs what it is sent; the network half needs the Circle API key, entity secret and wallets.
+**Run live on Arc Testnet (4 Nov 2026)**, each signed by the Circle treasury wallet
+`0xb414…4CA` through `chainops -signer circle`, receipts read from our own RPC:
+`createJob` ([0x8c7853b5…](https://testnet.arcscan.app/tx/0x8c7853b5e2d655adc7695e9445aa745bf1d695af90669c696bc909dad206655e)),
+a USDC transfer ([0xc289df9a…](https://testnet.arcscan.app/tx/0xc289df9afd89bc6312bba5413ffba9fd4e09c87dcdc7c46c32d9b60e7fbd66da))
+and `requestAdvance`, 0.50 USDC advanced
+([0xa2a67fcd…](https://testnet.arcscan.app/tx/0xa2a67fcd1108d79bf5871463419f85eee338b498f5d3699e325182f7db470c9b)).
+
+**Not yet run live:** a Circle typed-data signature (the sidecar's x402 signer), the relayer
+wallet settling an x402 payment, and an advance made by the running daemon (the advance above
+was `chainops advance`, the same call the daemon makes, on a job the daemon did not create).
 
 ## 2. Customer: their own passkey wallet
 
@@ -70,10 +77,14 @@ this state, so the sponsor does not pay for a call that is certain to revert.
 3. Set `NEXT_PUBLIC_CIRCLE_CLIENT_KEY` (and optionally `NEXT_PUBLIC_CIRCLE_CLIENT_URL`) for the
    dashboard build. The client key is public by design; it authorizes nothing.
 
-**Not yet run live:** a real passkey registration and a sponsored user operation on Arc Testnet.
-The SDK's API is taken from its own type definitions (`@circle-fin/modular-wallets-core`
-1.0.16, pinned with viem 2.55.11 to match it) and typechecks; the calldata and gating are unit
-tested; the network half needs the client key.
+**Run live on Arc Testnet (4 Nov 2026)** at `snapfall-blue.vercel.app`: a passkey wallet was
+created on a real device (`0x1cc1…6705`), the page refused to fund a job whose customer is
+another address, and on a job naming that wallet it funded the escrow with one sponsored user
+operation (bundler → EntryPoint v0.7,
+[0x1e1b48f8…](https://testnet.arcscan.app/tx/0x1e1b48f89f57cb24c5413de81ac4bc2b7b4d50889084f8ba1626200ce012fb26)):
+the job reads `Funded` on chain and the wallet paid exactly the 1 USDC price, no gas.
+
+**Not yet run live:** "Accept & settle from my wallet" in the portal.
 
 ## 3. CCTP V2: USDC in from another chain, and out to one
 
