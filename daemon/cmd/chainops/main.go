@@ -339,10 +339,19 @@ func run(deployment, keyEnv, signerKind string, dest destination, args []string)
 		if err != nil {
 			return err
 		}
-		// Estimated gas, as the daemon submits it: a call the pool would refuse fails at
-		// estimation, before anything is broadcast. force-advance is the deliberate opposite.
+		// The same Submit the daemon uses. With -signer key the gas is estimated locally, so a
+		// call the pool would refuse fails before anything is signed. With -signer circle there
+		// is no local estimate: whether Circle refuses it before broadcasting is Circle's
+		// behaviour, so a refused advance may still be mined as a revert, which fails here.
+		// force-advance is the deliberate fixed-gas opposite.
 		r, err := s.Submit(ctx, fp, chain.CalldataRequestAdvance(id))
-		return show("advance", r, err)
+		if err := show("advance", r, err); err != nil {
+			return err
+		}
+		if r.Reverted {
+			return fmt.Errorf("advance %s reverted: no advance was made", arg(1))
+		}
+		return nil
 	case "force-advance":
 		id, err := chain.JobID32(arg(1))
 		if err != nil {
