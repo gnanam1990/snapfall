@@ -1,0 +1,10 @@
+.git
+**/node_modules
+**/.next
+**/.env
+**/.env.*
+contracts
+daemon
+sidecar
+docs
+scripts

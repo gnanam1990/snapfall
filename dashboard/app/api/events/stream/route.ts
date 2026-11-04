@@ -8,7 +8,7 @@
  *      holds the fabricated fixtures is dynamically imported ONLY here, so a production build
  *      (flag off) tree-shakes it and lib/mockData out of the bundle entirely.
  *   3. No daemon, demo off (the public-deployment default) → emit a single honest snapshot
- *      marked `daemonConnected: false` and hold the connection open. The Overview renders a
+ *      marked `daemonConnected: false` and close the response. The Overview renders a
  *      plain "no daemon connected" banner. A public visitor never sees fabricated activity.
  *
  * The real feed carries owner data and MUST enforce owner auth; the demo mode serves scripted
@@ -75,42 +75,13 @@ async function daemonStream(req: Request): Promise<Response | null> {
   }
 }
 
-/** Mode 3: one honest snapshot, then hold the connection open with heartbeats so the client
- *  reads a stable "live but disconnected" state instead of a reconnect loop. */
-function disconnectedStream(req: Request): Response {
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      let closed = false;
-      let beat: ReturnType<typeof setInterval> | undefined;
-      const stop = () => {
-        if (closed) return;
-        closed = true;
-        if (beat) clearInterval(beat);
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      };
-      if (req.signal.aborted) {
-        stop();
-        return;
-      }
-      req.signal.addEventListener('abort', stop);
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ kind: 'snapshot', snapshot: DISCONNECTED_SNAPSHOT })}\n\n`));
-      // SSE comment heartbeat keeps proxies from closing an idle stream; carries no data.
-      beat = setInterval(() => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`: keep-alive\n\n`));
-        } catch {
-          stop();
-        }
-      }, 25_000);
-    },
-  });
-  return new Response(stream, { headers: SSE_HEADERS });
+/** Mode 3: finish immediately so serverless hosts do not bill an idle heartbeat loop.
+ * EventSource observes retry and reconnects once a minute to discover daemon configuration. */
+function disconnectedStream(): Response {
+  return new Response(
+    `retry: 60000\ndata: ${JSON.stringify({ kind: 'snapshot', snapshot: DISCONNECTED_SNAPSHOT })}\n\n`,
+    { headers: SSE_HEADERS },
+  );
 }
 
 export async function GET(req: Request): Promise<Response> {
@@ -122,5 +93,5 @@ export async function GET(req: Request): Promise<Response> {
     return new Response(demoReplayStream(req), { headers: SSE_HEADERS });
   }
 
-  return disconnectedStream(req);
+  return disconnectedStream();
 }
