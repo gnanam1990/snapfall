@@ -179,11 +179,30 @@ func setupSecret(ctx context.Context, out io.Writer, reg registrar, netEnv, dir 
 		fmt.Fprintf(out, "entity secret written to %s (0600, not printed)\n", secretPath)
 	}
 
+	// The recovery file is created BEFORE registering too, so an unwritable directory is
+	// found while nothing is registered yet; only its content waits for Circle's answer.
+	rf, err := os.OpenFile(recoveryPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("cannot create %s, nothing was registered: %w", recoveryPath, err)
+	}
 	recovery, err := reg.RegisterEntitySecret(ctx, secret)
 	if err != nil {
-		return fmt.Errorf("%w\nthe secret at %s is NOT registered; fix the cause and rerun with -register-existing", err, secretPath)
+		rf.Close()
+		os.Remove(recoveryPath)
+		var refused *circlewallet.HTTPError
+		if errors.As(err, &refused) && refused.Status >= 400 && refused.Status < 500 {
+			return fmt.Errorf("%w\nCircle refused it: the secret at %s is NOT registered; fix the cause and rerun with -register-existing", err, secretPath)
+		}
+		// A timeout, a dropped connection or a 5xx can come after Circle registered it.
+		return fmt.Errorf("%w\nregistration state UNKNOWN: Circle may have registered the secret at %s. Keep that file, and check the Circle console before rerunning: if a secret is registered, it is this one; if not, rerun with -register-existing", err, secretPath)
 	}
-	if err := writePrivate(recoveryPath, []byte(recovery)); err != nil {
+	if _, err := rf.Write([]byte(recovery)); err == nil {
+		err = rf.Sync()
+	}
+	if cerr := rf.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return fmt.Errorf("the entity secret IS registered but its recovery file could not be saved (%w); download it from the Circle console now", err)
 	}
 	fmt.Fprintf(out, "registered with Circle (%s)\nrecovery file written to %s (0600) — back it up offline; it is the only way to reset the secret\n\n", netEnv, recoveryPath)
@@ -209,7 +228,9 @@ func privateDir(dir string) error {
 	return nil
 }
 
-// writePrivate creates path 0600, refusing to replace anything already there.
+// writePrivate creates path 0600, refusing to replace anything already there. A failed
+// write removes the file: a truncated secret would block the next run and parse as nothing.
+// It runs before registration, so the removed bytes were never registered.
 func writePrivate(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -218,21 +239,28 @@ func writePrivate(path string, data []byte) error {
 		}
 		return err
 	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	return f.Close()
+	if err != nil {
+		os.Remove(path)
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
 }
 
 func readPrivate(path string) ([]byte, error) {
-	fi, err := os.Stat(path)
+	fi, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		// A FIFO would block the read forever; a symlink could point anywhere.
+		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
 	if fi.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("%s is readable by other users (mode %o); chmod 600 it first", path, fi.Mode().Perm())
@@ -303,6 +331,7 @@ func runCheck(ctx context.Context, out io.Writer, deployment string) error {
 	}
 	usdc := common.HexToAddress(an.usdc.Address)
 	c := &checker{out: out}
+	rpcOK := false
 
 	c.step("api key", func() (string, error) {
 		if err := sameEnvironment(admin.Environment(), netEnv); err != nil {
@@ -322,6 +351,16 @@ func runCheck(ctx context.Context, out io.Writer, deployment string) error {
 			return "", err
 		}
 		return "set and well-formed (only the first signed call proves it is the registered one)", nil
+	})
+
+	c.step("rpc", func() (string, error) {
+		// The USDC predeploy has the same address on both Arc networks, so a balance read
+		// from the wrong network would still look plausible.
+		if err := reader.VerifyChainID(ctx); err != nil {
+			return "", err
+		}
+		rpcOK = true
+		return fmt.Sprintf("serves chain %d", an.net.ChainID), nil
 	})
 
 	addrs := map[string]string{}
@@ -352,7 +391,7 @@ func runCheck(ctx context.Context, out io.Writer, deployment string) error {
 		})
 		c.step(r.Name+" balance", func() (string, error) {
 			a, ok := addrs[r.Name]
-			if !ok {
+			if !ok || !rpcOK {
 				return "skipped", nil
 			}
 			ret, err := reader.CallView(ctx, usdc, chain.CalldataBalanceOf(common.HexToAddress(a)))
@@ -377,7 +416,7 @@ func runCheck(ctx context.Context, out io.Writer, deployment string) error {
 		case !ok:
 			return "skipped", nil
 		case want == "":
-			return "SNAPFALL_TREASURY_ADDRESS not set; jobs must name " + got + " as their operator", nil
+			return "", fmt.Errorf("SNAPFALL_TREASURY_ADDRESS is not set; the daemon refuses to start without it (set it to %s)", got)
 		case !common.IsHexAddress(want) || common.HexToAddress(want) != common.HexToAddress(got):
 			return "", fmt.Errorf("SNAPFALL_TREASURY_ADDRESS is %s but the Circle treasury wallet is %s; jobs created for one cannot be advanced by the other", want, got)
 		}

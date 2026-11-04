@@ -217,6 +217,9 @@ func (a *Admin) createWallet(ctx context.Context, secret []byte, setID, blockcha
 	if len(out.Data.Wallets) != 1 {
 		return WalletInfo{}, fmt.Errorf("circle wallet: creating the %s wallet returned %d wallets, want 1", role.Name, len(out.Data.Wallets))
 	}
+	if !isUUID(out.Data.Wallets[0].ID) {
+		return WalletInfo{}, fmt.Errorf("circle wallet: creating the %s wallet returned id %q, not a wallet id", role.Name, out.Data.Wallets[0].ID)
+	}
 	return out.Data.Wallets[0], nil
 }
 

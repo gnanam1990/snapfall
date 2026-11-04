@@ -355,6 +355,19 @@ func encryptSecret(pub *rsa.PublicKey, secret []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(ct), nil
 }
 
+// HTTPError is a non-2xx answer from Circle: the request reached Circle and Circle
+// refused it (4xx) or failed (5xx). A transport error is never an HTTPError, so a caller can
+// tell "Circle said no" from "we do not know what Circle did".
+type HTTPError struct {
+	Status  int
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d: code %d: %s", e.Status, e.Code, e.Message)
+}
+
 // call does one Circle API request. A non-2xx answer becomes an error carrying Circle's
 // code and message; the request body (which holds the ciphertext) and the API key are never
 // part of it.
@@ -385,12 +398,9 @@ func (a api) call(ctx context.Context, method, path string, body, out any) error
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		var e struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal(raw, &e)
-		return fmt.Errorf("HTTP %d: code %d: %s", resp.StatusCode, e.Code, e.Message)
+		e := &HTTPError{Status: resp.StatusCode}
+		_ = json.Unmarshal(raw, e)
+		return e
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
 		return fmt.Errorf("HTTP %d, undecodable body: %w", resp.StatusCode, err)

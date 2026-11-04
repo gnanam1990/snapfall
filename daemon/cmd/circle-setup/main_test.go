@@ -9,7 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/gnanam1990/snapfall/daemon/internal/circlewallet"
 )
 
 // fakeRegistrar records what it was asked to register; no network.
@@ -158,6 +161,89 @@ func TestSecret_RefusesBeforeWriting(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Circle refusing (4xx) means not registered; anything else (timeout, dropped connection,
+// 5xx) may have registered it, and the operator is told to check before rerunning. Either
+// way no recovery file is left behind and the secret is kept.
+func TestSecret_RefusedVersusUnknownRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"4xx", &circlewallet.HTTPError{Status: 409, Code: 156015, Message: "entity secret has already been set"}, "Circle refused it"},
+		{"5xx", &circlewallet.HTTPError{Status: 503, Message: "unavailable"}, "registration state UNKNOWN"},
+		{"transport", errors.New("context deadline exceeded"), "registration state UNKNOWN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := newDir(t)
+			reg := &fakeRegistrar{env: "testnet", regErr: tc.err}
+			err := setupSecret(context.Background(), &bytes.Buffer{}, reg, "testnet", dir, false, entropy())
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "recovery-file.dat")); !os.IsNotExist(err) {
+				t.Fatalf("an empty recovery file was left behind")
+			}
+			if _, err := os.Stat(filepath.Join(dir, "entity-secret.hex")); err != nil {
+				t.Fatalf("the secret was not kept: %v", err)
+			}
+		})
+	}
+}
+
+// A directory the owner cannot write is found before anything is registered.
+func TestSecret_UnwritableDirectoryIsFoundBeforeRegistering(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := newDir(t)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "entity-secret.hex"), []byte(patternHex+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	reg := &fakeRegistrar{env: "testnet"}
+	err := setupSecret(context.Background(), &bytes.Buffer{}, reg, "testnet", dir, true, entropy())
+	if err == nil || !strings.Contains(err.Error(), "nothing was registered") || len(reg.registered) != 0 {
+		t.Fatalf("err = %v, registered %d", err, len(reg.registered))
+	}
+}
+
+// A FIFO where the secret should be is refused instead of blocking the read forever.
+func TestSecret_RefusesANonRegularSecretFile(t *testing.T) {
+	dir := newDir(t)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "entity-secret.hex"), 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	reg := &fakeRegistrar{env: "testnet"}
+	err := setupSecret(context.Background(), &bytes.Buffer{}, reg, "testnet", dir, true, entropy())
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") || len(reg.registered) != 0 {
+		t.Fatalf("err = %v, registered %d", err, len(reg.registered))
+	}
+}
+
+// An existing file is never replaced.
+func TestWritePrivate_NeverOverwrites(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "f")
+	if err := writePrivate(p, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivate(p, []byte("y")); err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
+		t.Fatalf("overwrite: %v", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "x" {
+		t.Fatalf("the existing file was changed")
 	}
 }
 

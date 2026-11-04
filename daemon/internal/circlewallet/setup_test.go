@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,7 @@ type fakeAdmin struct {
 	ciphertexts   map[string]bool
 	idemKeys      map[string]bool
 	createdAs     string // accountType the fake reports for new wallets ("" = what was asked)
+	createdID     string // id the fake reports for new wallets ("" = a real UUID)
 	noRecovery    bool
 	registerCode  int
 	ignoreFilters bool
@@ -135,6 +137,9 @@ func (f *fakeAdmin) handle(w http.ResponseWriter, r *http.Request) {
 			WalletSetID: body["walletSetId"].(string),
 			Name:        md["name"].(string), RefID: md["refId"].(string),
 		}
+		if f.createdID != "" {
+			nw.ID = f.createdID
+		}
 		f.wallets = append(f.wallets, nw)
 		reply(map[string]any{"wallets": []WalletInfo{nw}})
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/w3s/wallets":
@@ -193,8 +198,9 @@ func TestRegisterEntitySecret(t *testing.T) {
 	}
 	f.noRecovery, f.registerCode = false, http.StatusConflict
 	_, err = a.RegisterEntitySecret(context.Background(), secret)
-	if err == nil || !strings.Contains(err.Error(), "already been set") {
-		t.Fatalf("Circle's refusal must pass through, got %v", err)
+	var he *HTTPError
+	if err == nil || !strings.Contains(err.Error(), "already been set") || !errors.As(err, &he) || he.Status != http.StatusConflict {
+		t.Fatalf("Circle's refusal must pass through as an HTTPError, got %v", err)
 	}
 	if strings.Contains(err.Error(), testSecret) || strings.Contains(err.Error(), testAPIKey) {
 		t.Fatalf("error echoes a secret: %v", err)
@@ -293,6 +299,12 @@ func TestEnsureWallets_Refusals(t *testing.T) {
 	f.createdAs = "SCA"
 	if _, err := a.EnsureWallets(ctx, secret, "ARC-TESTNET", Roles); err == nil || !strings.Contains(err.Error(), "new snapfall-treasury wallet") || f.creates != 1 {
 		t.Fatalf("new wallet came back SCA: err=%v creates=%d", err, f.creates)
+	}
+
+	f, a = newFakeAdmin(t)
+	f.createdID = "not-a-uuid"
+	if _, err := a.EnsureWallets(ctx, secret, "ARC-TESTNET", Roles); err == nil || !strings.Contains(err.Error(), "not a wallet id") {
+		t.Fatalf("a created wallet without a wallet id was reported: %v", err)
 	}
 
 	f, a = newFakeAdmin(t)

@@ -92,8 +92,11 @@ Nothing it does moves funds or signs a transaction.
    line to add to your env file:
    `export CIRCLE_ENTITY_SECRET="$(cat ~/.snapfall/circle-testnet/entity-secret.hex)"`.
    **Back up the recovery file offline**: losing both it and the secret loses these wallets
-   for good. It never overwrites either file; if registration failed, fix the cause and rerun
-   with `-register-existing`, which registers the same secret.
+   for good. It never overwrites either file, and creates the recovery file before registering
+   so an unwritable directory is found first. If Circle refuses the registration (4xx), fix the
+   cause and rerun with `-register-existing`, which registers the same secret. If the call
+   times out or fails on Circle's side, the state is unknown: check the console before
+   rerunning, and keep the secret file either way.
 3. **Wallets:**
 
    ```
@@ -113,9 +116,10 @@ Nothing it does moves funds or signs a transaction.
    go -C daemon run ./cmd/circle-setup -deployment ../deployments/arc-testnet.json check
    ```
 
-   API key accepted, entity secret well-formed, each wallet id a LIVE developer-controlled EOA
-   on the deployment's network, the two ids different, the USDC balance read from our own RPC,
-   and `SNAPFALL_TREASURY_ADDRESS` equal to the treasury wallet. It exits non-zero on any
+   API key accepted, entity secret well-formed, the RPC serving the deployment's chain id, each
+   wallet id a LIVE developer-controlled EOA on the deployment's network, the two ids different,
+   the USDC balance read from that RPC, and `SNAPFALL_TREASURY_ADDRESS` set and equal to the
+   treasury wallet. It exits non-zero on any
    failure. It cannot prove the entity secret is the registered one; the first signed call
    does.
 6. Start the daemon with the deployment config as usual. The boot log should show
