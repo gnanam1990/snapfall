@@ -66,6 +66,45 @@ type Contract struct {
 // Load reads, resolves and validates a deployment. Unknown JSON keys are fatal so a typo can
 // never silently point one process at a different chain or address set.
 func Load(path string, lookup LookupEnv) (Deployment, error) {
+	d, err := parse(path)
+	if err != nil {
+		return Deployment{}, err
+	}
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	if err := d.resolve(filepath.Dir(path), lookup); err != nil {
+		return Deployment{}, fmt.Errorf("deployment %s: %w", path, err)
+	}
+	return d, nil
+}
+
+// LoadNetwork is Load for tools that run before the operator's own addresses exist: Circle
+// wallet setup creates the treasury address that fundedWallets requires, and on a network
+// not yet deployed to there are no contract addresses either. It applies the same strict
+// parsing and network resolution and resolves the USDC predeploy; nothing else is resolved,
+// so the result must not be used to reach Snapfall's contracts.
+func LoadNetwork(path string, lookup LookupEnv) (Network, Contract, error) {
+	d, err := parse(path)
+	if err != nil {
+		return Network{}, Contract{}, err
+	}
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	if err := d.resolveNetwork(lookup); err != nil {
+		return Network{}, Contract{}, fmt.Errorf("deployment %s: %w", path, err)
+	}
+	if err := resolveContract(filepath.Dir(path), "usdc", &d.Contracts.USDC, lookup); err != nil {
+		return Network{}, Contract{}, fmt.Errorf("deployment %s: %w", path, err)
+	}
+	if d.Contracts.USDC.Decimals != 6 {
+		return Network{}, Contract{}, fmt.Errorf("deployment %s: contracts.usdc.decimals must be 6 for H1 accounting, got %d", path, d.Contracts.USDC.Decimals)
+	}
+	return d.Network, d.Contracts.USDC, nil
+}
+
+func parse(path string) (Deployment, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Deployment{}, fmt.Errorf("reading deployment %s: %w", path, err)
@@ -79,16 +118,50 @@ func Load(path string, lookup LookupEnv) (Deployment, error) {
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return Deployment{}, fmt.Errorf("parsing deployment %s: trailing JSON content", path)
 	}
-	if lookup == nil {
-		lookup = os.LookupEnv
-	}
-	if err := d.resolve(filepath.Dir(path), lookup); err != nil {
-		return Deployment{}, fmt.Errorf("deployment %s: %w", path, err)
-	}
 	return d, nil
 }
 
 func (d *Deployment) resolve(base string, lookup LookupEnv) error {
+	if err := d.resolveNetwork(lookup); err != nil {
+		return err
+	}
+	contracts := []struct {
+		name string
+		c    *Contract
+	}{
+		{"jobVault", &d.Contracts.JobVault},
+		{"floatPool", &d.Contracts.FloatPool},
+		{"auditAnchor", &d.Contracts.AuditAnchor},
+		{"usdc", &d.Contracts.USDC},
+	}
+	for _, item := range contracts {
+		if err := resolveContract(base, item.name, item.c, lookup); err != nil {
+			return err
+		}
+	}
+	if d.Contracts.USDC.Decimals != 6 {
+		return fmt.Errorf("contracts.usdc.decimals must be 6 for H1 accounting, got %d", d.Contracts.USDC.Decimals)
+	}
+
+	d.WalletAddresses = make(map[string]string, len(d.FundedWallets))
+	for role, envName := range d.FundedWallets {
+		value, ok := lookup(envName)
+		if !ok || strings.TrimSpace(value) == "" {
+			return fmt.Errorf("funded wallet %s requires %s", role, envName)
+		}
+		address, err := normalizeAddress(value)
+		if err != nil {
+			return fmt.Errorf("funded wallet %s (%s): %w", role, envName, err)
+		}
+		d.WalletAddresses[role] = address
+	}
+	if len(d.WalletAddresses) == 0 {
+		return fmt.Errorf("at least one funded wallet is required")
+	}
+	return nil
+}
+
+func (d *Deployment) resolveNetwork(lookup LookupEnv) error {
 	if d.SchemaVersion != 1 {
 		return fmt.Errorf("schemaVersion must be 1, got %d", d.SchemaVersion)
 	}
@@ -119,59 +192,34 @@ func (d *Deployment) resolve(base string, lookup LookupEnv) error {
 			d.Network.StartBlock = n
 		}
 	}
+	return nil
+}
 
-	contracts := []struct {
-		name string
-		c    *Contract
-	}{
-		{"jobVault", &d.Contracts.JobVault},
-		{"floatPool", &d.Contracts.FloatPool},
-		{"auditAnchor", &d.Contracts.AuditAnchor},
-		{"usdc", &d.Contracts.USDC},
+// resolveContract applies the address override (AddressEnv over the committed address,
+// neither = fail closed) and locates the ABI artifact.
+func resolveContract(base, name string, c *Contract, lookup LookupEnv) error {
+	if c.AddressEnv == "" {
+		return fmt.Errorf("contracts.%s.addressEnv is required", name)
 	}
-	for _, item := range contracts {
-		if item.c.AddressEnv == "" {
-			return fmt.Errorf("contracts.%s.addressEnv is required", item.name)
-		}
-		value, ok := lookup(item.c.AddressEnv)
-		if !ok || strings.TrimSpace(value) == "" {
-			// No env override: fall back to the address committed in the deployment
-			// file (the deploy artifact). Neither present = fail closed, as always.
-			value = item.c.Address
-			if strings.TrimSpace(value) == "" {
-				return fmt.Errorf("contracts.%s: no committed address and %s is not set", item.name, item.c.AddressEnv)
-			}
-		}
-		address, err := normalizeAddress(value)
-		if err != nil {
-			return fmt.Errorf("%s: %w", item.c.AddressEnv, err)
-		}
-		item.c.Address = address
-		if item.c.ABI != "" {
-			item.c.ABIPath = filepath.Clean(filepath.Join(base, item.c.ABI))
-			if stat, err := os.Stat(item.c.ABIPath); err != nil || stat.IsDir() {
-				return fmt.Errorf("contracts.%s ABI %s is not a readable file", item.name, item.c.ABIPath)
-			}
+	value, ok := lookup(c.AddressEnv)
+	if !ok || strings.TrimSpace(value) == "" {
+		// No env override: fall back to the address committed in the deployment
+		// file (the deploy artifact). Neither present = fail closed, as always.
+		value = c.Address
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("contracts.%s: no committed address and %s is not set", name, c.AddressEnv)
 		}
 	}
-	if d.Contracts.USDC.Decimals != 6 {
-		return fmt.Errorf("contracts.usdc.decimals must be 6 for H1 accounting, got %d", d.Contracts.USDC.Decimals)
+	address, err := normalizeAddress(value)
+	if err != nil {
+		return fmt.Errorf("%s: %w", c.AddressEnv, err)
 	}
-
-	d.WalletAddresses = make(map[string]string, len(d.FundedWallets))
-	for role, envName := range d.FundedWallets {
-		value, ok := lookup(envName)
-		if !ok || strings.TrimSpace(value) == "" {
-			return fmt.Errorf("funded wallet %s requires %s", role, envName)
+	c.Address = address
+	if c.ABI != "" {
+		c.ABIPath = filepath.Clean(filepath.Join(base, c.ABI))
+		if stat, err := os.Stat(c.ABIPath); err != nil || stat.IsDir() {
+			return fmt.Errorf("contracts.%s ABI %s is not a readable file", name, c.ABIPath)
 		}
-		address, err := normalizeAddress(value)
-		if err != nil {
-			return fmt.Errorf("funded wallet %s (%s): %w", role, envName, err)
-		}
-		d.WalletAddresses[role] = address
-	}
-	if len(d.WalletAddresses) == 0 {
-		return fmt.Errorf("at least one funded wallet is required")
 	}
 	return nil
 }

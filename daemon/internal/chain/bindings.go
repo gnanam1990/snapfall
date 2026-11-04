@@ -62,6 +62,9 @@ func CalldataApprove(spender common.Address, amount *big.Int) []byte {
 func CalldataTransfer(to common.Address, amount *big.Int) []byte {
 	return pack("transfer(address,uint256)", addrWord(to), uintWord(amount))
 }
+func CalldataBalanceOf(owner common.Address) []byte {
+	return pack("balanceOf(address)", addrWord(owner))
+}
 
 // ── FloatPool ──
 func CalldataDeposit(assets *big.Int, receiver common.Address) []byte {

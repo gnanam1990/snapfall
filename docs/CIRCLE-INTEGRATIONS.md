@@ -21,7 +21,8 @@ See [CIRCLE-TREASURY-WALLET.md](CIRCLE-TREASURY-WALLET.md). In short: set
 `requestAdvance` lane and the sidecar's x402 signer use the Circle wallet instead of
 `TREASURY_PRIVATE_KEY`, with no fallback to the raw key. `CIRCLE_BROADCASTER_WALLET_ID` does the
 same for the self-facilitator's relayer (`BROADCASTER_PRIVATE_KEY`), so the sidecar can run with
-no raw key at all.
+no raw key at all. `daemon/cmd/circle-setup` registers the entity secret without showing it,
+creates both wallets, and checks the setup read-only (`secret`, `wallets`, `check`).
 
 **Not yet run live:** a Circle signature, a Circle contract execution, or a daemon advance
 through Circle. All three are tested against a fake Circle API that decrypts the ciphertext and

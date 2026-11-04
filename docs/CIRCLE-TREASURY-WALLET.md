@@ -72,26 +72,53 @@ The Circle wallet has its own address. On chain that is a **new operator**:
   signer.
 - `seed-demo` and `scripts/spine_run` still expect raw keys and are unchanged.
 
-## Setup (human steps)
+## Setup
 
-These need your Circle account and your secrets, so they are yours to do:
+`daemon/cmd/circle-setup` does the setup with the entity secret going only into a file, never
+onto the screen. Run it from the repository root, in the shell that sources your env file.
+Nothing it does moves funds or signs a transaction.
 
-1. In the Circle developer console, create an API key, generate and register an entity secret,
-   and **store the recovery file somewhere safe**. Losing both the entity secret and the
-   recovery file loses these wallets for good.
-2. Create a wallet set, then an **EOA** wallet on `ARC-TESTNET` (later `ARC` for mainnet).
-   Note its wallet id and address.
-3. Send the wallet some testnet USDC for gas. On Arc, USDC is the gas token.
-4. Put the three variables in the shell file you already source (never in the repo):
+1. **You, in the Circle console (Testnet):** create an API key (Keys → Create API Key) and add
+   it to your env file as `CIRCLE_API_KEY`.
+2. **Entity secret:**
 
    ```
-   export CIRCLE_API_KEY=...
-   export CIRCLE_ENTITY_SECRET=...
-   export CIRCLE_TREASURY_WALLET_ID=...
-   export SNAPFALL_TREASURY_ADDRESS=<the Circle wallet address>
+   go -C daemon run ./cmd/circle-setup -deployment ../deployments/arc-testnet.json secret
    ```
 
-5. Start the daemon with the deployment config as usual. The boot log should show
+   It refuses a key for the other Circle environment, checks the key works before writing
+   anything, generates the secret into `~/.snapfall/circle-testnet/entity-secret.hex` (0600,
+   in a 0700 directory), registers it, and saves the recovery file beside it. It prints the
+   line to add to your env file:
+   `export CIRCLE_ENTITY_SECRET="$(cat ~/.snapfall/circle-testnet/entity-secret.hex)"`.
+   **Back up the recovery file offline**: losing both it and the secret loses these wallets
+   for good. It never overwrites either file; if registration failed, fix the cause and rerun
+   with `-register-existing`, which registers the same secret.
+3. **Wallets:**
+
+   ```
+   go -C daemon run ./cmd/circle-setup -deployment ../deployments/arc-testnet.json wallets
+   ```
+
+   Finds or creates two **EOA** wallets on `ARC-TESTNET`: `snapfall-treasury` and
+   `snapfall-relayer` (by `refId`, so rerunning creates nothing new). It refuses an existing
+   wallet the lane would refuse, and two wallets under one `refId`. It prints the
+   `CIRCLE_TREASURY_WALLET_ID` and `CIRCLE_BROADCASTER_WALLET_ID` lines and both addresses.
+   Arc mainnet needs `-deployment ../deployments/arc-mainnet.json -mainnet` and a mainnet key.
+4. **You:** send both addresses some testnet USDC (on Arc, USDC is the gas token), and set
+   `SNAPFALL_TREASURY_ADDRESS` to the treasury wallet's address.
+5. **Check, read-only:**
+
+   ```
+   go -C daemon run ./cmd/circle-setup -deployment ../deployments/arc-testnet.json check
+   ```
+
+   API key accepted, entity secret well-formed, each wallet id a LIVE developer-controlled EOA
+   on the deployment's network, the two ids different, the USDC balance read from our own RPC,
+   and `SNAPFALL_TREASURY_ADDRESS` equal to the treasury wallet. It exits non-zero on any
+   failure. It cannot prove the entity secret is the registered one; the first signed call
+   does.
+6. Start the daemon with the deployment config as usual. The boot log should show
    `treasury chain lane wired ... via="circle developer-controlled wallet"`.
 
 ## Behaviour on failure
