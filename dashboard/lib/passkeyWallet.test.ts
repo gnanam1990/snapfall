@@ -1,0 +1,29 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { userOpFees } from './passkeyWallet';
+
+// The bundler's medium level, as Circle answers it: decimal wei strings.
+const answer = {
+  low: { maxFeePerGas: '30000000000', maxPriorityFeePerGas: '1000000000' },
+  medium: { maxFeePerGas: '48500000000', maxPriorityFeePerGas: '1500000000' },
+  high: { maxFeePerGas: '60000000000', maxPriorityFeePerGas: '2000000000' },
+};
+
+test('user operation fees come from the bundler medium level', () => {
+  assert.deepEqual(userOpFees(answer), { maxFeePerGas: 48_500_000_000n, maxPriorityFeePerGas: 1_500_000_000n });
+});
+
+test('a missing or malformed gas price is refused, never guessed', () => {
+  for (const bad of [
+    null,
+    {},
+    { medium: { maxFeePerGas: '', maxPriorityFeePerGas: '1' } },
+    { medium: { maxFeePerGas: '1.5', maxPriorityFeePerGas: '1' } },
+    { medium: { maxFeePerGas: '0x10', maxPriorityFeePerGas: '1' } },
+    { medium: { maxFeePerGas: '-1', maxPriorityFeePerGas: '1' } },
+  ]) {
+    assert.throws(() => userOpFees(bad as never), /usable gas price/);
+  }
+  assert.throws(() => userOpFees({ medium: { maxFeePerGas: '0', maxPriorityFeePerGas: '0' } }), /inconsistent/);
+  assert.throws(() => userOpFees({ medium: { maxFeePerGas: '10', maxPriorityFeePerGas: '11' } }), /inconsistent/);
+});
