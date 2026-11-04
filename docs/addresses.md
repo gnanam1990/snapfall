@@ -10,10 +10,17 @@ against the chain and agree; the chain is the authority regardless.
 **Explorer:** [testnet.arcscan.app](https://testnet.arcscan.app)
 **Status:** unaudited hackathon code. One operator. Nothing here should hold value.
 
-> **The RPC is the primary verification path. The explorer is secondary.** ArcScan has a
-> documented, unresolved outage on transaction-hash lookups (*"Something went wrong…"*), so
-> the tx links on this page may not render. Every claim below carries the `cast` command
-> that produces it against the RPC. Nothing here requires the explorer to work.
+> **Verify by block, not by transaction hash.** As of 3 Sep 2026 the public RPC no longer
+> serves transactions or receipts by hash — `eth_getTransactionByHash` and
+> `eth_getTransactionReceipt` return `null` for every hash on this page. The tx-hash index is
+> pruned; the chain is not. Blocks and logs are still served in full. ArcScan separately has a
+> documented, unresolved outage on transaction-hash lookups (*"Something went wrong…"*), so the
+> tx links here may not render either.
+>
+> **The hashes below remain the record of what happened. They are no longer the way to check
+> it.** Every claim carries a by-block command that works against the public RPC today, and the
+> block numbers are the primary key. If you hold an archive endpoint, the hashes still resolve
+> there — export it as `$ARCHIVE` and the by-hash commands work unchanged.
 
 ## Setup
 
@@ -27,6 +34,25 @@ export AUDITANCHOR=0x7CDBF8a6D33d4c4C55fb94447E7E90905b3672c6
 export USDC=0x3600000000000000000000000000000000000000
 export OPERATOR=0x99B723eD097721036C08dd9DEe307286Df3A792D
 export JOB=0x736e617066616c6c2d6a6f622d30303400000000000000000000000000000000  # job-004 vault id
+
+# Block numbers are the primary key now — see the note above. Hex, because eth_getLogs takes hex.
+export B_DEPLOY=0x32ccfdb        # 53,268,443 — AuditAnchor + JobVault creation
+export B_DEPLOY2=0x32ccfdd       # 53,268,445 — FloatPool creation
+export B_RATE55=0x32d257c        # 53,290,364 — job-003 settlement, rate -> 5500
+export B_START=0x3320ab9         # 53,611,193 — job-004 start-work
+export B_EXPENSE=0x3320b54       # 53,611,348 — job-004 record-expense
+export B_DELIVER=0x3320c01       # 53,611,521 — job-004 submit-delivery
+export B_SETTLE=0x33212d8        # 53,613,272 — job-004 accept + settle (the waterfall, §4)
+export B_AUTO=0x3528202          # 55,738,882 — first automated settlement (§7)
+
+# Optional: an archive endpoint, if you have one. Only needed for by-hash lookups.
+export ARCHIVE=...
+```
+
+Read logs at a block like this — the form used throughout this page:
+
+```bash
+cast rpc eth_getLogs "{\"fromBlock\":\"$B_SETTLE\",\"toBlock\":\"$B_SETTLE\"}" --rpc-url $ARC
 ```
 
 **Pace these calls.** Arc's public RPC rate-limits and will interrupt a tight loop with
@@ -77,16 +103,26 @@ cast code $JOBVAULT    --rpc-url $ARC | wc -c
 cast code $FLOATPOOL   --rpc-url $ARC | wc -c
 ```
 
-**Confirm each creation receipt says what the table says:**
+**Confirm the deployment blocks are real and carry the creations:**
 
 ```bash
-cast receipt 0x7476b09723b8b1e823dbb882b51dd60226643703cc2a96e4ec0a0cd638ce480d --rpc-url $ARC  # AuditAnchor
-cast receipt 0x22af2e113de047d19afd4620d8dc54e5b5a2386d94ae079a04efc3569a5062c9 --rpc-url $ARC  # JobVault
-cast receipt 0x26bbe400e9de3d41b4c7cd18651a71a2c035754906d3e9809dfa4eda0e03c10e --rpc-url $ARC  # FloatPool
+cast block $B_DEPLOY  --rpc-url $ARC   # 53,268,443 — AuditAnchor + JobVault
+cast block $B_DEPLOY2 --rpc-url $ARC   # 53,268,445 — FloatPool
+```
+
+Contract creations emit no logs, so `cast code` above — which returns live runtime bytecode at
+each address — is the by-block proof that these deployments happened and stuck. The gas and
+cost columns come from the creation receipts, which need an archive endpoint:
+
+```bash
+cast receipt 0x7476b09723b8b1e823dbb882b51dd60226643703cc2a96e4ec0a0cd638ce480d --rpc-url $ARCHIVE  # AuditAnchor
+cast receipt 0x22af2e113de047d19afd4620d8dc54e5b5a2386d94ae079a04efc3569a5062c9 --rpc-url $ARCHIVE  # JobVault
+cast receipt 0x26bbe400e9de3d41b4c7cd18651a71a2c035754906d3e9809dfa4eda0e03c10e --rpc-url $ARCHIVE  # FloatPool
 ```
 
 Each receipt's `contractAddress` matches the row, `gasUsed` matches the Gas column, and
-`effectiveGasPrice` is `25000000000`.
+`effectiveGasPrice` is `25000000000`. Against the public RPC these return `null` — that is the
+pruned index, not a missing deployment.
 
 ## 3. job-004 lifecycle
 
@@ -100,11 +136,22 @@ The four state-advancing transactions, with real hashes and measured gas:
 | 3 | submit-delivery | `0xc4706096…6eeb5700b` | 53,611,521 | 55,366 |
 | 4 | accept + settle | `0x108a8f90…c806ef9de4b` | 53,613,272 | 138,456 |
 
+Each step emitted its JobVault event in the block above. Read them back:
+
 ```bash
-cast receipt 0x751091efb958cfcef8a9f4d4f5ad83909a3b399279bed3f9757c9aeba6b59401 --rpc-url $ARC  # start-work
-cast receipt 0x9b899aaaeaa11677886fe153aefe2624ad005565cb5fa690d0d30bded96bcc21 --rpc-url $ARC  # record-expense
-cast receipt 0xc470609675639c77d1a0803687a538a6cd1ca5e04e4692e2b43a5fa6eeb5700b --rpc-url $ARC  # submit-delivery
-cast receipt 0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b --rpc-url $ARC  # accept + settle
+for B in $B_START $B_EXPENSE $B_DELIVER $B_SETTLE; do
+  cast rpc eth_getLogs "{\"fromBlock\":\"$B\",\"toBlock\":\"$B\",\"address\":\"$JOBVAULT\"}" --rpc-url $ARC
+  sleep 1   # the public RPC rate-limits a tight loop
+done
+```
+
+With an archive endpoint the transactions themselves resolve by hash:
+
+```bash
+cast receipt 0x751091efb958cfcef8a9f4d4f5ad83909a3b399279bed3f9757c9aeba6b59401 --rpc-url $ARCHIVE  # start-work
+cast receipt 0x9b899aaaeaa11677886fe153aefe2624ad005565cb5fa690d0d30bded96bcc21 --rpc-url $ARCHIVE  # record-expense
+cast receipt 0xc470609675639c77d1a0803687a538a6cd1ca5e04e4692e2b43a5fa6eeb5700b --rpc-url $ARCHIVE  # submit-delivery
+cast receipt 0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b --rpc-url $ARCHIVE  # accept + settle
 ```
 
 The job's terminal on-chain status is `4` (Accepted), and its advance is closed:
@@ -121,8 +168,19 @@ The only transaction that matters for the credit claim is the settlement,
 `0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b`. Read its logs:
 
 ```bash
-cast receipt 0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b --rpc-url $ARC
+cast rpc eth_getLogs "{\"fromBlock\":\"$B_SETTLE\",\"toBlock\":\"$B_SETTLE\"}" --rpc-url $ARC
 ```
+
+Sixteen logs come back for the block; the settlement's are the ones below. Filter to the
+6-decimal surface to see the waterfall on its own:
+
+```bash
+cast rpc eth_getLogs "{\"fromBlock\":\"$B_SETTLE\",\"toBlock\":\"$B_SETTLE\",\"address\":\"$USDC\"}" --rpc-url $ARC
+```
+
+`./scripts/hardfork-check` asserts this automatically: it reads these logs, checks index 12
+pays the pool 561000 and index 15 pays the operator 439000, and fails loudly if the ordering
+or the amounts ever move.
 
 Decoding the 6-decimal ERC-20 `Transfer` logs and the `RateChanged` log by index:
 
@@ -166,11 +224,17 @@ cast call $FLOATPOOL "acceptedJobs(address)(uint32)" $OPERATOR --rpc-url $ARC  #
 ```
 
 ```bash
-# each tick lives in its settlement receipt; both carry the topic0 above
-cast receipt 0x9b57c8b8aa917823611b3f94a82de5cd9a14696ea74c6dc9c59107945b03ccdd --rpc-url $ARC  # -> 5500 @ 53290364
-cast receipt 0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b --rpc-url $ARC  # -> 6000 @ 53613272
-cast receipt 0xc0fb6a8699147cc6381d6d8863c7dadd96d4b43e0299773ff5442574d26c52fc --rpc-url $ARC  # -> 6500 @ 55738882
+# each tick is a FloatPool log in its settlement block, carrying the topic0 above
+for B in $B_RATE55 $B_SETTLE $B_AUTO; do
+  cast rpc eth_getLogs "{\"fromBlock\":\"$B\",\"toBlock\":\"$B\",\"address\":\"$FLOATPOOL\"}" --rpc-url $ARC
+  sleep 1
+done
+#   $B_RATE55 -> 5500   $B_SETTLE -> 6000   $B_AUTO -> 6500
 ```
+
+The live rate read from `advanceRate` above is **7000**, one tick beyond the table: a fourth
+job settled after this page was last written. The progression is the record of what was
+proven, not a claim about the pool's current state.
 
 The engine is **deliberately asymmetric** — read the constants from chain, not the source:
 
