@@ -33,6 +33,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -141,12 +142,12 @@ func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte,
 
 	// Verify the endpoint is the chain we signed up for — refuse to sign for a
 	// different chain id than configured (same posture as the indexer).
-	var chainHex string
-	if err := c.rpc(ctx, "eth_chainId", []any{}, &chainHex); err != nil {
-		return Receipt{}, fmt.Errorf("chain id check: %w", err)
-	}
-	if got := new(big.Int).SetBytes(common.FromHex(chainHex)); got.Cmp(c.chainID) != 0 {
-		return Receipt{}, fmt.Errorf("refusing to sign: endpoint chain id %s != configured %s", got, c.chainID)
+	if err := c.VerifyChainID(ctx); err != nil {
+		var mismatch chainIDMismatch
+		if errors.As(err, &mismatch) {
+			return Receipt{}, fmt.Errorf("refusing to sign: %w", err)
+		}
+		return Receipt{}, err
 	}
 
 	var nonceHex string
@@ -252,6 +253,26 @@ func (c *Client) CallViewAt(ctx context.Context, to common.Address, calldata []b
 		return nil, err
 	}
 	return common.FromHex(out), nil
+}
+
+type chainIDMismatch struct{ got, want *big.Int }
+
+func (e chainIDMismatch) Error() string {
+	return fmt.Sprintf("endpoint chain id %s != configured %s", e.got, e.want)
+}
+
+// VerifyChainID checks that the RPC endpoint serves the configured chain. A read-only
+// caller uses it before trusting a view: the same contract address can exist on another
+// network and answer with a plausible value.
+func (c *Client) VerifyChainID(ctx context.Context) error {
+	var chainHex string
+	if err := c.rpc(ctx, "eth_chainId", []any{}, &chainHex); err != nil {
+		return fmt.Errorf("chain id check: %w", err)
+	}
+	if got := new(big.Int).SetBytes(common.FromHex(chainHex)); got.Cmp(c.chainID) != 0 {
+		return chainIDMismatch{got: got, want: c.chainID}
+	}
+	return nil
 }
 
 // BlockNumber reads the current head height and returns it as the 0x-hex tag eth_call wants,

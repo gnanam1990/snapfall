@@ -66,13 +66,11 @@ type ReceiptReader interface {
 
 // Wallet submits contract calls through one Circle developer-controlled EOA.
 type Wallet struct {
-	baseURL      string
-	apiKey       string
+	api          api
 	entitySecret []byte
 	walletID     string
 	chainID      uint64
 	reader       ReceiptReader
-	http         *http.Client
 
 	// Filled by Open.
 	pub  *rsa.PublicKey
@@ -115,29 +113,41 @@ func newWallet(baseURL, apiKey, secretHex, walletID string, chainID uint64, read
 	if _, ok := blockchainFor(chainID); !ok {
 		return nil, fmt.Errorf("circle wallet: chain id %d is not an Arc network Circle wallets serve", chainID)
 	}
-	// Circle API keys are PREFIX:ID:SECRET. Checking the shape catches a pasted entity
-	// secret or a truncated key before the first request does.
-	if strings.Count(apiKey, ":") != 2 {
-		return nil, fmt.Errorf("circle wallet: %s is not in Circle's PREFIX:ID:SECRET form", EnvAPIKey)
+	a, err := newAPI(baseURL, apiKey)
+	if err != nil {
+		return nil, err
 	}
-	secret, err := hex.DecodeString(strings.TrimPrefix(secretHex, "0x"))
-	if err != nil || len(secret) != 32 {
-		return nil, fmt.Errorf("circle wallet: %s is not a 32-byte hex entity secret", EnvEntitySecret)
+	secret, err := ParseEntitySecret(secretHex)
+	if err != nil {
+		return nil, err
 	}
 	if !isUUID(walletID) {
 		return nil, fmt.Errorf("circle wallet: %s is not a wallet id (UUID)", EnvWalletID)
 	}
 	return &Wallet{
-		baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, entitySecret: secret,
-		walletID: walletID, chainID: chainID, reader: reader,
-		http:      &http.Client{Timeout: 30 * time.Second},
+		api: a, entitySecret: secret, walletID: walletID, chainID: chainID, reader: reader,
 		pollEvery: time.Second, deadline: 90 * time.Second,
 	}, nil
+}
+
+// ParseEntitySecret checks the entity secret's form: 32 bytes of hex. The error names the
+// variable, never the value.
+func ParseEntitySecret(secretHex string) ([]byte, error) {
+	secret, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(secretHex), "0x"))
+	if err != nil || len(secret) != 32 {
+		return nil, fmt.Errorf("circle wallet: %s is not a 32-byte hex entity secret", EnvEntitySecret)
+	}
+	return secret, nil
 }
 
 // blockchainFor maps the deployment's chain id to Circle's blockchain name. Only Arc is
 // listed: this lane signs for Snapfall's contracts, and they live on Arc.
 func blockchainFor(chainID uint64) (string, bool) {
+	return BlockchainFor(chainID)
+}
+
+// BlockchainFor is Circle's blockchain name for an Arc chain id.
+func BlockchainFor(chainID uint64) (string, bool) {
 	switch chainID {
 	case 5_042:
 		return "ARC", true
@@ -151,50 +161,38 @@ func blockchainFor(chainID uint64) (string, bool) {
 // safely be this lane: not LIVE, not developer-custodied, a smart-contract account, or on a
 // different network from the deployment.
 func (w *Wallet) Open(ctx context.Context) error {
-	var pk struct {
-		Data struct {
-			PublicKey string `json:"publicKey"`
-		} `json:"data"`
-	}
-	if err := w.call(ctx, http.MethodGet, "/v1/w3s/config/entity/publicKey", nil, &pk); err != nil {
-		return fmt.Errorf("circle wallet: entity public key: %w", err)
-	}
-	pub, err := parseRSAPublicKey(pk.Data.PublicKey)
+	pub, err := w.api.publicKey(ctx)
 	if err != nil {
-		return fmt.Errorf("circle wallet: entity public key: %w", err)
+		return err
 	}
-
-	var wr struct {
-		Data struct {
-			Wallet struct {
-				ID          string `json:"id"`
-				Address     string `json:"address"`
-				Blockchain  string `json:"blockchain"`
-				State       string `json:"state"`
-				CustodyType string `json:"custodyType"`
-				AccountType string `json:"accountType"`
-			} `json:"wallet"`
-		} `json:"data"`
+	got, err := w.api.wallet(ctx, w.walletID)
+	if err != nil {
+		return err
 	}
-	if err := w.call(ctx, http.MethodGet, "/v1/w3s/wallets/"+w.walletID, nil, &wr); err != nil {
-		return fmt.Errorf("circle wallet: wallet %s: %w", w.walletID, err)
-	}
-	got := wr.Data.Wallet
 	want, _ := blockchainFor(w.chainID)
-	switch {
-	case got.Blockchain != want:
-		return fmt.Errorf("circle wallet: wallet %s is on %q but the deployment is %s (chain %d)", w.walletID, got.Blockchain, want, w.chainID)
-	case got.State != "LIVE":
-		return fmt.Errorf("circle wallet: wallet %s is %q, not LIVE", w.walletID, got.State)
-	case got.CustodyType != "DEVELOPER":
-		return fmt.Errorf("circle wallet: wallet %s is %q custody; this lane signs only for a developer-controlled wallet", w.walletID, got.CustodyType)
-	case got.AccountType != "EOA":
-		// See the package doc: an SCA's reported hash can succeed while the call reverted.
-		return fmt.Errorf("circle wallet: wallet %s is a %q account; only an EOA's receipt status is the call's outcome", w.walletID, got.AccountType)
-	case !common.IsHexAddress(got.Address):
-		return fmt.Errorf("circle wallet: wallet %s reported address %q", w.walletID, got.Address)
+	if err := CheckLane(got, want); err != nil {
+		return err
 	}
 	w.pub, w.addr = pub, common.HexToAddress(got.Address)
+	return nil
+}
+
+// CheckLane refuses a wallet that cannot safely sign for Snapfall on the given Circle
+// blockchain: not LIVE, not developer-custodied, a smart-contract account, or elsewhere.
+func CheckLane(got WalletInfo, blockchain string) error {
+	switch {
+	case got.Blockchain != blockchain:
+		return fmt.Errorf("circle wallet: wallet %s is on %q but the deployment is %s", got.ID, got.Blockchain, blockchain)
+	case got.State != "LIVE":
+		return fmt.Errorf("circle wallet: wallet %s is %q, not LIVE", got.ID, got.State)
+	case got.CustodyType != "DEVELOPER":
+		return fmt.Errorf("circle wallet: wallet %s is %q custody; this lane signs only for a developer-controlled wallet", got.ID, got.CustodyType)
+	case got.AccountType != "EOA":
+		// See the package doc: an SCA's reported hash can succeed while the call reverted.
+		return fmt.Errorf("circle wallet: wallet %s is a %q account; only an EOA's receipt status is the call's outcome", got.ID, got.AccountType)
+	case !common.IsHexAddress(got.Address):
+		return fmt.Errorf("circle wallet: wallet %s reported address %q", got.ID, got.Address)
+	}
 	return nil
 }
 
@@ -208,9 +206,9 @@ func (w *Wallet) Submit(ctx context.Context, to common.Address, calldata []byte)
 	if w.pub == nil {
 		return chain.Receipt{}, fmt.Errorf("refusing to submit: the Circle wallet lane was never opened")
 	}
-	ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, w.pub, w.entitySecret, nil)
+	ciphertext, err := encryptSecret(w.pub, w.entitySecret)
 	if err != nil {
-		return chain.Receipt{}, fmt.Errorf("circle wallet: encrypting the entity secret failed")
+		return chain.Receipt{}, err
 	}
 	key, err := newUUIDv4()
 	if err != nil {
@@ -225,7 +223,7 @@ func (w *Wallet) Submit(ctx context.Context, to common.Address, calldata []byte)
 		"contractAddress":        to.Hex(),
 		"callData":               "0x" + hex.EncodeToString(calldata),
 		"feeLevel":               "MEDIUM",
-		"entitySecretCiphertext": base64.StdEncoding.EncodeToString(ciphertext),
+		"entitySecretCiphertext": ciphertext,
 	}
 	var created struct {
 		Data struct {
@@ -233,7 +231,7 @@ func (w *Wallet) Submit(ctx context.Context, to common.Address, calldata []byte)
 			State string `json:"state"`
 		} `json:"data"`
 	}
-	if err := w.call(ctx, http.MethodPost, "/v1/w3s/developer/transactions/contractExecution", req, &created); err != nil {
+	if err := w.api.call(ctx, http.MethodPost, "/v1/w3s/developer/transactions/contractExecution", req, &created); err != nil {
 		return chain.Receipt{}, fmt.Errorf("circle wallet: create transaction: %w", err)
 	}
 	if created.Data.ID == "" {
@@ -266,7 +264,7 @@ func (w *Wallet) awaitHash(ctx context.Context, id string) (string, error) {
 				} `json:"transaction"`
 			} `json:"data"`
 		}
-		if err := w.call(ctx, http.MethodGet, "/v1/w3s/transactions/"+id, nil, &tr); err != nil {
+		if err := w.api.call(ctx, http.MethodGet, "/v1/w3s/transactions/"+id, nil, &tr); err != nil {
 			return "", fmt.Errorf("circle wallet: transaction %s: %w", id, err)
 		}
 		t := tr.Data.Transaction
@@ -299,10 +297,81 @@ func reason(r string) string {
 	return r
 }
 
+// api is the HTTP half shared by the wallet lane and Admin: the base URL, the API key and
+// a client with a timeout. It never holds the entity secret.
+type api struct {
+	baseURL string
+	apiKey  string
+	http    *http.Client
+}
+
+func newAPI(baseURL, apiKey string) (api, error) {
+	// Circle API keys are PREFIX:ID:SECRET. Checking the shape catches a pasted entity
+	// secret or a truncated key before the first request does.
+	if strings.Count(apiKey, ":") != 2 {
+		return api{}, fmt.Errorf("circle wallet: %s is not in Circle's PREFIX:ID:SECRET form", EnvAPIKey)
+	}
+	return api{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: &http.Client{Timeout: 30 * time.Second}}, nil
+}
+
+func (a api) publicKey(ctx context.Context) (*rsa.PublicKey, error) {
+	var pk struct {
+		Data struct {
+			PublicKey string `json:"publicKey"`
+		} `json:"data"`
+	}
+	if err := a.call(ctx, http.MethodGet, "/v1/w3s/config/entity/publicKey", nil, &pk); err != nil {
+		return nil, fmt.Errorf("circle wallet: entity public key: %w", err)
+	}
+	pub, err := parseRSAPublicKey(pk.Data.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("circle wallet: entity public key: %w", err)
+	}
+	return pub, nil
+}
+
+func (a api) wallet(ctx context.Context, id string) (WalletInfo, error) {
+	var wr struct {
+		Data struct {
+			Wallet WalletInfo `json:"wallet"`
+		} `json:"data"`
+	}
+	if err := a.call(ctx, http.MethodGet, "/v1/w3s/wallets/"+id, nil, &wr); err != nil {
+		return WalletInfo{}, fmt.Errorf("circle wallet: wallet %s: %w", id, err)
+	}
+	if wr.Data.Wallet.ID != id {
+		return WalletInfo{}, fmt.Errorf("circle wallet: asked for wallet %s, Circle answered with %q", id, wr.Data.Wallet.ID)
+	}
+	return wr.Data.Wallet, nil
+}
+
+// encryptSecret is the entitySecretCiphertext Circle wants: RSA-OAEP(SHA-256) under the
+// entity public key, base64. OAEP is randomized, so every call yields a fresh ciphertext.
+func encryptSecret(pub *rsa.PublicKey, secret []byte) (string, error) {
+	ct, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, pub, secret, nil)
+	if err != nil {
+		return "", fmt.Errorf("circle wallet: encrypting the entity secret failed")
+	}
+	return base64.StdEncoding.EncodeToString(ct), nil
+}
+
+// HTTPError is a non-2xx answer from Circle: the request reached Circle and Circle
+// refused it (4xx) or failed (5xx). A transport error is never an HTTPError, so a caller can
+// tell "Circle said no" from "we do not know what Circle did".
+type HTTPError struct {
+	Status  int
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d: code %d: %s", e.Status, e.Code, e.Message)
+}
+
 // call does one Circle API request. A non-2xx answer becomes an error carrying Circle's
 // code and message; the request body (which holds the ciphertext) and the API key are never
 // part of it.
-func (w *Wallet) call(ctx context.Context, method, path string, body, out any) error {
+func (a api) call(ctx context.Context, method, path string, body, out any) error {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -311,15 +380,15 @@ func (w *Wallet) call(ctx context.Context, method, path string, body, out any) e
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, w.baseURL+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, a.baseURL+path, rd)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+w.apiKey)
+	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := w.http.Do(req)
+	resp, err := a.http.Do(req)
 	if err != nil {
 		return err
 	}
@@ -329,12 +398,9 @@ func (w *Wallet) call(ctx context.Context, method, path string, body, out any) e
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		var e struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal(raw, &e)
-		return fmt.Errorf("HTTP %d: code %d: %s", resp.StatusCode, e.Code, e.Message)
+		e := &HTTPError{Status: resp.StatusCode}
+		_ = json.Unmarshal(raw, e)
+		return e
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
 		return fmt.Errorf("HTTP %d, undecodable body: %w", resp.StatusCode, err)
