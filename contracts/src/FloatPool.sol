@@ -39,6 +39,45 @@ contract FloatPool is ReentrancyGuard {
     IJobVaultView public jobVault;      // set once; SC-FP-010: repay/writeOff callable only by vault
     address public admin;
 
+    // ── Added Sep 2026 (post-freeze): mainnet capital controls ──
+    //
+    // ADR-014 froze this contract for the hackathon. Mainnet is a different risk surface: the
+    // caps above are percentages of TVL, so they bound the SHAPE of the book but not its SIZE.
+    // These four are absolute and admin-controlled, and they hold no matter how the daemon,
+    // the dashboard or the operator behave, which is the only property that makes an exposure
+    // limit meaningful. See docs/MAINNET.md.
+    //
+    // All of them FAIL CLOSED: a pool that has never been configured lends nothing and accepts
+    // deposits from nobody but its deployer. Forgetting to set a limit cannot mean "unlimited".
+    bool public paused;                 // blocks NEW risk only; every exit stays open
+    uint256 public maxTotalExposure;    // absolute ceiling on totalOutstanding + totalWrittenOff; 0 = never set
+    uint256 public maxAdvance;          // absolute ceiling on a single advance; 0 = never set
+    // Lifetime principal lost to write-offs. It counts against maxTotalExposure FOREVER, so the
+    // ceiling bounds cumulative loss, not just the open book: without it, draw -> refund ->
+    // writeOff returns totalOutstanding to zero and the same ceiling can be lost again, every
+    // cycle, until the pool is empty. Spending the budget again is an explicit admin setCaps.
+    uint256 public totalWrittenOff;
+
+    // ── Admin hardening (Oct 2026) ──
+    //
+    // setCaps used to take effect immediately and without limit, so a compromised admin key
+    // could raise the ceiling and lose the pool in the same block. Now only LOWERING (and the
+    // first-ever configuration) is immediate. A raise is queued for CAP_RAISE_DELAY, which is
+    // the window in which an LP can withdraw idle capital (withdraw is never paused) and the
+    // real key holder can pause or lower the caps back down. Admin itself moves only through a
+    // two-step transfer with the same delay, so a leaked key can be rotated, a typo cannot
+    // brick the role, and an attacker holding the key cannot rotate the real holder out before
+    // they can react: they see AdminTransferStarted and cancel it.
+    uint256 public constant CAP_RAISE_DELAY = 2 days;
+    uint256 public constant ADMIN_TRANSFER_DELAY = 2 days;
+    address public pendingAdmin;
+    uint64 public adminTransferAcceptableAt; // 0 = no transfer pending
+    uint256 public pendingMaxTotalExposure;
+    uint256 public pendingMaxAdvance;
+    uint64 public capRaiseExecutableAt; // 0 = no raise queued
+    bool public depositAllowlistEnabled;
+    mapping(address => bool) public allowedDepositor;
+
     mapping(bytes32 => Advance) public advances;           // one advance per job (SC-FP-003)
     mapping(address => uint32) public acceptedJobs;        // org → count
     mapping(address => uint32) public writtenOffJobs;      // org → count
@@ -63,6 +102,17 @@ contract FloatPool is ReentrancyGuard {
     event BondSlashed(bytes32 indexed jobId, uint256 amount);       // SC-FP-008 stage 1
     event ReserveDrawn(bytes32 indexed jobId, uint256 amount);      // SC-FP-008 stage 2
     event LossSocialized(bytes32 indexed jobId, uint256 amount);    // SC-FP-008 stage 3
+    // ── Added Sep 2026 (post-freeze): mainnet capital controls ──
+    event PauseSet(bool paused);
+    event CapsSet(uint256 maxTotalExposure, uint256 maxAdvance);
+    event DepositAllowlistSet(bool enabled);
+    event DepositorAllowed(address indexed depositor, bool allowed);
+    // ── Added Oct 2026: admin hardening ──
+    event CapsRaiseQueued(uint256 maxTotalExposure, uint256 maxAdvance, uint64 executableAt);
+    event CapsRaiseCancelled();
+    event AdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin, uint64 acceptableAt);
+    event AdminTransferCancelled();
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
 
     error NotJobVault();
     error JobNotFunded();
@@ -78,8 +128,151 @@ contract FloatPool is ReentrancyGuard {
     error WrongRepayment();
     error ZeroAmount();
     error InsufficientLiquidity();
+    // ── Added Sep 2026 (post-freeze): mainnet capital controls ──
+    error EnforcedPause();
+    error CapNotSet();
+    error AdvanceTooLarge();
+    error ExposureCapExceeded();
+    error DepositorNotAllowed();
+    // ── Added Oct 2026: admin hardening ──
+    error NoCapRaiseQueued();
+    error CapRaiseTimelocked();
+    error NotPendingAdmin();
+    error AdminTransferTimelocked();
+    error MixedCapChange();
 
-    constructor(IERC20 _usdc) { usdc = _usdc; admin = msg.sender; }
+    constructor(IERC20 _usdc) {
+        usdc = _usdc;
+        admin = msg.sender;
+        // Fail closed. The deployer can seed its own pool; everyone else needs an explicit
+        // grant, and the caps start unset so no advance can issue until one is chosen.
+        depositAllowlistEnabled = true;
+        allowedDepositor[msg.sender] = true;
+    }
+
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert NotAuthorized();
+        _;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Mainnet capital controls (post-freeze, Sep 2026)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice Emergency stop. Blocks new deposits and new advances.
+    /// @dev Deliberately does NOT gate withdraw, repayAdvance or writeOff. A stop that trapped
+    ///      LP capital or blocked an in-flight settlement would be worse than no stop at all —
+    ///      it would turn an incident into a fund freeze. Pause stops money going IN and risk
+    ///      going ON; every path that takes money OUT stays open. Asserted in Caps.t.sol.
+    function setPaused(bool value) external onlyAdmin {
+        paused = value;
+        emit PauseSet(value);
+    }
+
+    /// @notice Set the absolute exposure ceilings, in USDC base units.
+    /// @dev Both must be non-zero: zero is reserved for "never configured", which fails closed
+    ///      in requestAdvance. To stop lending, pause — do not zero the caps.
+    ///
+    ///      The first configuration and any change that raises neither cap apply immediately
+    ///      (and clear a queued raise, so lowering is also how a raise is countered). A change
+    ///      that raises either cap is queued for CAP_RAISE_DELAY and applied by
+    ///      executeCapsRaise. A change that raises one cap and lowers the other reverts
+    ///      MixedCapChange: in an incident, a typo must not silently defer a lowering by the
+    ///      raise delay. Lower first, then raise, as two calls.
+    function setCaps(uint256 _maxTotalExposure, uint256 _maxAdvance) external onlyAdmin {
+        if (_maxTotalExposure == 0 || _maxAdvance == 0) revert ZeroAmount();
+        bool configured = maxTotalExposure != 0; // both caps are only ever set together
+        bool raises = _maxTotalExposure > maxTotalExposure || _maxAdvance > maxAdvance;
+        bool lowers = _maxTotalExposure < maxTotalExposure || _maxAdvance < maxAdvance;
+        if (configured && raises && lowers) revert MixedCapChange();
+        if (configured && raises) {
+            uint64 executableAt = uint64(block.timestamp + CAP_RAISE_DELAY);
+            pendingMaxTotalExposure = _maxTotalExposure;
+            pendingMaxAdvance = _maxAdvance;
+            capRaiseExecutableAt = executableAt;
+            emit CapsRaiseQueued(_maxTotalExposure, _maxAdvance, executableAt);
+            return;
+        }
+        if (capRaiseExecutableAt != 0) {
+            // Lowering (or re-setting) is how a queued raise is countered, and it says so.
+            _clearCapRaise();
+            emit CapsRaiseCancelled();
+        }
+        _applyCaps(_maxTotalExposure, _maxAdvance);
+    }
+
+    /// @notice Apply a queued raise once its delay has passed.
+    function executeCapsRaise() external onlyAdmin {
+        uint64 executableAt = capRaiseExecutableAt;
+        if (executableAt == 0) revert NoCapRaiseQueued();
+        if (block.timestamp < executableAt) revert CapRaiseTimelocked();
+        uint256 e = pendingMaxTotalExposure;
+        uint256 a = pendingMaxAdvance;
+        _clearCapRaise(); // consumed, not cancelled: only CapsSet is emitted
+        _applyCaps(e, a);
+    }
+
+    /// @notice Drop a queued raise without changing the current caps.
+    function cancelCapsRaise() external onlyAdmin {
+        if (capRaiseExecutableAt == 0) revert NoCapRaiseQueued();
+        _clearCapRaise();
+        emit CapsRaiseCancelled();
+    }
+
+    function _applyCaps(uint256 _maxTotalExposure, uint256 _maxAdvance) private {
+        maxTotalExposure = _maxTotalExposure;
+        maxAdvance = _maxAdvance;
+        emit CapsSet(_maxTotalExposure, _maxAdvance);
+    }
+
+    function _clearCapRaise() private {
+        pendingMaxTotalExposure = 0;
+        pendingMaxAdvance = 0;
+        capRaiseExecutableAt = 0;
+    }
+
+    /// @notice Start handing the admin role to `newAdmin`. They can accept after
+    ///         ADMIN_TRANSFER_DELAY; until then the current admin can cancel.
+    /// @dev Two steps so a mistyped address cannot strand the role, and delayed so a leaked key
+    ///      cannot rotate the real holder out before they see AdminTransferStarted and cancel.
+    ///      Calling again replaces the pending address and restarts the delay; transferring to
+    ///      the current admin cancels.
+    function transferAdmin(address newAdmin) external onlyAdmin {
+        if (newAdmin == address(0)) revert ZeroAddress();
+        if (newAdmin == admin) {
+            pendingAdmin = address(0);
+            adminTransferAcceptableAt = 0;
+            emit AdminTransferCancelled();
+            return;
+        }
+        uint64 acceptableAt = uint64(block.timestamp + ADMIN_TRANSFER_DELAY);
+        pendingAdmin = newAdmin;
+        adminTransferAcceptableAt = acceptableAt;
+        emit AdminTransferStarted(admin, newAdmin, acceptableAt);
+    }
+
+    function acceptAdmin() external {
+        if (msg.sender != pendingAdmin || msg.sender == address(0)) revert NotPendingAdmin();
+        if (block.timestamp < adminTransferAcceptableAt) revert AdminTransferTimelocked();
+        emit AdminTransferred(admin, msg.sender);
+        admin = msg.sender;
+        pendingAdmin = address(0);
+        adminTransferAcceptableAt = 0;
+    }
+
+    /// @notice Turn the deposit allowlist on or off.
+    /// @dev Off means anyone may supply capital to the pool. That is a deliberate decision to
+    ///      take third-party money, not a default — it starts on.
+    function setDepositAllowlistEnabled(bool enabled) external onlyAdmin {
+        depositAllowlistEnabled = enabled;
+        emit DepositAllowlistSet(enabled);
+    }
+
+    function setDepositorAllowed(address depositor, bool allowed) external onlyAdmin {
+        if (depositor == address(0)) revert ZeroAddress();
+        allowedDepositor[depositor] = allowed;
+        emit DepositorAllowed(depositor, allowed);
+    }
 
     /// SPEC-04 — set-once wiring. SC-FP-010 depends on this being set: repayAdvance and
     /// writeOff are callable only by the registered JobVault, and "registered" means here.
@@ -131,6 +324,8 @@ contract FloatPool is ReentrancyGuard {
 
     /// @notice LP deposits USDC and receives proportional shares.
     function deposit(uint256 assets, address receiver) external nonReentrant returns (uint256 shares) {
+        if (paused) revert EnforcedPause();
+        if (depositAllowlistEnabled && !allowedDepositor[msg.sender]) revert DepositorNotAllowed();
         if (assets == 0) revert ZeroAmount();
         if (receiver == address(0)) revert ZeroAddress();
 
@@ -181,7 +376,10 @@ contract FloatPool is ReentrancyGuard {
     /// come up short. `testFuzz_advance_neverExceedsEscrow` asserts this over the whole
     /// rate range and random org histories.
     function requestAdvance(bytes32 jobId) external nonReentrant returns (uint256 amount) {
+        if (paused) revert EnforcedPause();
         if (address(jobVault) == address(0)) revert NotWired();
+        // Fail closed: an unconfigured pool lends nothing.
+        if (maxTotalExposure == 0 || maxAdvance == 0) revert CapNotSet();
 
         // SC-FP-001: read the vault's own view of the job. The caller is never trusted for
         // status, economics, or identity — all three come from the vault.
@@ -200,6 +398,9 @@ contract FloatPool is ReentrancyGuard {
         if (principal == 0) revert ZeroAmount();
         uint256 fee = (principal * uint256(FEE_BPS)) / 10_000;
 
+        // Absolute per-advance ceiling, checked before anything is committed.
+        if (principal > maxAdvance) revert AdvanceTooLarge();
+
         // Liquidity: only idle LP cash can be lent.
         if (principal > totalAssets - totalOutstanding) revert InsufficientLiquidity();
 
@@ -214,6 +415,11 @@ contract FloatPool is ReentrancyGuard {
         });
         orgOutstanding[org] += principal;
         totalOutstanding += principal;
+
+        // The absolute ceiling is checked FIRST and is authoritative: the percentage caps below
+        // scale with TVL, so in a large pool they may not bind at all. This one always does.
+        // Losses already taken count too, so the ceiling is the most the pool can EVER lose.
+        if (totalOutstanding + totalWrittenOff > maxTotalExposure) revert ExposureCapExceeded();
 
         // SC-FP-006: caps are checked against the post-issuance position, so an advance that
         // would breach either one never lands.
@@ -283,6 +489,7 @@ contract FloatPool is ReentrancyGuard {
         a.status = AdvanceStatus.WrittenOff;
         orgOutstanding[org] -= loss;
         totalOutstanding -= loss;
+        totalWrittenOff += loss; // permanent: this loss keeps counting against maxTotalExposure
         writtenOffJobs[org] += 1;
 
         // Stage 1 — operator performance bond (SC-FP-011, P1). Not yet implemented.

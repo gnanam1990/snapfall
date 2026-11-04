@@ -61,6 +61,9 @@ type Server struct {
 	VerifyAccept func(jobID, token string) bool
 	Accept       func(ctx context.Context, jobID string) (string, error)
 	JobState     func(jobID string) (string, bool)
+	// VaultJobID names the job's on-chain identity for the customer's own wallet. Optional:
+	// nil, or an empty answer, leaves it out of the acceptance read.
+	VaultJobID func(jobID string) string
 
 	// ProposeAdvance is the owner-initiated advance trigger (the snap's proposal),
 	// wired to Brain's single site. The proposal lands in THIS API's own approvals

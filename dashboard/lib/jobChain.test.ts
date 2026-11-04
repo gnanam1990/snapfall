@@ -65,9 +65,11 @@ function fakeRPC(answers: {
   jobs?: string | (() => never);
   advance?: string | (() => never);
   rate?: string | (() => never);
+  chainId?: number;
 }): { rpc: RPCTransport; calls: string[] } {
   const calls: string[] = [];
   const rpc = (async (method: string, params: unknown[]) => {
+    if (method === 'eth_chainId') return '0x' + (answers.chainId ?? config.chainId).toString(16);
     assert.equal(method, 'eth_call');
     const call = (params as [{ to: string; data: string }])[0];
     const selector = call.data.slice(0, 10);
@@ -235,4 +237,11 @@ test('the status table matches the contract enum order', () => {
   );
   // Index 4 is the settled terminal the daemon's Oracle also relies on.
   assert.equal(JOB_STATUS[4], 'Accepted');
+});
+
+test('an RPC serving a different chain is refused before any vault read', async () => {
+  // A mainnet build pointed at a testnet endpoint must not report a real job as absent.
+  const { rpc, calls } = fakeRPC({ jobs: jobsReturn({}), chainId: 5042 });
+  await assert.rejects(loadJobSnapshot(config, JOB_ID, rpc), /chain ID 5042 does not match configured chain ID 5042002/);
+  assert.deepEqual(calls, [], 'no eth_call is issued against the wrong chain');
 });

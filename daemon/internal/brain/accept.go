@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -185,6 +186,9 @@ func (b *Brain) settleOnChain(ctx context.Context, jobID string) (string, error)
 	if err != nil {
 		return "", err
 	}
+	if state, done, err := b.settledByCustomer(ctx, jobID, jm.VaultJobID); err != nil || done {
+		return state, err
+	}
 	if b.funding == nil {
 		return pending("delivery accepted; no funding agent wired — settlement pending")
 	}
@@ -219,4 +223,84 @@ func (b *Brain) settleOnChain(ctx context.Context, jobID string) (string, error)
 	}
 	b.log.Info("settlement executed on chain", "job", jobID, "tx", out.TxHash, "gas", out.GasUsed)
 	return "accepted-settled", nil
+}
+
+// SetSettlementOracle wires the on-chain read settleOnChain consults before submitting.
+// With none wired, every Accept goes to the customer lane as before.
+func (b *Brain) SetSettlementOracle(landed func(ctx context.Context, vaultJobID string) (bool, error)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.settlementLanded = landed
+}
+
+// settledByCustomer handles the self-custody customer: their own wallet signed
+// JobVault.acceptDelivery (SC-JV-005 needs nothing else), and the portal then sends the
+// credential-gated Accept so the daemon's record matches. The chain is the oracle: if the
+// job is already Accepted there, the settlement HAPPENED, and is recorded as executed with
+// the customer as its signer. Submitting through the custodial lane instead would mine and
+// revert (the job is no longer Delivered) and be reported as a failed settlement of a job
+// that settled fine.
+//
+// The transaction hash comes from the indexed JobSettled event when the indexer has seen
+// it. If it has not yet, the record says so rather than leaving the field looking complete.
+//
+// A failed chain read is not a reason to refuse the Accept: it falls through to the
+// existing path, which is exactly what ran before this check existed.
+func (b *Brain) settledByCustomer(ctx context.Context, jobID, vaultJobID string) (string, bool, error) {
+	b.mu.Lock()
+	landed, agent := b.settlementLanded, b.billingAgent
+	b.mu.Unlock()
+	if landed == nil || vaultJobID == "" {
+		return "", false, nil
+	}
+	ok, err := landed(ctx, vaultJobID)
+	if err != nil {
+		b.log.Warn("cannot read on-chain settlement before Accept; using the customer lane", "job", jobID, "err", err)
+		return "", false, nil
+	}
+	if !ok {
+		return "", false, nil
+	}
+	payload := map[string]any{
+		"signer": "customer",
+		"note":   "acceptDelivery was signed by the customer's own wallet; observed on chain",
+	}
+	// The indexed event is looked up on this deployment's chain only: a deterministic demo
+	// job id can exist on testnet and mainnet alike. With no billing agent there is no chain
+	// id to scope by, so no hash is claimed.
+	var txHash string
+	var block int64
+	err = sql.ErrNoRows
+	if agent != nil {
+		err = b.store.DB().QueryRowContext(ctx,
+			`SELECT transaction_hash, block_number FROM chain_events
+			 WHERE chain_id=? AND kind='JobSettled' AND entity_id=? ORDER BY block_number LIMIT 1`,
+			agent.ChainID(), vaultJobID).Scan(&txHash, &block)
+	}
+	switch {
+	case err == nil:
+		payload["tx_hash"], payload["block"] = txHash, block
+	case errors.Is(err, sql.ErrNoRows):
+		payload["tx_hash_pending"] = "the indexer has not yet recorded JobSettled for this job"
+	default:
+		return "", false, err
+	}
+	if _, err := b.store.Append(ctx, store.Event{
+		Kind: "settlement.executed", EntityID: jobID, Actor: "customer", Payload: payload,
+	}); err != nil {
+		return "", false, err
+	}
+	b.log.Info("settlement observed on chain, signed by the customer's wallet", "job", jobID, "tx", txHash)
+	return "accepted-settled", true, nil
+}
+
+// VaultJobID is the job's bound on-chain identity, empty when none is bound yet. The
+// customer surface returns it so a customer settling from their own wallet can name the
+// on-chain job; it is the customer's own job, so this exposes nothing they are not party to.
+func (b *Brain) VaultJobID(jobID string) string {
+	jm, err := b.memory.Get(jobID)
+	if err != nil {
+		return ""
+	}
+	return jm.VaultJobID
 }

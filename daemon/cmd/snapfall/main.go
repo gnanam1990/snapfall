@@ -67,8 +67,10 @@ func (f discoveryFinder) Find(ctx context.Context, need string, maxAmountMicros 
 	return out, nil
 }
 
-// arcTestnetChainID matches deployments/arc-testnet.json ("chainId": 5042002) and the
-// indexer fixtures, the one chain this build's invoices and settlement observer read.
+// arcTestnetChainID matches deployments/arc-testnet.json ("chainId": 5042002). It is the chain
+// invoices and H3 payments name only when NO deployment is configured (the development posture);
+// with -deployment, the loaded record's chainId is used instead, so a mainnet deployment cannot
+// bill or ask the sidecar to pay on testnet.
 const arcTestnetChainID = uint64(5_042_002)
 
 // The H3 payment sidecar's environment. It is read HERE and nowhere else in the daemon:
@@ -137,7 +139,7 @@ type bootLanes struct {
 // lane binds one signing client to one contract address as a funding.Submitter -
 // Funding holds the only references; nothing else can name a signer.
 type lane struct {
-	c  *chain.Client
+	c  chainSigner
 	to common.Address
 }
 
@@ -490,6 +492,7 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		}
 		return string(js.Stage), true
 	}
+	api.VaultJobID = br.VaultJobID
 	// The snap's owner-initiated trigger: the proposal lands pending in this same
 	// inbox; the owner's approval mints the Grant and Funding stops honestly at
 	// advance.pending_chain until the deployment lands.
@@ -869,17 +872,30 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// does not import approval.
 	led.Claimed = executionClaimed(life)
 
+	// The deployment is loaded HERE, before the payment lane and billing, because both name a
+	// chain: they must name the deployment's, not a testnet constant. A bad deployment is still
+	// fatal, exactly as it was when this load sat with the chain lanes below.
+	var dep *chaincfg.Deployment
+	chainID := arcTestnetChainID
+	if deployment != "" {
+		loaded, err := chaincfg.Load(deployment, os.LookupEnv)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("chain deployment: %w", err)
+		}
+		dep, chainID = &loaded, loaded.Network.ChainID
+	}
+
 	// The H3 payment lane, wired onto Funding (the daemon's only holder of a spend
 	// capability) BEFORE the Purchaser exists, because the Purchaser's first act on a
 	// purchase is to ask Funding for a quote (H3 §7 step 1).
-	payer := wirePayer(ctx, log, fund)
+	payer := wirePayer(ctx, log, fund, chainID)
 
 	br.SetPurchaser(purchasing.New(life, st, fund, led, purchasing.RealClock{}, orgID, 5*time.Minute))
 
-	// G12 Billing: the read-side invoice formatter over the shared store's chain rows
-	// (arc-testnet chainId 5042002, deployments/arc-testnet.json). Brain alone holds the
+	// G12 Billing: the read-side invoice formatter over the shared store's chain rows, on the
+	// deployment's chain (arc-testnet 5042002 when none is configured). Brain alone holds the
 	// pointer; GenerateInvoice is its single pinned invocation site.
-	br.SetBilling(billing.New(st, arcTestnetChainID, nil))
+	br.SetBilling(billing.New(st, chainID, nil))
 
 	// The advance's human-authorized path (the snap's daemon half): proposals enter
 	// the approval lifecycle pre-marked for the owner, execution flows through the
@@ -895,24 +911,25 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// a configured deployment with a MISSING key wires no lane, and the affected flow
 	// stops LOUDLY at *.pending_chain (a labeled pending record, never a fabricated
 	// success), the keys are env-only, format-validated, and never logged. The
-	// treasury key signs requestAdvance; the customer key signs acceptDelivery
+	// treasury signs requestAdvance, with a raw key or a Circle developer-controlled
+	// wallet (openTreasury chooses); the customer key signs acceptDelivery
 	// (SC-JV-005, daemon-custodial for the demo, stated openly).
-	if deployment != "" {
-		dep, err := chaincfg.Load(deployment, os.LookupEnv)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("chain deployment: %w", err)
-		}
+	if dep != nil {
 		fpAddr := common.HexToAddress(dep.Contracts.FloatPool.Address)
 		jvAddr := common.HexToAddress(dep.Contracts.JobVault.Address)
 		var advanceLane, settleLane funding.Submitter
 		var reader *chain.Client
 		var operator common.Address
-		if treasury, err := chain.NewFromEnv("TREASURY_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
+		if treasury, treasuryReader, kind, err := openTreasury(ctx, log, dep.Network.RPCURL, dep.Network.ChainID); err != nil {
 			log.Warn("treasury chain lane NOT wired, advances stop at advance.pending_chain", "reason", err)
 		} else {
-			advanceLane, reader = lane{treasury, fpAddr}, treasury
+			advanceLane, reader = lane{treasury, fpAddr}, treasuryReader
 			operator = treasury.Address()
-			log.Info("treasury chain lane wired", "signer", treasury.Address().Hex(), "floatPool", fpAddr.Hex())
+			log.Info("treasury chain lane wired", "signer", treasury.Address().Hex(), "via", kind, "floatPool", fpAddr.Hex())
+			if configured, bad := treasuryAddressMismatch(treasury.Address()); bad {
+				log.Warn("SNAPFALL_TREASURY_ADDRESS is not the treasury signer; the owner API will report another org's rate and advances",
+					"configured", configured, "signer", treasury.Address().Hex())
+			}
 		}
 		if customer, err := chain.NewFromEnv("SNAPFALL_CUSTOMER_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
 			log.Warn("customer chain lane NOT wired, settlements stop at settlement.pending_chain", "reason", err)
@@ -933,6 +950,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 			chainBudgets = &chainBudget{reader: reader, jobVault: jvAddr, led: led, log: log, noted: make(map[string]bool)}
 			oracle := chain.Oracle{Reader: reader, FloatPool: fpAddr, JobVault: jvAddr, Org: operator}
 			adv.SetOracle(oracle)
+			// A customer with their own wallet settles on chain directly; the Accept that
+			// follows must find that out instead of submitting a second acceptDelivery.
+			br.SetSettlementOracle(oracle.SettlementLanded)
 			// Read the org's current advance rate at intent creation so the amount the
 			// owner approves matches what FloatPool draws (no hardcoded-50%-vs-55%
 			// divergence when the rate has climbed).
@@ -1148,7 +1168,7 @@ func executionClaimed(life *approval.Lifecycle) func(string) bool {
 // The two secrets are read HERE and handed only to internal/funding (the approval key) and
 // internal/h3 (the bearer token). Neither is ever logged: the log lines name the origin, the
 // minimum length and the reason, and nothing else.
-func wirePayer(ctx context.Context, log *slog.Logger, fund *funding.Agent) statusPoller {
+func wirePayer(ctx context.Context, log *slog.Logger, fund *funding.Agent, chainID uint64) statusPoller {
 	rawToken, haveToken := os.LookupEnv(sidecarTokenEnv)
 	rawSecret, haveSecret := os.LookupEnv(approvalSecretEnv)
 	token, secret := strings.TrimSpace(rawToken), strings.TrimSpace(rawSecret)
@@ -1185,8 +1205,8 @@ func wirePayer(ctx context.Context, log *slog.Logger, fund *funding.Agent) statu
 			"purchase.pending_settlement", "base_url", cl.BaseURL(), "reason", err)
 		return nil
 	}
-	fund.SetPayer(cl, []byte(secret), int64(arcTestnetChainID))
-	log.Info("H3 payment lane wired", "base_url", cl.BaseURL(), "chain_id", arcTestnetChainID)
+	fund.SetPayer(cl, []byte(secret), int64(chainID))
+	log.Info("H3 payment lane wired", "base_url", cl.BaseURL(), "chain_id", chainID)
 	return cl
 }
 

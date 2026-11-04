@@ -54,7 +54,7 @@ if (Buffer.byteLength(AUTH_TOKEN, 'utf8') < 32) {
 }
 if (!H2_SECRET) throw new Error('H2_APPROVAL_SECRET is not set (shared with the approval service).');
 
-const signer: LocalAccount = loadSigner();
+const signer: LocalAccount = await loadSigner();
 const store = new PaymentStore(STORE_PATH);
 /** In-memory per-nonce lock: prevents two concurrent `pay` calls executing the same intent. */
 const inFlight = new Set<string>();

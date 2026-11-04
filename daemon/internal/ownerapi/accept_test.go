@@ -251,3 +251,41 @@ func TestAPI_CustomerInvoiceServesCustomerCopyOnly(t *testing.T) {
 		}
 	}
 }
+
+// The acceptance read names the job's on-chain id when one is bound, so a customer with
+// their own wallet can settle it; with none bound (or the seam unwired) the field is absent
+// rather than empty.
+func TestAPI_AcceptanceReadNamesTheVaultJob(t *testing.T) {
+	s, _ := newAPI(t)
+	tokPtr := wireAccept(s)
+	h := s.Handler()
+	r := httptest.NewRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil)
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if *tokPtr == "" {
+		t.Fatal("no credential minted")
+	}
+	read := func() map[string]any {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/api/v1/customer/jobs/job_acc/acceptance", nil)
+		r.Header.Set("Authorization", "Bearer "+*tokPtr)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		var out map[string]any
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("acceptance read: %d %s", w.Code, w.Body.String())
+		}
+		return out
+	}
+	if _, has := read()["vaultJobId"]; has {
+		t.Fatal("an unwired seam must leave vaultJobId out")
+	}
+	vault := ""
+	s.VaultJobID = func(string) string { return vault }
+	if _, has := read()["vaultJobId"]; has {
+		t.Fatal("an unbound job must leave vaultJobId out, not send it empty")
+	}
+	vault = "0x" + strings.Repeat("ab", 32)
+	if got := read()["vaultJobId"]; got != vault {
+		t.Fatalf("vaultJobId = %v, want %s", got, vault)
+	}
+}

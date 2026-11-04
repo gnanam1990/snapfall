@@ -85,7 +85,8 @@ cd daemon && go test ./... && go run ./cmd/snapfall --help
 cd dashboard && npm ci && npm run dev        # http://localhost:3000
 ```
 
-**Point `ARC_TESTNET_RPC` at a private RPC** (e.g. Alchemy) for the dashboard. The Float
+**Point `ARC_TESTNET_RPC` at a private RPC** (e.g. Alchemy) for the dashboard (`ARC_MAINNET_RPC`
+for a mainnet build; see [`docs/MAINNET.md`](docs/MAINNET.md#pointing-the-services-at-mainnet)). The Float
 page reconstructs the advance-rate and fee history by scanning `eth_getLogs` from the
 deployment block (~1.45M blocks); the public Arc node's per-request range limit means that
 scan never completes against it and the history stays "pending." A private RPC that allows a

@@ -25,9 +25,15 @@
  * worse leak than anything it documents.
  */
 
-import deployment from '../../../deployments/arc-testnet.json';
+import { contractAddress, deploymentFor } from '@/lib/network';
+
+const deployment = deploymentFor();
 
 export const metadata = { title: 'Settings · Snapfall' };
+
+// Rendered per request: this page reports which runtime env is set, and contract addresses can be
+// runtime env too. Prerendered at `next build`, it described the build machine's environment.
+export const dynamic = 'force-dynamic';
 
 const isSet = (name: string): boolean => {
   const v = process.env[name];
@@ -60,9 +66,17 @@ const CONFIG = [
     secret: false,
   },
   {
-    name: 'ARC_TESTNET_RPC',
+    name: 'SNAPFALL_NETWORK',
     enables:
-      'A private RPC endpoint. Without it the public endpoint is used, which rate-limits historical log scans, so Float shows no rate history.',
+      'Which deployment this build reads: arc-testnet (unset) or arc-mainnet. Fixed at build time, so the whole build agrees on one chain.',
+    secret: false,
+  },
+  {
+    // ARC_TESTNET_RPC or ARC_MAINNET_RPC: the variable the selected deployment record names, so a
+    // mainnet build never reads the testnet one.
+    name: deployment.network.rpcUrlEnv,
+    enables:
+      'A private RPC endpoint for this network. Without it the public endpoint is used, which rate-limits historical log scans, so Float shows no rate history.',
     secret: true,
   },
   {
@@ -137,15 +151,15 @@ export default function SettingsPage() {
           </div>
           <div>
             <dt>JobVault</dt>
-            <dd className="settings-mono">{deployment.contracts.jobVault.address}</dd>
+            <dd className="settings-mono">{contractAddress('jobVault') ?? `not deployed (set ${deployment.contracts.jobVault.addressEnv})`}</dd>
           </div>
           <div>
             <dt>FloatPool</dt>
-            <dd className="settings-mono">{deployment.contracts.floatPool.address}</dd>
+            <dd className="settings-mono">{contractAddress('floatPool') ?? `not deployed (set ${deployment.contracts.floatPool.addressEnv})`}</dd>
           </div>
           <div>
             <dt>AuditAnchor</dt>
-            <dd className="settings-mono">{deployment.contracts.auditAnchor.address}</dd>
+            <dd className="settings-mono">{contractAddress('auditAnchor') ?? `not deployed (set ${deployment.contracts.auditAnchor.addressEnv})`}</dd>
           </div>
         </dl>
         <p className="settings-note">

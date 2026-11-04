@@ -55,6 +55,11 @@ contract WaterfallTest is Test {
         pool = new FloatPoolHarness(IERC20(address(usdc)));
         vault.wireFloatPool(address(pool));
         pool.wireJobVault(address(vault));
+        // See Advance.t.sol: the Sep 2026 absolute controls fail closed and are exercised in
+        // Caps.t.sol. Opened here so these waterfall assertions test what they always did.
+        vault.setMaxJobPayment(type(uint256).max);
+        pool.setCaps(type(uint256).max, type(uint256).max);
+        pool.setDepositorAllowed(LP, true);
         vm.stopPrank();
 
         usdc.mint(LP, POOL_SEED);
@@ -192,8 +197,10 @@ contract WaterfallTest is Test {
 
     function test_acceptDelivery_revertsWhenUnwired() public {
         MockUSDC token = new MockUSDC();
-        vm.prank(ADMIN);
+        vm.startPrank(ADMIN);
         JobVault orphan = new JobVault(IERC20(address(token)));
+        orphan.setMaxJobPayment(type(uint256).max);
+        vm.stopPrank();
 
         token.mint(CUSTOMER, PAYMENT);
         vm.startPrank(CUSTOMER);

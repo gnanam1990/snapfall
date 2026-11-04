@@ -132,7 +132,8 @@ EIP-3009 authorization is a bearer instrument, so we broadcast it ourselves; the
 Gateway, not on x402. Two smaller frictions compound it: the protocol ships
 in **two coexisting transport versions** (v1 carries the challenge in the 402 *body*, v2 in a
 `payment-required` *header*) that a seller must emit both of; and Circle's Gateway facilitator
-lives at a **distinct endpoint** (`gateway-api-testnet.circle.com/gateway/v1/x402/*`) separate
+lives at a **distinct endpoint** (`gateway-api-testnet.circle.com/v1/x402/*`; an older `/gateway/v1/x402/*` form
+now answers 404, checked 2026-10-28) separate
 from the generic `x402.org` facilitator, distinct enough that we keep a fixture whose only job
 is to pin that we validate against Circle's endpoints and not the public one.
 

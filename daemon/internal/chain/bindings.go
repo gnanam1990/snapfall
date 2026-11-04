@@ -84,6 +84,14 @@ func CalldataTotalAssets() []byte { return pack("totalAssets()") }
 // CalldataTotalOutstanding reads principal currently lent out.
 func CalldataTotalOutstanding() []byte { return pack("totalOutstanding()") }
 
+// Capital controls (docs/MAINNET.md). FloatPool and JobVault both expose paused(); a contract
+// deployed before the controls existed answers these with a revert.
+func CalldataPaused() []byte           { return pack("paused()") }
+func CalldataMaxTotalExposure() []byte { return pack("maxTotalExposure()") }
+func CalldataMaxAdvance() []byte       { return pack("maxAdvance()") }
+func CalldataTotalWrittenOff() []byte  { return pack("totalWrittenOff()") }
+func CalldataMaxJobPayment() []byte    { return pack("maxJobPayment()") }
+
 // CalldataSharesOf reads one address's LP shares in the pool (FloatPool.sol:51, a public
 // mapping). The demo's opening claim is that the operator's first working capital comes from
 // SOMEONE ELSE's pool, and the only way to check that is to ask whether the operator holds
