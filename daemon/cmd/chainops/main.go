@@ -68,6 +68,8 @@ func run(deployment, keyEnv, signerKind string, dest destination, args []string)
   start-work <jobid32>                            JobVault.startWork (operator; AFTER the advance)
   record-expense <jobid32> <usdc> <receipt32>     JobVault.recordExpense (operator)
   submit-delivery <jobid32> <hash32>              JobVault.submitDelivery (operator)
+  advance <jobid32>                               FloatPool.requestAdvance (operator; works with -signer circle):
+                                                  the advance the daemon makes, for a job it did not create
   force-advance <jobid32>                         requestAdvance with FIXED gas (estimate bypass) — the
                                                   deliberate mined-revert demonstrator for receipt discipline
   payout <domain> <recipient> <usdc>              CCTP: burn USDC on Arc for <recipient> on <domain>
@@ -332,6 +334,24 @@ func run(deployment, keyEnv, signerKind string, dest destination, args []string)
 		}
 		r, err := s.Submit(ctx, jv, chain.CalldataSubmitDelivery(id, h))
 		return show("submit-delivery", r, err)
+	case "advance":
+		id, err := chain.JobID32(arg(1))
+		if err != nil {
+			return err
+		}
+		// The same Submit the daemon uses. With -signer key the gas is estimated locally, so a
+		// call the pool would refuse fails before anything is signed. With -signer circle there
+		// is no local estimate: whether Circle refuses it before broadcasting is Circle's
+		// behaviour, so a refused advance may still be mined as a revert, which fails here.
+		// force-advance is the deliberate fixed-gas opposite.
+		r, err := s.Submit(ctx, fp, chain.CalldataRequestAdvance(id))
+		if err := show("advance", r, err); err != nil {
+			return err
+		}
+		if r.Reverted {
+			return fmt.Errorf("advance %s reverted: no advance was made", arg(1))
+		}
+		return nil
 	case "force-advance":
 		id, err := chain.JobID32(arg(1))
 		if err != nil {
