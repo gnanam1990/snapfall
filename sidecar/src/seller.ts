@@ -33,6 +33,7 @@ import {
   type SettleOutcome,
 } from './facilitator.js';
 import { selectFacilitator } from './facilitator-select.js';
+import { resolveArcNetwork } from './arc-network.js';
 import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
 import {
   encodeBase64Json,
@@ -68,9 +69,10 @@ const HOST = process.env.PAID_API_HOST ?? '127.0.0.1';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const UNSETTLED_DELIVERY_OK = LOOPBACK_HOSTS.has(HOST);
 
-/** Arc testnet — docs.arc.io/arc/references/connect-to-arc (verified 19 Jul 2026). */
-const CHAIN_ID = Number(process.env.ARC_CHAIN_ID ?? 5042002);
-const NETWORK = `eip155:${CHAIN_ID}`;
+/** The Arc network this seller prices on (ARC_CHAIN_ID; testnet by default). See arc-network.ts. */
+const ARC_NETWORK = resolveArcNetwork();
+const CHAIN_ID = ARC_NETWORK.chainId;
+const NETWORK = ARC_NETWORK.caip2;
 
 /** USDC on Arc testnet. Placeholder until C confirms the token address. */
 const USDC_ADDRESS = (process.env.ARC_USDC_ADDRESS ??

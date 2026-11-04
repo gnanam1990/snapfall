@@ -191,6 +191,14 @@ func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte,
 		return Receipt{}, fmt.Errorf("send: %w", err)
 	}
 
+	return c.AwaitReceipt(ctx, txHash)
+}
+
+// AwaitReceipt polls this client's endpoint for txHash's receipt and reports its STATUS
+// (mined-but-reverted is Reverted=true with a nil error, as for Submit). It needs no key: a
+// signer that broadcasts somewhere else (the Circle wallet lane) still reads the outcome from
+// the chain itself, so the chain stays the one authority on whether a call succeeded.
+func (c *Client) AwaitReceipt(ctx context.Context, txHash string) (Receipt, error) {
 	// Arc finalizes on inclusion; poll briefly for the receipt.
 	deadline := time.Now().Add(60 * time.Second)
 	for {
@@ -293,15 +301,17 @@ func (c *Client) rpcMaybeNull(ctx context.Context, method string, params []any, 
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
+			Code    int             `json:"code"`
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return fmt.Errorf("%s: HTTP %d, undecodable body: %w", method, resp.StatusCode, err)
 	}
 	if envelope.Error != nil {
-		return fmt.Errorf("%s: RPC error %d: %s (HTTP %d)", method, envelope.Error.Code, envelope.Error.Message, resp.StatusCode)
+		return fmt.Errorf("%s: RPC error %d: %s%s (HTTP %d)", method, envelope.Error.Code, envelope.Error.Message,
+			revertSuffix(envelope.Error.Data), resp.StatusCode)
 	}
 	if string(envelope.Result) == "null" || len(envelope.Result) == 0 {
 		*found = false

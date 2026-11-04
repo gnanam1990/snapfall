@@ -1,5 +1,12 @@
 # Deployment configuration
 
+`arc-mainnet.json` is the same artifact for Arc **mainnet** (chain 5042, live 16 Sep 2026).
+Its contract addresses are env-only because nothing is deployed there yet; loading it fails
+closed until `SNAPFALL_JOB_VAULT_ADDRESS`, `SNAPFALL_FLOAT_POOL_ADDRESS` and
+`SNAPFALL_AUDIT_ANCHOR_ADDRESS` are set, which is the correct state before a deployment
+exists. Read `docs/MAINNET.md` before deploying — the capital caps are mandatory there, and
+the RPC hostname is `rpc.mainnet.arc.io` (`rpc.mainnet.arc.network` does not resolve).
+
 `arc-testnet.json` is the machine-readable A1 handoff used by the indexer and, later, Funding,
 Billing and the dashboard. It contains no private keys. Addresses that do not exist until deploy
 time are resolved from named environment variables and fail closed when missing or malformed.

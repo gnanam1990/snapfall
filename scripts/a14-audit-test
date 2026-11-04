@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 audit_source="$repo_root/scripts/a14-audit"
 allow_source="$repo_root/scripts/a14-audit.allow"
+inert_source="$repo_root/scripts/a14-audit.inert-blobs"
 fixture_root="$(mktemp -d)"
 trap 'rm -rf "$fixture_root"' EXIT
 
@@ -21,6 +22,7 @@ init_fixture() {
   git -C "$target" config user.email "a14-audit@example.invalid"
   cp "$audit_source" "$target/scripts/a14-audit"
   cp "$allow_source" "$target/scripts/a14-audit.allow"
+  cp "$inert_source" "$target/scripts/a14-audit.inert-blobs"
   chmod +x "$target/scripts/a14-audit"
 }
 
@@ -62,6 +64,63 @@ commit_fixture "$history_repo" "Remove credential fixture"
 expect_failure \
   "reachable-history secret" "$history_repo" \
   "FAIL: high-confidence secret pattern(s) in reachable Git tree history:"
+
+# A reviewed inert version is exempt in history only, and only for its exact blob and path.
+write_userinfo_fixture() {
+  printf 'const rpc = "%s%s";\n' 'https://fixture-user:' "$2@node.example/rpc" >"$1"
+}
+inert_repo="$fixture_root/inert-history"
+init_fixture "$inert_repo"
+mkdir -p "$inert_repo/lib"
+write_userinfo_fixture "$inert_repo/lib/fixture.test.ts" 'inert-pass-one'
+git -C "$inert_repo" add .
+commit_fixture "$inert_repo" "Add literal userinfo fixture"
+inert_blob="$(git -C "$inert_repo" rev-parse HEAD:lib/fixture.test.ts)"
+printf '%s | lib/fixture.test.ts | Reviewed inert fixture.\n' "$inert_blob" >>"$inert_repo/scripts/a14-audit.inert-blobs"
+# Still in the current tree: the exception must not apply.
+git -C "$inert_repo" add .
+commit_fixture "$inert_repo" "Review the fixture version"
+expect_failure "inert version still in the current tree" "$inert_repo" "FAIL: high-confidence secret pattern(s) in the current tree:"
+printf 'const rpc = "safe";\n' >"$inert_repo/lib/fixture.test.ts"
+git -C "$inert_repo" add .
+commit_fixture "$inert_repo" "Assemble the fixture at runtime"
+if ! inert_output="$(cd "$inert_repo" && ./scripts/a14-audit 2>&1)"; then
+  echo "FAIL: the audit rejects a reviewed inert history version"
+  printf '%s\n' "$inert_output"
+  failures=$((failures + 1))
+elif [[ "$inert_output" != *"$inert_blob lib/fixture.test.ts"* ]]; then
+  echo "FAIL: the audit did not report the inert history version it accepted"
+  printf '%s\n' "$inert_output"
+  failures=$((failures + 1))
+fi
+# A different version at the same path is not covered by the reviewed blob.
+write_userinfo_fixture "$inert_repo/lib/fixture.test.ts" 'unreviewed-pass-two'
+git -C "$inert_repo" add .
+commit_fixture "$inert_repo" "Reintroduce a different literal"
+printf 'const rpc = "safe again";\n' >"$inert_repo/lib/fixture.test.ts"
+git -C "$inert_repo" add .
+commit_fixture "$inert_repo" "Remove it again"
+expect_failure "unreviewed version at a reviewed path" "$inert_repo" ":lib/fixture.test.ts"
+
+# The same reviewed blob at another path is not covered either.
+moved_repo="$fixture_root/inert-moved"
+init_fixture "$moved_repo"
+mkdir -p "$moved_repo/lib"
+write_userinfo_fixture "$moved_repo/lib/other.test.ts" 'inert-pass-one'
+moved_blob="$(git -C "$moved_repo" hash-object lib/other.test.ts)"
+printf '%s | lib/fixture.test.ts | Reviewed for a different path.\n' "$moved_blob" >>"$moved_repo/scripts/a14-audit.inert-blobs"
+git -C "$moved_repo" add .
+commit_fixture "$moved_repo" "Add fixture at an unreviewed path"
+git -C "$moved_repo" rm -q lib/other.test.ts
+commit_fixture "$moved_repo" "Remove it"
+expect_failure "reviewed blob at another path" "$moved_repo" ":lib/other.test.ts"
+
+malformed_inert_repo="$fixture_root/malformed-inert"
+init_fixture "$malformed_inert_repo"
+printf '%s\n' 'not-a-blob | lib/fixture.test.ts | bad entry' >>"$malformed_inert_repo/scripts/a14-audit.inert-blobs"
+git -C "$malformed_inert_repo" add .
+commit_fixture "$malformed_inert_repo" "Add malformed inert entry"
+expect_failure "malformed inert-blob entry" "$malformed_inert_repo" "malformed inert-blob entry"
 
 shapes_repo="$fixture_root/credential-shapes"
 init_fixture "$shapes_repo"

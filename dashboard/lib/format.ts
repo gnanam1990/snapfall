@@ -109,6 +109,9 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
   return `${h}h ago`;
 }
 
+/** The explorers deployments/arc-*.json name, plus docs.arc.io's current hosts for both networks. */
+const ARC_EXPLORER_HOSTS = new Set(['explorer.arc.io', 'explorer.testnet.arc.io']);
+
 /** Only link out to the Arc explorer over https - stream data is untrusted for hrefs
  *  (javascript:/data: URLs must never reach an <a>). */
 export function isSafeExplorerUrl(u: string): boolean {
@@ -116,7 +119,10 @@ export function isSafeExplorerUrl(u: string): boolean {
     const p = new URL(u);
     return (
       p.protocol === 'https:' &&
-      (p.hostname === 'arcscan.app' || p.hostname === 'testnet.arcscan.app' || p.hostname.endsWith('.arcscan.app'))
+      (p.hostname === 'arcscan.app' ||
+        p.hostname === 'testnet.arcscan.app' ||
+        p.hostname.endsWith('.arcscan.app') ||
+        ARC_EXPLORER_HOSTS.has(p.hostname))
     );
   } catch {
     return false;

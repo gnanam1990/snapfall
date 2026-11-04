@@ -170,6 +170,15 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 	if err != nil {
 		return err
 	}
+	// The absolute capital controls are checked before the percentage caps, and they do not scale
+	// with TVL, so no deposit can satisfy them. Refuse here, before anything is submitted.
+	controls, err := readControls(ctx, operator, fp, jv, at)
+	if err != nil {
+		return err
+	}
+	if why := demoseed.ControlBlocker(controls, plan); why != "" {
+		return fmt.Errorf("refusing to seed: %s", why)
+	}
 
 	if runID == "" {
 		runID, err = newRunID()
@@ -192,6 +201,13 @@ func run(deploymentPath, operatorKeyEnv, customerKeyEnv, lpKeyEnv, priceStr, bud
 		demoseed.FormatUSDC(plan.Exposure.OrgOutstandingMicros), demoseed.FormatUSDC(plan.Exposure.TotalOutstandingMicros))
 	fmt.Printf("  cap floor         %s USDC   (%s cap binds, on existing + new exposure)\n",
 		demoseed.FormatUSDC(plan.RequiredTVLMicros), plan.BindingCap)
+	if controls.Present {
+		fmt.Printf("  capital controls  ok    advance cap %s, loss budget left %s of %s (%s written off)\n",
+			demoseed.FormatUSDC(controls.MaxAdvance), demoseed.FormatUSDC(demoseed.LossBudgetLeft(controls, plan.Exposure)),
+			demoseed.FormatUSDC(controls.MaxTotalExposure), demoseed.FormatUSDC(controls.TotalWrittenOff))
+	} else {
+		fmt.Printf("  capital controls  none  this pool predates them\n")
+	}
 	fmt.Printf("  seed target       %s USDC\n", demoseed.FormatUSDC(plan.TargetTVLMicros))
 	if plan.SeedAlreadySufficient() {
 		fmt.Printf("  deposit           none — the pool is already deep enough\n")
@@ -403,7 +419,60 @@ func verify(ctx context.Context, c *chain.Client, jv, fp, org common.Address, jo
 	fmt.Printf("  %-16s ok    TVL %s >= floor %s (org %s / pool %s already lent, block %s)\n", "verify pool",
 		demoseed.FormatUSDC(snap.totalAssets), demoseed.FormatUSDC(floor),
 		demoseed.FormatUSDC(snap.orgOutstanding), demoseed.FormatUSDC(snap.totalOutstanding), at)
+
+	// Re-check the controls on the same block: an admin pause, or a write-off spending the loss
+	// budget, between the plan and now would make the snap revert after a green "ready".
+	controls, err := readControls(ctx, c, fp, jv, at)
+	if err != nil {
+		return nil, fmt.Errorf("verify: %w", err)
+	}
+	fresh := plan
+	fresh.Exposure = snap.exposure()
+	if why := demoseed.ControlBlocker(controls, fresh); why != "" {
+		return nil, fmt.Errorf("verify: %s", why)
+	}
+	if controls.Present {
+		fmt.Printf("  %-16s ok    loss budget left %s covers the %s advance\n", "verify controls",
+			demoseed.FormatUSDC(demoseed.LossBudgetLeft(controls, fresh.Exposure)), demoseed.FormatUSDC(plan.AdvanceMicros))
+	}
 	return snap.totalAssets, nil
+}
+
+// readControls reads the capital controls at one block. A FloatPool whose paused() reverts
+// predates the controls (the Arc testnet pool today): Present is false. Any other failure, or a
+// pool that has paused() but not the rest, is an error rather than a guess.
+func readControls(ctx context.Context, c *chain.Client, fp, jv common.Address, at string) (demoseed.Controls, error) {
+	poolPaused, err := readUintAt(ctx, c, fp, chain.CalldataPaused(), at)
+	if err != nil {
+		if strings.Contains(err.Error(), "execution reverted") {
+			return demoseed.Controls{}, nil
+		}
+		return demoseed.Controls{}, fmt.Errorf("read FloatPool.paused: %w", err)
+	}
+	out := demoseed.Controls{Present: true, PoolPaused: poolPaused.Sign() != 0}
+	for _, r := range []struct {
+		name string
+		to   common.Address
+		data []byte
+		dst  **big.Int
+	}{
+		{"FloatPool.maxTotalExposure", fp, chain.CalldataMaxTotalExposure(), &out.MaxTotalExposure},
+		{"FloatPool.maxAdvance", fp, chain.CalldataMaxAdvance(), &out.MaxAdvance},
+		{"FloatPool.totalWrittenOff", fp, chain.CalldataTotalWrittenOff(), &out.TotalWrittenOff},
+		{"JobVault.maxJobPayment", jv, chain.CalldataMaxJobPayment(), &out.MaxJobPayment},
+	} {
+		v, err := readUintAt(ctx, c, r.to, r.data, at)
+		if err != nil {
+			return demoseed.Controls{}, fmt.Errorf("read %s: %w", r.name, err)
+		}
+		*r.dst = v
+	}
+	vaultPaused, err := readUintAt(ctx, c, jv, chain.CalldataPaused(), at)
+	if err != nil {
+		return demoseed.Controls{}, fmt.Errorf("read JobVault.paused: %w", err)
+	}
+	out.VaultPaused = vaultPaused.Sign() != 0
+	return out, nil
 }
 
 // position is every value the cap arithmetic depends on, all read at ONE block.

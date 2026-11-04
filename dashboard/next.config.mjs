@@ -9,6 +9,10 @@ const nextConfig = {
   // A public deployment therefore ships no fabricated content, reachable or not.
   env: {
     SNAPFALL_DEMO_STREAM: process.env.SNAPFALL_DEMO_STREAM ?? '',
+    // Which deployment record the build reads (lib/network.ts): arc-testnet when unset, or
+    // arc-mainnet. Inlined for the same reason as the flag above: the static pages, the client
+    // chrome and the API routes must all agree on one chain, so the choice is made once, here.
+    SNAPFALL_NETWORK: process.env.SNAPFALL_NETWORK ?? '',
   },
   webpack: (config, { webpack }) => {
     // Inlining the flag folds the demo branch out of the executable code, but webpack still

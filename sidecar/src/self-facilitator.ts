@@ -4,7 +4,7 @@
  * ── Why this exists BESIDE the Circle Gateway client, not instead of it ──────────────────────
  *
  * `CircleFacilitator` settles by POSTing the authorization to Circle Gateway
- * (`gateway-api-testnet.circle.com/gateway/v1/x402/settle`). That integration is written and
+ * (`gateway-api-testnet.circle.com/v1/x402/settle`). That integration is written and
  * stays the documented, default path. But Circle Gateway is access-gated (allowlist, not
  * self-service), so on the submission timeline we could not exercise it live.
  *
@@ -21,11 +21,17 @@
  * Honesty, same rule as the Gateway client: the ONLY thing that returns `settled` is a real
  * transaction hash from a successful on-chain receipt. A revert is `rejected` (nothing moved); a
  * dropped/timed-out submit is `unknown` (may still land — reconcile, never release on it).
+ *
+ * The relayer is a Circle developer-controlled wallet when `CIRCLE_BROADCASTER_WALLET_ID` is set
+ * (circle-wallet.ts `loadCircleRelayer`), otherwise the raw `BROADCASTER_PRIVATE_KEY`. A
+ * configured Circle relayer never falls back to the raw key. Circle's hash is not its verdict:
+ * the receipt is read from our own RPC either way, and only `success` there settles.
  */
 import {
   createPublicClient,
   createWalletClient,
   defineChain,
+  encodeFunctionData,
   http,
   parseSignature,
   recoverTypedDataAddress,
@@ -37,10 +43,17 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { PaymentRequirements, SettleOutcome, VerifyOutcome } from './facilitator.js';
 import { TRANSFER_WITH_AUTHORIZATION_TYPES, type Authorization, type PaymentPayload } from './x402.js';
 import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
+import { resolveArcNetwork } from './arc-network.js';
+import {
+  ENV_BROADCASTER_WALLET_ID,
+  NotBroadcast,
+  circleConfigFromEnv,
+  loadCircleRelayer,
+  type CircleRelayer,
+  type CircleWalletConfig,
+} from './circle-wallet.js';
 
 const DEFAULT_USDC = '0x3600000000000000000000000000000000000000';
-const DEFAULT_RPC = 'https://rpc.testnet.arc.network';
-const DEFAULT_CHAIN_ID = 5042002;
 
 /** The canonical EIP-3009 `transferWithAuthorization` (the v,r,s overload — original EIP-3009, the
  *  most broadly implemented). If a chain exposes only the packed-signature overload, this is where
@@ -77,6 +90,12 @@ export type Broadcast = (auth: Authorization, signature: Hex) => Promise<Broadca
 
 export interface SelfFacilitatorConfig {
   privateKey?: string;
+  /** A Circle wallet as the relayer. Read from the environment when CIRCLE_BROADCASTER_WALLET_ID is set. */
+  circle?: CircleWalletConfig;
+  /** Test-only: how the Circle relayer polls Circle for the transaction. */
+  circleTiming?: { pollMs?: number; timeoutMs?: number };
+  /** Test-only: read a receipt's status without a chain. */
+  receiptStatus?: (txHash: Hex) => Promise<'success' | 'reverted'>;
   rpcUrl?: string;
   usdcAddress?: string;
   chainId?: number;
@@ -87,22 +106,51 @@ export interface SelfFacilitatorConfig {
 export class SelfFacilitator {
   private readonly usdcAddress: Address;
   private readonly chainId: number;
+  private readonly chainLabel: string;
   private readonly rpcUrl: string;
   private readonly privateKey?: string;
+  private readonly circle?: CircleWalletConfig;
+  private readonly circleTiming?: { pollMs?: number; timeoutMs?: number };
+  private readonly receiptStatus?: (txHash: Hex) => Promise<'success' | 'reverted'>;
+  private relayer?: Promise<CircleRelayer>;
   private readonly injectedBroadcast?: Broadcast;
 
   constructor(cfg: SelfFacilitatorConfig = {}) {
     this.usdcAddress = (cfg.usdcAddress ?? process.env.ARC_USDC_ADDRESS ?? DEFAULT_USDC) as Address;
-    this.chainId = cfg.chainId ?? Number(process.env.ARC_TESTNET_CHAIN_ID ?? process.env.ARC_CHAIN_ID ?? DEFAULT_CHAIN_ID);
-    this.rpcUrl = cfg.rpcUrl ?? process.env.ARC_TESTNET_RPC ?? DEFAULT_RPC;
+    // An explicit chainId still wins (tests), but the RPC is only ever defaulted from the network
+    // that chainId names, so an injected mainnet id cannot inherit a testnet endpoint.
+    const network = resolveArcNetwork(
+      cfg.chainId === undefined
+        ? process.env
+        : { ...process.env, ARC_CHAIN_ID: String(cfg.chainId), ARC_TESTNET_CHAIN_ID: undefined },
+    );
+    this.chainId = network.chainId;
+    this.chainLabel = network.label;
+    this.rpcUrl = cfg.rpcUrl ?? network.rpcUrl;
     // The relayer key. Never logged, never returned.
     this.privateKey = cfg.privateKey ?? process.env.BROADCASTER_PRIVATE_KEY ?? undefined;
+    // A malformed Circle configuration throws here, at startup, not at the first payment.
+    this.circle =
+      cfg.circle ??
+      (process.env[ENV_BROADCASTER_WALLET_ID]?.trim()
+        ? circleConfigFromEnv(process.env, ENV_BROADCASTER_WALLET_ID)
+        : undefined);
+    this.circleTiming = cfg.circleTiming;
+    this.receiptStatus = cfg.receiptStatus;
     this.injectedBroadcast = cfg.broadcast;
   }
 
-  /** Configured when it can actually broadcast: a relayer key, or a test-injected broadcaster. */
+  /** Configured when it can actually broadcast: a Circle relayer, a relayer key, or a test-injected broadcaster. */
   isConfigured(): boolean {
-    return Boolean(this.injectedBroadcast) || Boolean(this.privateKey && this.privateKey.length > 0);
+    return (
+      Boolean(this.injectedBroadcast) || Boolean(this.circle) || Boolean(this.privateKey && this.privateKey.length > 0)
+    );
+  }
+
+  /** Which relayer submits. Logged at startup; never a key or a secret. */
+  relayerKind(): 'circle' | 'key' | 'none' {
+    if (this.circle) return 'circle';
+    return this.privateKey ? 'key' : 'none';
   }
 
   /** Self-markers, NOT Circle URLs. On the receipt this reads as a self-relayed on-chain
@@ -177,6 +225,8 @@ export class SelfFacilitator {
     try {
       result = await (this.injectedBroadcast ?? this.broadcastOnChain).call(this, auth, signature);
     } catch (e) {
+      // Circle said it never reached the chain (or the relayer could not even load): nothing moved.
+      if (e instanceof NotBroadcast) return { state: 'rejected', reason: `not broadcast: ${e.message}` };
       // The submit left this process. It may have been mined even if we never saw the receipt.
       return { state: 'unknown', reason: `settle did not return a receipt: ${(e as Error).message}` };
     }
@@ -191,37 +241,57 @@ export class SelfFacilitator {
   /** The real broadcast: submit the v,r,s authorization from the relayer wallet and wait for the
    *  receipt. Never invents a hash — the hash comes from the chain. */
   private async broadcastOnChain(auth: Authorization, signature: Hex): Promise<BroadcastResult> {
-    if (!this.privateKey) throw new Error('no broadcaster key configured');
     const chain = defineChain({
       id: this.chainId,
-      name: 'Arc testnet',
+      name: this.chainLabel,
       nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
       rpcUrls: { default: { http: [this.rpcUrl] } },
     });
-    const account = privateKeyToAccount(this.privateKey as Hex);
-    const wallet = createWalletClient({ account, chain, transport: http(this.rpcUrl) });
     const publicClient = createPublicClient({ chain, transport: http(this.rpcUrl) });
 
     const { r, s, v, yParity } = parseSignature(signature);
     const vByte = v ?? BigInt(27 + yParity);
+    const args = [
+      auth.from as Address,
+      auth.to as Address,
+      BigInt(auth.value),
+      BigInt(auth.validAfter),
+      BigInt(auth.validBefore),
+      auth.nonce as Hex,
+      Number(vByte),
+      r,
+      s,
+    ] as const;
 
-    const txHash = await wallet.writeContract({
-      address: this.usdcAddress,
-      abi: TRANSFER_WITH_AUTHORIZATION_ABI,
-      functionName: 'transferWithAuthorization',
-      args: [
-        auth.from as Address,
-        auth.to as Address,
-        BigInt(auth.value),
-        BigInt(auth.validAfter),
-        BigInt(auth.validBefore),
-        auth.nonce as Hex,
-        Number(vByte),
-        r,
-        s,
-      ],
-    });
+    let txHash: Hex;
+    if (this.circle) {
+      const callData = encodeFunctionData({ abi: TRANSFER_WITH_AUTHORIZATION_ABI, functionName: 'transferWithAuthorization', args });
+      txHash = await (await this.circleRelayer()).submit(this.usdcAddress, callData);
+    } else {
+      if (!this.privateKey) throw new Error('no broadcaster key configured');
+      const account = privateKeyToAccount(this.privateKey as Hex);
+      const wallet = createWalletClient({ account, chain, transport: http(this.rpcUrl) });
+      txHash = await wallet.writeContract({
+        address: this.usdcAddress,
+        abi: TRANSFER_WITH_AUTHORIZATION_ABI,
+        functionName: 'transferWithAuthorization',
+        args,
+      });
+    }
+    if (this.receiptStatus) return { txHash, status: await this.receiptStatus(txHash) };
     const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
     return { txHash, status: receipt.status === 'success' ? 'success' : 'reverted' };
+  }
+
+  /** The Circle relayer, loaded once. A load that fails is retried on the next payment, and is
+   *  NotBroadcast: nothing was submitted. */
+  private circleRelayer(): Promise<CircleRelayer> {
+    if (!this.relayer) {
+      this.relayer = loadCircleRelayer(this.circle!, { chainId: this.chainId, ...this.circleTiming }).catch((e) => {
+        this.relayer = undefined;
+        throw new NotBroadcast(`the Circle relayer did not load: ${(e as Error).message}`);
+      });
+    }
+    return this.relayer;
   }
 }
