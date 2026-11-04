@@ -1,0 +1,67 @@
+# Snapfall chain fingerprint
+# taken     2026-09-03T08:53:41Z
+# rpc       https://rpc.testnet.arc.network
+# repo      103f0bea01b68023739c652dc331cb62dd327769
+
+## network
+chainId                                        = 5042002
+gasPrice                                       = 20240000000
+# blockNumber deliberately omitted — it always differs; it is not a defect signal.
+
+## code is still live at each address
+AuditAnchor codesize                           = 755 bytes
+JobVault codesize                              = 5841 bytes
+FloatPool codesize                             = 6335 bytes
+USDC codesize                                  = 1798 bytes
+
+## USDC (ERC-20 surface)
+USDC.symbol                                    = "USDC"
+USDC.decimals                                  = 6
+
+## wiring — one-shot, must never change
+JobVault.usdc                                  = 0x3600000000000000000000000000000000000000
+JobVault.floatPool                             = 0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5
+JobVault.admin                                 = 0x99B723eD097721036C08dd9DEe307286Df3A792D
+FloatPool.usdc                                 = 0x3600000000000000000000000000000000000000
+FloatPool.jobVault                             = 0xF3830D7C3B8ca873bB0b277c0e179999e3d52681
+FloatPool.admin                                = 0x99B723eD097721036C08dd9DEe307286Df3A792D
+AuditAnchor.operatorAuthority                  = 0x99B723eD097721036C08dd9DEe307286Df3A792D
+
+## FloatPool constants — immutable; any drift is an execution-layer defect
+FloatPool.BASE_BPS                             = 5000
+FloatPool.GROWTH_BPS                           = 500
+FloatPool.PENALTY_BPS                          = 1500
+FloatPool.FLOOR_BPS                            = 3000
+FloatPool.CAP_BPS                              = 8500
+FloatPool.FEE_BPS                              = 200
+FloatPool.RESERVE_CUT_BPS                      = 2000
+FloatPool.ORG_EXPOSURE_CAP_BPS                 = 1000
+FloatPool.UTILIZATION_CAP_BPS                  = 8000
+
+## FloatPool accounting
+FloatPool.totalAssets                          = 12510400 [1.251e7]
+FloatPool.totalOutstanding                     = 600000 [6e5]
+FloatPool.reserve                              = 8240
+FloatPool.advanceRate(op)                      = 7000
+FloatPool.acceptedJobs(op)                     = 4
+FloatPool.writtenOffJobs(op)                   = 0
+FloatPool.orgOutstanding(op)                   = 600000 [6e5]
+
+## custody
+USDC.balanceOf(JobVault)                       = 43000000 [4.3e7]
+USDC.balanceOf(FloatPool)                      = 71918640 [7.191e7]
+native.balance(operator)                       = 96269491671295926814
+native.balance(customer)                       = 21365367562500000000
+native.balance(lp)                             = 1495800604500000000
+
+## job-004 — the settled lifecycle in docs/addresses.md must read back unchanged
+JobVault.jobStatus(job-004)                    = 4
+FloatPool.openAdvanceOf(job-004)               = 550000 [5.5e5]
+
+## history still readable
+waterfall: pool repaid                         = logIndex 12 -> 0xde9f58a997cf7a3258d09a797eb5546877dc86e5 value 561000
+waterfall: operator paid                       = logIndex 15 -> 0x99b723ed097721036c08dd9dee307286df3a792d value 439000
+waterfall: pool before operator                = YES
+settlement block hash                          = 0xe4dd7fc9d9b189acecbac44b26145ec89b4c8d46f2419f813ee260084da2a12d
+public RPC receipt by hash                     = null (pruned tx-hash index)
+archive RPC receipt by hash                    = served, status 0x1
