@@ -27,3 +27,15 @@ test('a missing or malformed gas price is refused, never guessed', () => {
   assert.throws(() => userOpFees({ medium: { maxFeePerGas: '0', maxPriorityFeePerGas: '0' } }), /inconsistent/);
   assert.throws(() => userOpFees({ medium: { maxFeePerGas: '10', maxPriorityFeePerGas: '11' } }), /inconsistent/);
 });
+
+test('a gas price that is not a decimal string is refused, even if it would stringify to one', () => {
+  // 2^53 + 1 cannot be held exactly by a JSON number; accepting it would sign a rounded fee.
+  const answers = [
+    { medium: { maxFeePerGas: 9007199254740993, maxPriorityFeePerGas: '1000000000' } },
+    { medium: { maxFeePerGas: '48500000000', maxPriorityFeePerGas: 1500000000 } },
+    { medium: { maxFeePerGas: ['48500000000'], maxPriorityFeePerGas: '1500000000' } },
+  ];
+  for (const bad of answers) {
+    assert.throws(() => userOpFees(bad as never), /usable gas price/);
+  }
+});

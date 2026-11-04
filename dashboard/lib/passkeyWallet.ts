@@ -57,7 +57,15 @@ export function userOpFees(price: { medium?: BundlerGasLevel } | null | undefine
 } {
   const m = price?.medium;
   const dec = /^[0-9]{1,30}$/;
-  if (!m || !dec.test(String(m.maxFeePerGas)) || !dec.test(String(m.maxPriorityFeePerGas))) {
+  // Strings only: a JSON number (or a one-element array) would pass the decimal test via
+  // String() and then reach BigInt as a rounded float, not the value that was checked.
+  if (
+    !m ||
+    typeof m.maxFeePerGas !== 'string' ||
+    typeof m.maxPriorityFeePerGas !== 'string' ||
+    !dec.test(m.maxFeePerGas) ||
+    !dec.test(m.maxPriorityFeePerGas)
+  ) {
     throw new Error('Circle did not return a usable gas price; try again.');
   }
   const maxFeePerGas = BigInt(m.maxFeePerGas);
