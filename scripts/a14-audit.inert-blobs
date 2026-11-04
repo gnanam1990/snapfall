@@ -1,0 +1,4 @@
+# Reviewed history-only exceptions: <blob> | exact/path | justification
+# A blob is one exact file version; `git rev-parse <rev>:<path>` prints it. Entries never
+# exempt the current tree. Add one only after reviewing that version's matches in code review.
+256f811e3e84176f4e8b05d1ae94d2612a0fa3d9 | dashboard/lib/network.test.ts | #112 redaction tests used literal fake basic-auth RPC URLs (rpcuser/hunter2hunter2, u/p on example hosts); the later version assembles them at runtime.

@@ -15,6 +15,8 @@
  * asserts nothing-is-lent, so an unread track is hatched instead.
  */
 
+import { networkLabel } from '@/lib/network';
+
 interface Props {
   /** Pool TVL as a 6dp decimal string, read live from FloatPool.totalAssets. */
   tvlUsdc: string | null;
@@ -63,7 +65,7 @@ export default function PoolCapacity({
       <div className="pool-head">
         <div>
           <h2 className="pool-title">Capital pool</h2>
-          <p className="pool-sub">Read live from FloatPool on Arc testnet</p>
+          <p className="pool-sub">Read live from FloatPool on {networkLabel()}</p>
         </div>
         <div className="pool-figure">
           <span className="pool-tvl">{tvlUsdc ?? '—'}</span>

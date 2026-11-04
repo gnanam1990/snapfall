@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatBps, formatUsdcExact, isSafeExplorerUrl, relativeTime } from '@/lib/format';
 import { rateProvenance, mayClaimOnChain } from '@/lib/rateProvenance';
 import { useEventStream } from '@/lib/useEventStream';
+import { networkLabel } from '@/lib/network';
 import Badge from '@/components/Badge';
 import type {
   FloatLossTotals,
@@ -382,7 +383,7 @@ export default function FloatPage() {
         <span className="page-header-aside">
           <span className="float-live-meta">
             <span className={`badge-live${streamStatus !== 'live' ? ' badge-reconnecting' : ''}`}>
-              Arc testnet · {streamStatus === 'live' ? 'live' : 'chain polling'}
+              {networkLabel()} · {streamStatus === 'live' ? 'live' : 'chain polling'}
             </span>
             <small>block {snapshot.blockNumber.toLocaleString('en-US')}</small>
           </span>
@@ -437,7 +438,7 @@ export default function FloatPage() {
         <div className="pool-head">
           <div>
             <h2 className="pool-title" id="pool-capital-title">Pool capital</h2>
-            <p className="pool-sub">Read live from FloatPool on Arc testnet</p>
+            <p className="pool-sub">Read live from FloatPool on {networkLabel()}</p>
           </div>
           <div className="pool-figure">
             <span className="pool-tvl">{formatUsdcExact(snapshot.totalAssetsUsdc)}</span>

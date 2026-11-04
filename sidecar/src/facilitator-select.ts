@@ -9,6 +9,8 @@
  */
 import { CircleFacilitator, type PaymentRequirements, type SettleOutcome, type VerifyOutcome } from './facilitator.js';
 import { SelfFacilitator } from './self-facilitator.js';
+import { CircleFacilitatorService } from './circle-facilitator-service.js';
+import { resolveArcNetwork } from './arc-network.js';
 import type { PaymentPayload } from './x402.js';
 
 /** The one shape the seller holds — either settlement path satisfies it. */
@@ -23,6 +25,25 @@ export interface Facilitator {
 }
 
 export function selectFacilitator(env: NodeJS.ProcessEnv = process.env): Facilitator {
-  if (env.SNAPFALL_SELF_FACILITATOR === '1') return new SelfFacilitator();
+  const self = env.SNAPFALL_SELF_FACILITATOR === '1';
+  const service = env.SNAPFALL_CIRCLE_FACILITATOR_SERVICE === '1';
+  if (self && service) {
+    throw new Error('SNAPFALL_SELF_FACILITATOR and SNAPFALL_CIRCLE_FACILITATOR_SERVICE are both set; choose one settlement path');
+  }
+  if (self) return new SelfFacilitator();
+  // Circle Facilitator Service settles on Arc mainnet and testnet. See circle-facilitator-service.ts.
+  if (service) return new CircleFacilitatorService();
+  // CircleFacilitator only knows Gateway's TESTNET x402 endpoints. Pointed at mainnet it would send
+  // eip155:5042 payments to a testnet settler, so off testnet it refuses to be built at all. Circle's
+  // mainnet x402 settlement is the separate Facilitator Service (api.circle.com/v1/facilitator/x402),
+  // a different API this sidecar has not integrated.
+  const network = resolveArcNetwork(env);
+  if (!network.testnet) {
+    throw new Error(
+      `the Circle Gateway facilitator here is testnet-only, and this seller is on ${network.label} ` +
+        `(${network.caip2}). Set SNAPFALL_CIRCLE_FACILITATOR_SERVICE=1 for Circle Facilitator Service, ` +
+        'or SNAPFALL_SELF_FACILITATOR=1 to settle by self-relay.',
+    );
+  }
   return new CircleFacilitator();
 }

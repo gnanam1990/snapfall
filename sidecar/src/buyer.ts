@@ -26,6 +26,7 @@
  */
 
 import { privateKeyToAccount } from 'viem/accounts';
+import { circleConfigFromEnv, ENV_WALLET_ID, loadCircleAccount } from './circle-wallet.js';
 import { toHex, type Address, type Hex, type LocalAccount } from 'viem';
 import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
 import {
@@ -414,9 +415,20 @@ export async function purchase(
   return signAndSubmit(accept, intent, account, opts.chainId, opts.authNonce);
 }
 
-/** Load the treasury signer. Testnet keys only — see sidecar/.env.example. */
-export function loadSigner(): LocalAccount {
-  const key = process.env.TREASURY_PRIVATE_KEY;
+/**
+ * Load the treasury signer. `CIRCLE_TREASURY_WALLET_ID` present selects the Circle
+ * developer-controlled wallet (circle-wallet.ts), the same rule the daemon's treasury lane uses;
+ * otherwise `TREASURY_PRIVATE_KEY`, testnet keys only (see sidecar/.env.example).
+ *
+ * A configured Circle wallet that fails to load is an error, never a fall back to the raw key:
+ * an operator who moved the treasury to Circle must not be paying from a shell-file key without
+ * knowing it.
+ */
+export async function loadSigner(env: NodeJS.ProcessEnv = process.env): Promise<LocalAccount> {
+  if (env[ENV_WALLET_ID]?.trim()) {
+    return loadCircleAccount(circleConfigFromEnv(env));
+  }
+  const key = env.TREASURY_PRIVATE_KEY;
   if (!key) {
     throw new Error(
       'TREASURY_PRIVATE_KEY is not set. Copy sidecar/.env.example to .env and fill it ' +
