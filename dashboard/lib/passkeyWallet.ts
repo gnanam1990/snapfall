@@ -39,6 +39,43 @@ const SOURCE_PATH: Record<CctpNetwork['chainKey'], string> = {
 
 const CREDENTIAL_STORE = 'snapfall.passkeyCredential';
 
+/** One level of Circle's `circle_getUserOperationGasPrice` answer (decimal wei strings). */
+export interface BundlerGasLevel {
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+}
+
+/**
+ * The fees for a user operation, from Circle's bundler rather than the chain's RPC. Arc's
+ * `eth_maxPriorityFeePerGas` can sit below the bundler's floor (0.25 gwei against a 1 gwei
+ * minimum on 4 Nov 2026), and the bundler then refuses the operation in precheck. The medium
+ * level is the bundler's own price. A malformed answer is an error, never a guess.
+ */
+export function userOpFees(price: { medium?: BundlerGasLevel } | null | undefined): {
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+} {
+  const m = price?.medium;
+  const dec = /^[0-9]{1,30}$/;
+  // Strings only: a JSON number (or a one-element array) would pass the decimal test via
+  // String() and then reach BigInt as a rounded float, not the value that was checked.
+  if (
+    !m ||
+    typeof m.maxFeePerGas !== 'string' ||
+    typeof m.maxPriorityFeePerGas !== 'string' ||
+    !dec.test(m.maxFeePerGas) ||
+    !dec.test(m.maxPriorityFeePerGas)
+  ) {
+    throw new Error('Circle did not return a usable gas price; try again.');
+  }
+  const maxFeePerGas = BigInt(m.maxFeePerGas);
+  const maxPriorityFeePerGas = BigInt(m.maxPriorityFeePerGas);
+  if (maxFeePerGas === 0n || maxPriorityFeePerGas > maxFeePerGas) {
+    throw new Error('Circle returned an inconsistent gas price; try again.');
+  }
+  return { maxFeePerGas, maxPriorityFeePerGas };
+}
+
 export interface PasskeyConfig {
   clientKey: string;
   clientUrl: string;
@@ -108,7 +145,14 @@ export async function connectPasskey(
     const transport = sdk.toModularTransport(`${cfg.clientUrl}/${path}`, cfg.clientKey);
     const client = viem.createPublicClient({ chain, transport });
     const account = await sdk.toCircleSmartAccount({ client, owner });
-    const bundler = aa.createBundlerClient({ account, chain, transport });
+    const bundler = aa.createBundlerClient({
+      account,
+      chain,
+      transport,
+      userOperation: {
+        estimateFeesPerGas: async () => userOpFees(await sdk.getUserOperationGasPrice(client)),
+      },
+    });
     const reader = viem.createPublicClient({ chain, transport: viem.http() }) as import('viem').PublicClient;
     return {
       address: account.address,
