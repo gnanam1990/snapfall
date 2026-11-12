@@ -1,6 +1,6 @@
 # Arc Testnet customer acceptance proof — 2026-11-12
 
-This is an acceptance-workflow test, not a production due-diligence report, a paid-data proof, or a CCTP proof. Mainnet was not used.
+This records an acceptance-workflow test and a later CCTP Base Sepolia → Arc test, both on testnets. It is not a production due-diligence report or a paid-data proof. Mainnet was not used.
 
 ## Verified lifecycle
 
@@ -61,10 +61,16 @@ Receipt status is 1; the earlier nonce is now used. Recovered 2.000141 test USDC
 
 During preflight, the daemon CCTP parser rejected Circle's 20-byte decoded recipient address because it expected a padded 32-byte value. The first attempt stopped before signing. A local fix now accepts either exact 20-byte addresses or zero-padded 32-byte forms, preserving recipient identity validation. Regression tests passed before the successful mint-only relay.
 
-### Duplicate-burn prevention prepared locally (not deployed)
+### Duplicate-burn prevention
 
-Code inspection found that the source wallet send helper waits for a user-operation receipt before returning its transaction hash, while the bridge only persisted pending state after that promise resolved. A receipt timeout or page closure after submission could therefore leave no saved burn and permit a second attempt. The component also lacked a synchronous start guard and cross-tab locking. These are verified code paths, not proof of which browser event caused the observed duplicate burns.
+Code inspection found that the source wallet's `send` waited for a user-operation receipt before returning its transaction hash, while the bridge only persisted pending state after that promise resolved. A receipt timeout or page closure after submission could therefore leave no saved burn and permit a second attempt. The component also lacked a synchronous start guard and cross-tab locking. These are verified code paths, not proof of which browser event caused the observed duplicate burns.
 
-The local fix writes a durable submitting/unknown marker before any wallet call, preserves it on ambiguous errors, rejects retries when any prior record exists, and uses an exclusive Web Lock plus a synchronous component guard. Completed transfers retain a marker to block stale-tab re-burns. Storage failure prevents signing. Regression tests cover ambiguous receipt failure, retry after success, unavailable storage, and concurrent calls. This is fail-closed: a rejected passkey prompt may require manual investigation/reset, rather than guessing it is safe to retry. No production deployment has been performed. A friendly automated recovery/import interface remains open.
+The fix (`dashboard/lib/cctpBurnGuard.ts`, `passkeyWallet.ts`):
 
-Review also identified case-variant job URLs as a lock bypass. The local guard now canonicalizes the job ID and blocks legacy case-variant pending records. This remains browser-local protection, not cross-device coordination. Helper regressions do not replace a real multi-tab browser test. The existing finish path is still not serialized across tabs, so duplicate mint/fund attempts may revert and waste testnet gas; this was not exercised or claimed fixed. The dashboard production build passed locally before the final key-normalization change; tests and typecheck passed after that change. No deployment or external publication has occurred.
+- For a burn, `send` runs viem's three steps separately: prepare, sign with the passkey, then hand the signed user operation's hash to the caller **before** broadcasting it. The burn is saved as `submitted` with that hash first; if the save fails, nothing is broadcast. The locally computed hash was checked against EntryPoint v0.7 `getUserOpHash` on Arc Testnet, and the bundler's answer must equal it.
+- A failure before that point (a declined passkey, a refused sponsorship, a failed save) clears the record, because nothing left the tab; the customer can simply try again.
+- A failure after it keeps the `submitted` record. On reload the panel offers to finish the transfer, looks the user operation up at the bundler, and only then waits for Circle. It never burns again.
+- A completed payment leaves a marker so a stale tab cannot burn for the same job. A burn that minted but did not cover the price clears the record, so the difference can still be brought over.
+- An exclusive Web Lock per job plus an in-tab in-flight guard serialize starts. Job IDs are lower-cased, and a legacy mixed-case or unrecognised record blocks rather than being guessed safe.
+
+Limits: protection is per browser, not across devices. The finish path is still not serialized across tabs, so a duplicate mint/fund attempt may revert and waste testnet gas; this was not exercised. A user operation the bundler dropped stays `submitted` and needs manual inspection; there is no import or reset UI yet. Fund and accept keep viem's single `sendUserOperation` call; only the burn uses the split path, which has unit tests but has not yet run against the live bundler.

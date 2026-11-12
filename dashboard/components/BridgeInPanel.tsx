@@ -30,25 +30,36 @@ import {
 import { fundCalls, type WalletCall } from '@/lib/customerWallet';
 import type { ChainWallet, PasskeySession } from '@/lib/passkeyWallet';
 import { formatUsdcExact } from '@/lib/format';
-import { submitBurnOnce, burnStorageKey } from '@/lib/cctpBurnGuard';
+import {
+  burnStorageKey,
+  clearMintedBurn,
+  markBurnCompleted,
+  parseSubmittedBurn,
+  resumeSubmitted,
+  submitBurnOnce,
+  type SubmittedBurn,
+} from '@/lib/cctpBurnGuard';
 
-type Pending = PendingBurn;
+/** A burn with a known transaction, or one only known by its saved user operation. */
+type Pending = PendingBurn | SubmittedBurn;
 
 const storeKey = burnStorageKey;
 
 function loadPending(vaultJobId: string, env: CctpEnv): Pending | null {
   try {
-    return parsePendingBurn(window.localStorage.getItem(storeKey(vaultJobId)), env);
+    const raw = window.localStorage.getItem(storeKey(vaultJobId));
+    return parsePendingBurn(raw, env) ?? parseSubmittedBurn(raw, env.sources.map((s) => s.domain));
   } catch {
     return null;
   }
 }
-function savePending(vaultJobId: string, p: Pending | null) {
+
+/** Storage writes after the money moved: a failure must not turn a finished payment into an error. */
+function bestEffort(write: () => void) {
   try {
-    if (p) window.localStorage.setItem(storeKey(vaultJobId), JSON.stringify(p));
-    else window.localStorage.setItem(storeKey(vaultJobId), JSON.stringify({ status: 'completed' }));
+    write();
   } catch {
-    // Keep any prior pending record on write failure: never silently authorize another burn.
+    // Storage blocked. The job's own on-chain state still stops the panel from offering a burn.
   }
 }
 
@@ -98,7 +109,7 @@ export function BridgeInPanel({
 
   /** Wait for Circle, then mint and fund in one Arc user operation. */
   const finish = useCallback(
-    async (p: Pending) => {
+    async (p: PendingBurn) => {
       if (!env || polling.current) return;
       polling.current = true;
       setBusy(true);
@@ -138,7 +149,8 @@ export function BridgeInPanel({
             }
             if (plan.pay === 'short') {
               if (calls.length > 0) await session.send(calls);
-              savePending(vaultJobId, null);
+              // Minted but short: nothing is pending, and bringing the difference must stay possible.
+              bestEffort(() => clearMintedBurn(window.localStorage, storeKey(vaultJobId)));
               setPending(null);
               setStatus(null);
               setError('Your USDC arrived on Arc, but it is less than the price, so nothing was paid. Add the difference and pay again.');
@@ -149,7 +161,7 @@ export function BridgeInPanel({
             );
             setStatus('Paying into escrow…');
             const tx = await session.send(calls);
-            savePending(vaultJobId, null);
+            bestEffort(() => markBurnCompleted(window.localStorage, storeKey(vaultJobId)));
             setPending(null);
             setStatus(null);
             await onFunded(tx);
@@ -175,10 +187,12 @@ export function BridgeInPanel({
     setError(null);
     try {
       setStatus(`Moving USDC from ${source.label}…`);
-      if (!navigator.locks) throw new Error("Safe transfer locking is unavailable. Nothing was submitted.");
+      if (!navigator.locks) throw new Error('Safe transfer locking is unavailable. Nothing was submitted.');
       const p = await navigator.locks.request(storeKey(vaultJobId), () =>
-        submitBurnOnce(window.localStorage, storeKey(vaultJobId), source.domain, () =>
-          src.send(burnCalls({ env, source, arcRecipient: session.address, burn: plan.burn, maxFee: plan.maxFee })),
+        submitBurnOnce(window.localStorage, storeKey(vaultJobId), source.domain, (beforeBroadcast) =>
+          src.send(burnCalls({ env, source, arcRecipient: session.address, burn: plan.burn, maxFee: plan.maxFee }), {
+            beforeBroadcast,
+          }),
         ),
       );
       setPending(p);
@@ -188,10 +202,40 @@ export function BridgeInPanel({
       setError((e as Error).message);
       setStatus(null);
       setBusy(false);
+      // A burn that may have been broadcast is saved; show "finish" for it rather than "start".
+      if (env) setPending(loadPending(vaultJobId, env));
     } finally {
       starting.current = false;
     }
   }, [env, source, src, plan, session, vaultJobId, finish]);
+
+  /** Finish a saved burn; one known only by its user operation is looked up first. */
+  const resume = useCallback(
+    async (p: Pending) => {
+      if (!('status' in p)) return finish(p);
+      if (!src || !source || p.domain !== source.domain || starting.current || polling.current) return;
+      starting.current = true;
+      setBusy(true);
+      setError(null);
+      try {
+        setStatus(`Checking your earlier transfer on ${source.label}…`);
+        if (!navigator.locks) throw new Error('Safe transfer locking is unavailable.');
+        const known = await navigator.locks.request(storeKey(vaultJobId), () =>
+          resumeSubmitted(window.localStorage, storeKey(vaultJobId), p, (hash) => src.confirm(hash)),
+        );
+        setPending(known);
+        setBusy(false);
+        await finish(known);
+      } catch (e) {
+        setError((e as Error).message);
+        setStatus(null);
+        setBusy(false);
+      } finally {
+        starting.current = false;
+      }
+    },
+    [src, source, vaultJobId, finish],
+  );
 
   if (!env || !source) return null;
 
@@ -205,7 +249,7 @@ export function BridgeInPanel({
           <p className="portal-body">
             You started moving USDC from {source.label}. It is safe; finish the transfer to pay for this job.
           </p>
-          <button type="button" className="portal-accept" disabled={busy} aria-busy={busy || undefined} onClick={() => void finish(pending)}>
+          <button type="button" className="portal-accept" disabled={busy || ('status' in pending && !src)} aria-busy={busy || undefined} onClick={() => void resume(pending)}>
             {busy ? 'Finishing…' : 'Finish moving your USDC and pay'}
           </button>
         </>

@@ -31,9 +31,17 @@ a USDC transfer ([0xc289df9a…](https://testnet.arcscan.app/tx/0xc289df9afd89bc
 and `requestAdvance`, 0.50 USDC advanced
 ([0xa2a67fcd…](https://testnet.arcscan.app/tx/0xa2a67fcd1108d79bf5871463419f85eee338b498f5d3699e325182f7db470c9b)).
 
-**Not yet run live:** a Circle typed-data signature (the sidecar's x402 signer), the relayer
-wallet settling an x402 payment, and an advance made by the running daemon (the advance above
-was `chainops advance`, the same call the daemon makes, on a job the daemon did not create).
+**Also run live the same day**, receipts read back from arcscan on 12 Nov 2026:
+
+- **The sidecar's x402 signer.** The Circle treasury signed the EIP-3009 authorization for a
+  0.04 USDC purchase (`0xb414…4CA` → `0x99B7…792D`, 40000 atomic).
+- **The relayer wallet settling it.** The self-facilitator broadcast `transferWithAuthorization`
+  from the Circle relayer wallet `0x792b…75b4`
+  ([0x63731fac…](https://testnet.arcscan.app/tx/0x63731fac1ec20d0f815bd1e0e6039525c3504750c3b1f1b63837211125264201)).
+- **An advance made by the running daemon.** The daemon ran on the Circle lane; the advance was
+  proposed through the owner API, approved by a human, and recorded as `advance.executed`
+  ([0x162dafe4…](https://testnet.arcscan.app/tx/0x162dafe462ce6d305b5435689cdf776993ea16a68ebe530b84649369d074bc25):
+  Circle treasury → FloatPool, 0.50 USDC advanced).
 
 ## 2. Customer: their own passkey wallet
 
@@ -84,7 +92,12 @@ operation (bundler → EntryPoint v0.7,
 [0x1e1b48f8…](https://testnet.arcscan.app/tx/0x1e1b48f89f57cb24c5413de81ac4bc2b7b4d50889084f8ba1626200ce012fb26)):
 the job reads `Funded` on chain and the wallet paid exactly the 1 USDC price, no gas.
 
-**Not yet run live:** "Accept & settle from my wallet" in the portal.
+**Run live (12 Nov 2026):** the customer accepted and settled a 19.5 USDC job from the same
+passkey wallet, and the daemon recorded `settlement.executed` with `actor: customer` without a
+second transaction
+([0x9a06929d…](https://testnet.arcscan.app/tx/0x9a06929d4c91a02a6848cbf7585625f657fa6267df0f183c68349437a23de947);
+[proof](TESTNET-ACCEPTANCE-PROOF-2026-11-12.md)). That acceptance went through the `/pay` wallet
+panel; the portal's "Accept & settle from my wallet" button itself has not yet been run live.
 
 ## 3. CCTP V2: USDC in from another chain, and out to one
 
@@ -124,8 +137,18 @@ read every time (currently 0) rather than assumed.
 
 V2 only. Testnet domains: 0 Ethereum Sepolia, 3 Arbitrum Sepolia, 6 Base Sepolia, 26 Arc.
 
-**Not yet run live:** a real burn and mint. Circle's fee and message endpoints were exercised
-live through the proxy (fee table read; unknown burn answers "not seen yet").
+**Run live (12 Nov 2026), Base Sepolia → Arc Testnet:** a burn on Base Sepolia
+([0x7d2f7f25…](https://sepolia.basescan.org/tx/0x7d2f7f2526dfe5cc772343eebec75290d249ac4779d3af004760ddf2cf88f7be)),
+then one Arc user operation that minted it and funded a 2 USDC job
+([0x5059467f…](https://testnet.arcscan.app/tx/0x5059467f58fd9620205f9ad427764609814f07f44e100795483641ee50e13fa1)).
+The same run found an earlier, unminted burn of the same amount, which was recovered by a
+mint-only relay
+([0xe545954d…](https://testnet.arcscan.app/tx/0xe545954dd78647d1dd61f734f2b0bd543b7a53f5ae5cecd2bba443f699d7516d)).
+That duplicate is why the burn is now saved by its user-operation hash **before** it is
+broadcast (`lib/cctpBurnGuard.ts`), so a lost receipt is looked up, not burned again. Details and
+limits: [TESTNET-ACCEPTANCE-PROOF-2026-11-12.md](TESTNET-ACCEPTANCE-PROOF-2026-11-12.md).
+
+**Not yet run live:** the operator payout off Arc (`chainops payout`).
 
 ## 4. Seller settlement: which facilitator, and what a live check of Gateway found
 

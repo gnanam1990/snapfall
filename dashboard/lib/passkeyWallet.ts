@@ -88,10 +88,21 @@ export function passkeyConfig(): PasskeyConfig | null {
   return { clientKey, clientUrl: process.env.NEXT_PUBLIC_CIRCLE_CLIENT_URL || DEFAULT_CLIENT_URL };
 }
 
+export interface SendHooks {
+  /**
+   * Called with the signed user operation's hash after the passkey signed and BEFORE anything
+   * is broadcast. If it throws, nothing is sent. A caller that must survive a lost receipt (a
+   * CCTP burn) persists the hash here, so the outcome can be looked up later instead of guessed.
+   */
+  beforeBroadcast?(userOpHash: Hex): void;
+}
+
 export interface ChainWallet {
   address: string;
   /** Sends the calls as one sponsored user operation and returns its transaction hash. */
-  send(calls: WalletCall[]): Promise<Hex>;
+  send(calls: WalletCall[], hooks?: SendHooks): Promise<Hex>;
+  /** Waits for an already-broadcast user operation; its transaction hash, or an error if the call failed. */
+  confirm(userOpHash: Hex): Promise<Hex>;
   /** ERC-20 balance (6dp surface on Arc, never the 18dp native one). */
   balanceOf(token: string): Promise<bigint>;
 }
@@ -154,19 +165,46 @@ export async function connectPasskey(
       },
     });
     const reader = viem.createPublicClient({ chain, transport: viem.http() }) as import('viem').PublicClient;
+    async function confirm(hash: Hex): Promise<Hex> {
+      const receipt = await bundler.waitForUserOperationReceipt({ hash });
+      if (!receipt.success) {
+        throw new Error(
+          `The transaction was included but the call failed (user operation ${hash}). Nothing changed on chain.`,
+        );
+      }
+      return receipt.receipt.transactionHash;
+    }
     return {
       address: account.address,
       reader,
-      async send(calls) {
-        const hash = await bundler.sendUserOperation({ calls, paymaster: true });
-        const receipt = await bundler.waitForUserOperationReceipt({ hash });
-        if (!receipt.success) {
-          throw new Error(
-            `The transaction was included but the call failed (user operation ${hash}). Nothing changed on chain.`,
-          );
+      // viem's sendUserOperation, in its three steps (prepare, sign, broadcast), so the hash is
+      // known and handed to the caller before the operation can exist anywhere but this tab.
+      async send(calls, hooks) {
+        // Callers that need no hash before broadcast keep viem's own single call.
+        if (!hooks?.beforeBroadcast) return confirm(await bundler.sendUserOperation({ calls, paymaster: true }));
+        const request = await bundler.prepareUserOperation({ account, calls, paymaster: true });
+        const signature = await account.signUserOperation(request);
+        const signed = { ...request, signature };
+        const hash = aa.getUserOperationHash({
+          chainId: chain.id,
+          entryPointAddress: account.entryPoint.address,
+          entryPointVersion: account.entryPoint.version,
+          userOperation: signed,
+        });
+        hooks?.beforeBroadcast?.(hash);
+        const sent = await bundler.request(
+          {
+            method: 'eth_sendUserOperation',
+            params: [aa.formatUserOperationRequest(signed), account.entryPoint.address],
+          },
+          { retryCount: 0 },
+        );
+        if (typeof sent !== 'string' || sent.toLowerCase() !== hash.toLowerCase()) {
+          throw new Error(`Circle's bundler answered with user operation ${String(sent)}, not ${hash}.`);
         }
-        return receipt.receipt.transactionHash;
+        return confirm(hash);
       },
+      confirm,
       balanceOf(token) {
         return reader.readContract({
           address: token as Address,
@@ -182,6 +220,7 @@ export async function connectPasskey(
   return {
     address: arcWallet.address,
     send: arcWallet.send,
+    confirm: arcWallet.confirm,
     balanceOf: arcWallet.balanceOf,
     async onSource(net) {
       const src = (chains as unknown as Record<string, import('viem').Chain>)[net.chainKey];
