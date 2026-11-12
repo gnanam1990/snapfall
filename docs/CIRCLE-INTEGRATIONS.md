@@ -97,7 +97,18 @@ passkey wallet, and the daemon recorded `settlement.executed` with `actor: custo
 second transaction
 ([0x9a06929d…](https://testnet.arcscan.app/tx/0x9a06929d4c91a02a6848cbf7585625f657fa6267df0f183c68349437a23de947);
 [proof](TESTNET-ACCEPTANCE-PROOF-2026-11-12.md)). That acceptance went through the `/pay` wallet
-panel; the portal's "Accept & settle from my wallet" button itself has not yet been run live.
+panel.
+
+**The portal button, run live (12 Nov 2026):** on a 1 USDC job the customer opened the magic link
+`/portal/job_c4?token=…`, pressed "Accept & settle from my wallet", and the passkey wallet signed
+`acceptDelivery` as one sponsored user operation
+([0xd76d2647…](https://testnet.arcscan.app/tx/0xd76d2647981f9d550cd07a74990d044052a63462bb1b0e8a85edf87b2dae44f0):
+`JobSettled`, 1 USDC JobVault → treasury). The page's credential-gated Accept then reached the
+daemon (`POST …/customer/jobs/job_c4/accept` → 200), which recorded `settlement.executed` with
+`actor: customer` and issued an invoice built only from the on-chain `JobFunded`,
+`DeliverySubmitted` and `JobSettled` records. The daemon was reached through a temporary tunnel
+in front of a proxy that forwarded only the three customer routes; the tunnel, proxy and
+`SNAPFALL_OWNER_API_URL` were removed afterwards.
 
 ## 3. CCTP V2: USDC in from another chain, and out to one
 

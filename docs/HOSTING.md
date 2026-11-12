@@ -60,6 +60,9 @@ current chain reads remain enabled and historical aggregates can be unavailable.
 Do not put a credential-bearing RPC URL into Git or a `NEXT_PUBLIC_*` variable.
 
 Leave `SNAPFALL_OWNER_API_URL` and `SNAPFALL_OWNER_TOKEN` unset for the public demo.
+When a daemon is connected, `SNAPFALL_OWNER_API_URL` is the daemon's API base including
+`/api/v1` (for example `https://daemon.example/api/v1`); the dashboard appends `/jobs/…`,
+`/customer/…` and the other route paths to it.
 The current dashboard proxy forwards its configured owner credentials without
 authenticating a public visitor; a same-origin request check is not owner authentication.
 Connecting a private daemon requires an authenticated access boundary first.
