@@ -159,7 +159,17 @@ That duplicate is why the burn is now saved by its user-operation hash **before*
 broadcast (`lib/cctpBurnGuard.ts`), so a lost receipt is looked up, not burned again. Details and
 limits: [TESTNET-ACCEPTANCE-PROOF-2026-11-12.md](TESTNET-ACCEPTANCE-PROOF-2026-11-12.md).
 
-**Not yet run live:** the operator payout off Arc (`chainops payout`).
+**Operator payout, run live (12 Nov 2026), Arc Testnet → Base Sepolia:** `chainops -signer circle
+payout 6 0x99B7…792D 0.10`, with `-dest-rpc`, `-dest-chain-id 84532` and `-dest-key-env`.
+
+- The Circle treasury wallet approved
+  ([0x1afb6657…](https://testnet.arcscan.app/tx/0x1afb66571f583aec58b8a3bbd8fc854315fdcf950b9eaf96fa8095de57c6fa90))
+  and burned 0.10 USDC with Standard finality, fee 0
+  ([0x6b387976…](https://testnet.arcscan.app/tx/0x6b3879763169f5f2e60f5b2252290a839829f58beeb628727989848e4d9229dc)).
+- Circle attested exactly 0.100000 USDC for that recipient on domain 6.
+- A relay key holding only Base Sepolia ETH submitted `receiveMessage`
+  ([0x126f0487…](https://sepolia.basescan.org/tx/0x126f048708642c732b0a5bab8fe0a77021a783e3159745155816eb8979ad18d5),
+  status 1). The recipient's Base Sepolia USDC went from 0 to 0.100000.
 
 ## 4. Seller settlement: which facilitator, and what a live check of Gateway found
 
