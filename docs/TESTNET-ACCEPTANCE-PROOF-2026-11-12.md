@@ -61,6 +61,16 @@ Receipt status is 1; the earlier nonce is now used. Recovered 2.000141 test USDC
 
 During preflight, the daemon CCTP parser rejected Circle's 20-byte decoded recipient address because it expected a padded 32-byte value. The first attempt stopped before signing. A local fix now accepts either exact 20-byte addresses or zero-padded 32-byte forms, preserving recipient identity validation. Regression tests passed before the successful mint-only relay.
 
+### The bridged job settled
+
+The 2-USDC job funded by the bridge was then taken through the normal lifecycle, so its escrow does not stay open:
+
+- Operator (Circle treasury) started work: https://testnet.arcscan.app/tx/0x174791cddc4ff7fedaeba3c55616a51391ea6ce335570546cab7187b1cf4961a
+- Operator submitted delivery: https://testnet.arcscan.app/tx/0x24cb98833ac5a01f0f7c83518f17bb315039d3804609b9e26425ecebacfb537b. The delivery hash `0x3fd5a262b05ad4cdf1a0a5b8bef1dbbd7030a91e2b5b50b300e758e656acd29c` is the SHA-256 of a plain record saying the job has no deliverable beyond the bridge proof.
+- Customer accepted from their passkey wallet, as one sponsored user operation: https://testnet.arcscan.app/tx/0x7624fcb26fb83ccb349e6d5541f00154171f3c4ac5ccdf73664288a3d259a12a. Receipt status 1, `JobSettled`, 2 USDC moved from JobVault to the treasury.
+
+`jobStatus` is now 4. The customer's Arc balance is unchanged at 3.500282 USDC, because the gas was sponsored.
+
 ### Duplicate-burn prevention
 
 Code inspection found that the source wallet's `send` waited for a user-operation receipt before returning its transaction hash, while the bridge only persisted pending state after that promise resolved. A receipt timeout or page closure after submission could therefore leave no saved burn and permit a second attempt. The component also lacked a synchronous start guard and cross-tab locking. These are verified code paths, not proof of which browser event caused the observed duplicate burns.
