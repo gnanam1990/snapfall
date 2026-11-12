@@ -89,6 +89,14 @@ function OperatorRows({ allowlist }: { allowlist: OperatorAllowlist }) {
       </div>
     );
   }
+  if (allowlist.status === 'unavailable') {
+    return (
+      <div>
+        <dt>operator allowlist</dt>
+        <dd>unknown: {allowlist.reason}. Reload; until it reads, an operator not listed here may exist</dd>
+      </div>
+    );
+  }
   const configured = allowlist.operators.find((o) => o.configured);
   return (
     <>
@@ -127,10 +135,27 @@ function OperatorRows({ allowlist }: { allowlist: OperatorAllowlist }) {
           {!allowlist.configuredOperator
             ? 'SNAPFALL_TREASURY_ADDRESS not set'
             : `${allowlist.configuredOperator} — ${
-                configured?.allowed ? 'allowed to borrow' : 'not allowed: its advances revert OperatorNotAllowed()'
+                configured?.allowed === null
+                  ? 'unknown: its state could not be read'
+                  : configured?.allowed
+                    ? 'allowed to borrow'
+                    : 'not allowed: its advances revert OperatorNotAllowed()'
               }`}
         </dd>
       </div>
+      {allowlist.unknown.length > 0 && (
+        <div>
+          <dt>operators not read</dt>
+          <dd className="settings-mono">
+            {allowlist.unknown.map((a, i) => (
+              <span key={a}>
+                {i > 0 && <br />}
+                {a} — unknown: may be allowed or have a grant queued. Reload to read it again
+              </span>
+            ))}
+          </dd>
+        </div>
+      )}
       <div>
         <dt>operators scanned</dt>
         <dd>{discoveryText(allowlist.discovery)}</dd>

@@ -1,6 +1,8 @@
 /** GET /api/customer/[jobId]/acceptance — the customer's job-status read (V9), proxied
  *  to the daemon's credential-gated GET /api/v1/customer/jobs/{id}/acceptance. The
- *  credential rides the client's Authorization header (the magic-link token). */
+ *  credential rides the client's Authorization header (the magic-link token). The body passes
+ *  through verbatim, so the daemon's `settlement` field (none | settled | pending | retry)
+ *  reaches lib/portalSettlement.ts unchanged. */
 
 import { proxyCustomer } from '@/lib/ownerApi';
 

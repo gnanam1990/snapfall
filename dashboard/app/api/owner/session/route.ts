@@ -32,6 +32,38 @@ function fail(status: number, code: string, message: string): Response {
   return Response.json({ error: { code, message } }, { status, headers: NO_STORE });
 }
 
+/**
+ * The request body as text, or null once it passes `limit` bytes. A declared Content-Length over
+ * the limit is refused before anything is read, and the stream is read with a running count and
+ * cancelled at the limit, so an unauthenticated caller cannot make this route buffer a body of
+ * any size (req.text() reads all of it first, and only then could the length be checked).
+ */
+async function readCapped(req: Request, limit: number): Promise<string | null> {
+  const declared = req.headers.get('content-length');
+  if (declared !== null && /^\d+$/.test(declared.trim()) && Number(declared.trim()) > limit) return null;
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const c of chunks) {
+    bytes.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 export async function GET(req: Request): Promise<Response> {
   const badHost = checkHost(req);
   if (badHost) return badHost;
@@ -54,8 +86,8 @@ export async function POST(req: Request): Promise<Response> {
   const config = ownerAccessConfig();
   if (!config.ok) return fail(503, 'OWNER_ACCESS_NOT_CONFIGURED', config.message);
 
-  const raw = await req.text();
-  if (raw.length > MAX_BODY_BYTES) return fail(413, 'BAD_REQUEST', 'Sign-in request too large.');
+  const raw = await readCapped(req, MAX_BODY_BYTES);
+  if (raw === null) return fail(413, 'BAD_REQUEST', 'Sign-in request too large.');
   let presented: unknown;
   try {
     presented = (JSON.parse(raw) as { secret?: unknown }).secret;

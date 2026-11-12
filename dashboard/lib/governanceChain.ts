@@ -129,11 +129,15 @@ export interface OperatorGrantPending {
 
 export interface OperatorEntry {
   address: string;
-  /** allowedOperator(address) at the snapshot block: may this address draw advances now. */
-  allowed: boolean;
+  /** allowedOperator(address) at the snapshot block: may this address draw advances now. Null when
+   *  the read failed: unknown, which is not "not allowed". */
+  allowed: boolean | null;
   /** Whether this is the dashboard's configured operator (SNAPFALL_TREASURY_ADDRESS). */
   configured: boolean;
+  /** Null: nothing queued -- unless `unknown` is set, when it was not read at all. */
   pendingGrant: { executableAt: string; executable: boolean } | null;
+  /** Set only when this address's state could not be read at the snapshot block, saying so. */
+  unknown?: string;
 }
 
 /** How far the operator-event scan reached. Anything but `complete` means an allowed operator or a
@@ -157,7 +161,14 @@ export type OperatorAllowlist =
       allowed: string[];
       /** Queued grants, soonest first. Alert on any you did not queue. */
       pendingGrants: OperatorGrantPending[];
+      /** Addresses whose state could not be read: each may be allowed or have a grant queued. */
+      unknown: string[];
       discovery: OperatorDiscovery;
+    }
+  | {
+      /** The allowlist exists but could not be read just now. The caps are still shown. */
+      status: 'unavailable';
+      reason: string;
     };
 
 export interface GovernanceUnsupported {
@@ -205,17 +216,36 @@ function pendingAdminOf(address: string, acceptableAt: bigint, now: bigint): Pen
 //
 // The scan is incremental and cached on globalThis, like the Float history: Arc is final on
 // inclusion (deployments/README.md), so a scanned block never changes. The accumulator is a set
-// of addresses, so merging the same range twice (two concurrent requests) is harmless, and each
-// chunk commits its addresses and its cursor together with no await in between.
+// of addresses, so merging the same range twice is harmless, and each chunk commits its addresses
+// and its cursor together with no await in between.
+//
+// Concurrent loads share ONE scan, as scanFloatHistory does with SCAN_PENDING (floatChain.ts):
+// /api/governance is public, and without that, N cold loads at once each walked the whole range
+// themselves (10 concurrent loads made 500 eth_getLogs calls for 50 ranges). A load that finds a
+// scan in flight waits for it, within its own budget, and then extends only what is still left
+// for its own head, usually nothing. The provider's range cap, once found by halving, is kept
+// with the cursor, so later loads start at the window that works instead of rediscovering it.
 
 interface OperatorScanState {
   throughBlock: bigint;
   addresses: Set<string>;
+  /** The largest eth_getLogs window the provider accepted after refusing a larger one. */
+  rangeCap?: bigint;
 }
 
-const operatorGlobals = globalThis as unknown as { __snapfallOperatorScan?: Map<string, OperatorScanState> };
+interface OperatorScanOutcome {
+  state: OperatorScanState;
+  discovery: OperatorDiscovery;
+}
+
+const operatorGlobals = globalThis as unknown as {
+  __snapfallOperatorScan?: Map<string, OperatorScanState>;
+  __snapfallOperatorScanPending?: Map<string, Promise<OperatorScanOutcome>>;
+};
 operatorGlobals.__snapfallOperatorScan ??= new Map();
+operatorGlobals.__snapfallOperatorScanPending ??= new Map();
 const OPERATOR_SCAN = operatorGlobals.__snapfallOperatorScan;
+const OPERATOR_SCAN_PENDING = operatorGlobals.__snapfallOperatorScanPending;
 
 /** Default share of one load spent scanning, so the caps view never waits on a cold scan. */
 export const DEFAULT_OPERATOR_SCAN_BUDGET_MS = 2_500;
@@ -226,9 +256,29 @@ interface RPCLog {
 
 const hexBlock = (n: bigint) => '0x' + n.toString(16);
 
-function topicAddress(topic: string | undefined): string {
-  if (typeof topic !== 'string' || !WORD_RE.test(topic)) throw new Error('operator event topic is malformed');
+/** The operator a log names (topic 1), or null when the topic is not one 32-byte word. */
+function topicAddress(topic: string | undefined): string | null {
+  if (typeof topic !== 'string' || !WORD_RE.test(topic)) return null;
   return '0x' + topic.slice(-40).toLowerCase();
+}
+
+/** Wait for `p`, but no longer than `ms` of real time. True when it settled in time. */
+async function settledWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+  if (ms <= 0) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function scanOperatorEvents(
@@ -237,7 +287,7 @@ async function scanOperatorEvents(
   chainId: number,
   head: bigint,
   options: OperatorDiscoveryOptions,
-): Promise<{ state: OperatorScanState; discovery: OperatorDiscovery }> {
+): Promise<OperatorScanOutcome> {
   const startBlock = BigInt(options.startBlock);
   const key = `${chainId}:${pool.toLowerCase()}:${options.startBlock}`;
   let state = OPERATOR_SCAN.get(key);
@@ -247,10 +297,53 @@ async function scanOperatorEvents(
   }
   const now = options.now ?? Date.now;
   const deadline = now() + (options.budgetMs ?? DEFAULT_OPERATOR_SCAN_BUDGET_MS);
-  const chunk = Number.isFinite(options.chunkBlocks) ? Math.floor(options.chunkBlocks!) : DEFAULT_SCAN_CHUNK_BLOCKS;
-  let window = BigInt(Math.max(1, chunk));
   const fromBlock = options.startBlock;
-  const through = () => Number(state!.throughBlock);
+  const partial = (why: string): OperatorScanOutcome => ({
+    state: state!,
+    discovery: { status: 'partial', fromBlock, throughBlock: Number(state!.throughBlock), reason: why },
+  });
+
+  // Join a scan already in flight instead of starting a second one over the same range.
+  for (let inflight = OPERATOR_SCAN_PENDING.get(key); inflight; inflight = OPERATOR_SCAN_PENDING.get(key)) {
+    if (!(await settledWithin(inflight, deadline - now()))) {
+      return partial(
+        `operator events scanned through block ${state.throughBlock} of ${head}; another load is extending the scan`,
+      );
+    }
+    const shared = await inflight.catch(() => null);
+    // The RPC just refused that scan; asking it again for every waiting load would only repeat it.
+    if (shared?.discovery.status === 'failed') return shared;
+  }
+
+  // No await between the check above and this set, so exactly one scan per key is in flight.
+  const run: Promise<OperatorScanOutcome> = extendOperatorScan(rpc, pool, state, head, options, deadline, now).finally(
+    () => {
+      if (OPERATOR_SCAN_PENDING.get(key) === run) OPERATOR_SCAN_PENDING.delete(key);
+    },
+  );
+  OPERATOR_SCAN_PENDING.set(key, run);
+  return run;
+}
+
+async function extendOperatorScan(
+  rpc: RPCTransport,
+  pool: string,
+  state: OperatorScanState,
+  head: bigint,
+  options: OperatorDiscoveryOptions,
+  deadline: number,
+  now: () => number,
+): Promise<OperatorScanOutcome> {
+  const chunk = BigInt(
+    Math.max(1, Number.isFinite(options.chunkBlocks) ? Math.floor(options.chunkBlocks!) : DEFAULT_SCAN_CHUNK_BLOCKS),
+  );
+  let window = state.rangeCap !== undefined && state.rangeCap < chunk ? state.rangeCap : chunk;
+  const fromBlock = options.startBlock;
+  const through = () => Number(state.throughBlock);
+  const failed = (reason: string): OperatorScanOutcome => ({
+    state,
+    discovery: { status: 'failed', fromBlock, throughBlock: through(), reason },
+  });
 
   while (state.throughBlock < head) {
     if (now() >= deadline) {
@@ -278,24 +371,30 @@ async function scanOperatorEvents(
       ]);
     } catch (error) {
       if (isRangeError(error) && window > 1n) {
-        window = window / 2n > 0n ? window / 2n : 1n; // sticky: the provider's real cap, found once
+        window = window / 2n > 0n ? window / 2n : 1n;
+        state.rangeCap = window; // the provider's real cap, found once and kept with the cursor
         continue;
       }
       // The message is not passed on: a provider error can echo the RPC URL and its key.
-      return {
-        state,
-        discovery: {
-          status: 'failed',
-          fromBlock,
-          throughBlock: through(),
-          reason: `the RPC failed the operator-event scan (eth_getLogs) after block ${through()}`,
-        },
-      };
+      return failed(`the RPC failed the operator-event scan (eth_getLogs) after block ${through()}`);
     }
-    if (!Array.isArray(logs)) throw new Error('eth_getLogs did not return a list');
-    // Commit addresses and cursor together. Another request may have moved the cursor meanwhile;
-    // the set makes the overlap harmless and the cursor only moves forward.
-    for (const log of logs) state.addresses.add(topicAddress(log.topics?.[1]));
+    // A malformed answer stops discovery, not the governance view: the caps and the addresses
+    // already found are still read, and the snapshot says the scan did not finish. Nothing from
+    // this chunk is committed, so the next load asks for the same range again.
+    if (!Array.isArray(logs)) {
+      return failed(`the RPC returned something other than a log list for blocks ${from}–${end}`);
+    }
+    const found: string[] = [];
+    for (const log of logs) {
+      const address = topicAddress(log?.topics?.[1]);
+      if (!address) {
+        return failed(`a FloatPool operator event in blocks ${from}–${end} is malformed (no operator address)`);
+      }
+      found.push(address);
+    }
+    // Commit addresses and cursor together. The set makes any overlap harmless and the cursor only
+    // moves forward.
+    for (const a of found) state.addresses.add(a);
     if (end > state.throughBlock) state.throughBlock = end;
   }
   return { state, discovery: { status: 'complete', fromBlock, throughBlock: through() } };
@@ -318,7 +417,11 @@ async function loadOperatorAllowlist(
   try {
     grantDelay = await at(OPERATOR_SELECTOR.OPERATOR_GRANT_DELAY, 'OPERATOR_GRANT_DELAY');
   } catch (error) {
-    if (!isMissingFunction(error)) throw error;
+    if (!isMissingFunction(error)) {
+      // A transient failure of one getter is not a reason to lose the caps view (a 503 on the
+      // public route); the message is not passed on, since it can echo the RPC URL and its key.
+      return { status: 'unavailable', reason: 'the RPC failed the OPERATOR_GRANT_DELAY() read; the operator allowlist was not read' };
+    }
     return {
       status: 'unsupported',
       reason:
@@ -344,10 +447,24 @@ async function loadOperatorAllowlist(
 
   const operators = await Promise.all(
     [...candidates].sort().map(async (address): Promise<OperatorEntry> => {
-      const [allowed, executableAt] = await Promise.all([
-        at(encodeAddressArg(OPERATOR_SELECTOR.allowedOperator, address), 'allowedOperator'),
-        at(encodeAddressArg(OPERATOR_SELECTOR.operatorGrantExecutableAt, address), 'operatorGrantExecutableAt'),
-      ]);
+      let allowed: bigint;
+      let executableAt: bigint;
+      try {
+        [allowed, executableAt] = await Promise.all([
+          at(encodeAddressArg(OPERATOR_SELECTOR.allowedOperator, address), 'allowedOperator'),
+          at(encodeAddressArg(OPERATOR_SELECTOR.operatorGrantExecutableAt, address), 'operatorGrantExecutableAt'),
+        ]);
+      } catch {
+        // One address that will not read is unknown, never "not allowed", and never a 503 for
+        // every other address and the caps.
+        return {
+          address,
+          allowed: null,
+          configured: address === configured,
+          pendingGrant: null,
+          unknown: `allowedOperator/operatorGrantExecutableAt could not be read at block ${Number(BigInt(head))}`,
+        };
+      }
       return {
         address,
         allowed: allowed !== 0n,
@@ -356,7 +473,7 @@ async function loadOperatorAllowlist(
       };
     }),
   );
-  const shown = operators.filter((o) => o.allowed || o.pendingGrant || o.configured);
+  const shown = operators.filter((o) => o.allowed || o.pendingGrant || o.configured || o.unknown);
   const pendingGrants = shown
     .filter((o) => o.pendingGrant)
     .map((o) => ({ address: o.address, ...o.pendingGrant! }))
@@ -369,6 +486,7 @@ async function loadOperatorAllowlist(
     operators: shown,
     allowed: shown.filter((o) => o.allowed).map((o) => o.address),
     pendingGrants,
+    unknown: shown.filter((o) => o.unknown).map((o) => o.address),
     discovery,
   };
 }
@@ -479,6 +597,9 @@ export const governanceChainInternals = {
   SELECTOR,
   OPERATOR_SELECTOR,
   OPERATOR_TOPIC,
-  /** Forget cached operator scans, so a test starts cold. */
-  resetOperatorScan: () => OPERATOR_SCAN.clear(),
+  /** Forget cached operator scans (and any in flight), so a test starts cold. */
+  resetOperatorScan: () => {
+    OPERATOR_SCAN.clear();
+    OPERATOR_SCAN_PENDING.clear();
+  },
 };

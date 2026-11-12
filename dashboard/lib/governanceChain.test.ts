@@ -31,6 +31,14 @@ interface OperatorFake {
   /** Largest range eth_getLogs accepts before answering a range-cap error. */
   rangeCap?: number;
   getLogsCalls?: Array<{ from: number; to: number }>;
+  /** Answer eth_getLogs after a real timer tick, so concurrent loads genuinely overlap. */
+  getLogsDelayMs?: number;
+  /** A block whose operator log comes back with a malformed operator topic. */
+  malformedAt?: number;
+  /** Addresses whose allowedOperator read fails (not a revert: the RPC errors). */
+  unreadable?: string[];
+  /** Make the OPERATOR_GRANT_DELAY read fail with a non-revert RPC error. */
+  delayFails?: boolean;
 }
 
 const missing = () => new RPCError('Arc RPC eth_call failed: execution reverted', 200, 3, 'execution reverted');
@@ -54,13 +62,18 @@ function fakeRPC(
       const from = Number(BigInt(filter.fromBlock));
       const to = Number(BigInt(filter.toBlock));
       op?.getLogsCalls?.push({ from, to });
+      if (op?.getLogsDelayMs) await new Promise((r) => setTimeout(r, op.getLogsDelayMs));
       if (op?.getLogsFails) throw new RPCError('Arc RPC eth_getLogs HTTP 500: https://rpc.example/v2/fake-key', 500, -32000, 'boom');
       if (op?.rangeCap !== undefined && to - from + 1 > op.rangeCap) {
         throw new RPCError('Arc RPC eth_getLogs HTTP 400', 400, -32600, 'up to a 10 block range');
       }
       return (op?.logs ?? [])
         .filter(([b]) => b >= from && b <= to)
-        .map(([b, topic, who]) => ({ blockNumber: '0x' + b.toString(16), topics: [topic, addr(who)], data: '0x' }));
+        .map(([b, topic, who]) => ({
+          blockNumber: '0x' + b.toString(16),
+          topics: [topic, b === op?.malformedAt ? '0x1234' : addr(who)],
+          data: '0x',
+        }));
     }
     assert.equal(method, 'eth_call');
     const [{ to, data }, block] = params as [{ to: string; data: string }, string];
@@ -68,8 +81,14 @@ function fakeRPC(
     if (opts.missing) throw missing();
     if (to === POOL && Object.values(OS).some((sel) => data.startsWith(sel))) {
       if (!op) throw missing();
-      if (data === OS.OPERATOR_GRANT_DELAY) return w(op.delay ?? 172_800n);
+      if (data === OS.OPERATOR_GRANT_DELAY) {
+        if (op.delayFails) throw new RPCError('Arc RPC eth_call HTTP 503: https://rpc.example/v2/fake-key', 503, undefined, 'unavailable');
+        return w(op.delay ?? 172_800n);
+      }
       const who = '0x' + data.slice(-40);
+      if ((op.unreadable ?? []).some((a) => a.toLowerCase() === who)) {
+        throw new RPCError('Arc RPC eth_call HTTP 503: https://rpc.example/v2/fake-key', 503, undefined, 'unavailable');
+      }
       if (data.startsWith(OS.allowedOperator)) return w((op.allowed ?? []).some((a) => a.toLowerCase() === who) ? 1 : 0);
       const queued = Object.entries(op.queued ?? {}).find(([a]) => a.toLowerCase() === who);
       return w(queued ? queued[1] : 0n);
@@ -335,4 +354,128 @@ test('a malformed configured operator address is refused, not ignored', async ()
     loadGovernance({ ...config, operatorAddress: '0x1234' }, fakeRPC(basePool, baseVault, { operators: {} })),
     /operatorAddress is not an address/,
   );
+});
+
+// ── One scan for concurrent loads, a remembered range cap, and failures that degrade ─────────
+
+test('concurrent cold loads share one operator scan: N loads cost one scan of eth_getLogs calls', async () => {
+  const discovery = { startBlock: 61, chunkBlocks: 40 };
+  const ops = (calls: Array<{ from: number; to: number }>): OperatorFake => ({
+    allowed: [OTHER],
+    logs: [[99, OT.allowed, OTHER]],
+    rangeCap: 10,
+    getLogsCalls: calls,
+    getLogsDelayMs: 1,
+  });
+
+  // What ONE cold load costs: two refused windows (40, 20), then four ranges of 10.
+  reset();
+  const single: Array<{ from: number; to: number }> = [];
+  await loadGovernance({ ...config, operatorDiscovery: discovery }, fakeRPC(basePool, baseVault, { operators: ops(single) }));
+  assert.equal(single.length, 6);
+
+  reset();
+  const shared: Array<{ from: number; to: number }> = [];
+  const rpc = fakeRPC(basePool, baseVault, { operators: ops(shared) });
+  const loads = await Promise.all(
+    Array.from({ length: 10 }, () => loadGovernance({ ...config, operatorDiscovery: discovery }, rpc)),
+  );
+  assert.deepEqual(shared, single, 'ten concurrent loads made exactly the calls of one');
+  for (const g of loads) {
+    assert.ok(g.status === 'ok' && g.operatorAllowlist.status === 'ok');
+    if (g.status !== 'ok' || g.operatorAllowlist.status !== 'ok') return;
+    assert.equal(g.operatorAllowlist.discovery.status, 'complete');
+    assert.deepEqual(g.operatorAllowlist.allowed, [OTHER.toLowerCase()], 'every load sees what the shared scan found');
+  }
+});
+
+test('the provider range cap, once found, is kept: the next load starts at the window that works', async () => {
+  reset();
+  const calls: Array<{ from: number; to: number }> = [];
+  const discovery = { startBlock: 61, chunkBlocks: 40 };
+  const ops: OperatorFake = { allowed: [], rangeCap: 10, getLogsCalls: calls };
+  await loadGovernance({ ...config, operatorDiscovery: discovery }, fakeRPC(basePool, baseVault, { operators: ops }));
+  calls.length = 0;
+  await loadGovernance({ ...config, operatorDiscovery: discovery }, fakeRPC(basePool, baseVault, { operators: ops, head: 150 }));
+  assert.deepEqual(
+    calls,
+    [101, 111, 121, 131, 141].map((from) => ({ from, to: from + 9 })),
+    'no refused 40- or 20-block window is asked again',
+  );
+});
+
+test('a malformed operator log stops discovery, not the governance view: caps still read, scan resumes', async () => {
+  reset();
+  const calls: Array<{ from: number; to: number }> = [];
+  const ops: OperatorFake = {
+    allowed: [TREASURY, OTHER],
+    logs: [
+      [20, OT.allowed, OTHER],
+      [70, OT.allowed, ROGUE],
+    ],
+    malformedAt: 70,
+    getLogsCalls: calls,
+  };
+  const discovery = { startBlock: 0, chunkBlocks: 50 };
+  const g = await loadGovernance(
+    { ...config, operatorAddress: TREASURY, operatorDiscovery: discovery },
+    fakeRPC(basePool, baseVault, { operators: ops }),
+  );
+  assert.ok(g.status === 'ok' && g.operatorAllowlist.status === 'ok');
+  if (g.status !== 'ok' || g.operatorAllowlist.status !== 'ok') return;
+  assert.equal(g.lossBudget.ceiling, '50000000', 'the caps are still shown');
+  const d = g.operatorAllowlist.discovery;
+  assert.equal(d.status, 'failed');
+  assert.equal(d.status === 'failed' && d.throughBlock, 49, 'the good chunk is kept; the bad one is not committed');
+  assert.match(d.status === 'failed' ? d.reason : '', /blocks 50–99 is malformed/);
+  assert.deepEqual(g.operatorAllowlist.allowed.sort(), [TREASURY, OTHER].map((x) => x.toLowerCase()).sort());
+
+  // The next load asks for the same range again, not past it.
+  const before = calls.length;
+  await loadGovernance(
+    { ...config, operatorAddress: TREASURY, operatorDiscovery: discovery },
+    fakeRPC(basePool, baseVault, { operators: { ...ops, malformedAt: undefined } }),
+  );
+  assert.deepEqual(calls[before], { from: 50, to: 99 });
+});
+
+test('one operator whose state will not read is unknown, not "not allowed", and the rest still read', async () => {
+  reset();
+  const g = await loadGovernance(
+    { ...config, operatorAddress: TREASURY, operatorDiscovery: { startBlock: 0, chunkBlocks: 1000 } },
+    fakeRPC(basePool, baseVault, {
+      operators: {
+        allowed: [TREASURY, ROGUE],
+        logs: [
+          [10, OT.allowed, TREASURY],
+          [20, OT.allowed, ROGUE],
+        ],
+        unreadable: [ROGUE],
+      },
+    }),
+  );
+  assert.ok(g.status === 'ok' && g.operatorAllowlist.status === 'ok');
+  if (g.status !== 'ok' || g.operatorAllowlist.status !== 'ok') return;
+  const a = g.operatorAllowlist;
+  assert.equal(g.lossBudget.ceiling, '50000000');
+  assert.deepEqual(a.allowed, [TREASURY.toLowerCase()]);
+  assert.deepEqual(a.unknown, [ROGUE.toLowerCase()]);
+  const rogue = a.operators.find((o) => o.address === ROGUE.toLowerCase());
+  assert.equal(rogue?.allowed, null, 'unknown is not false');
+  assert.match(rogue?.unknown ?? '', /could not be read at block 100/);
+  assert.doesNotMatch(rogue?.unknown ?? '', /rpc\.example|fake-key/);
+  assert.deepEqual(a.pendingGrants, []);
+});
+
+test('an OPERATOR_GRANT_DELAY read that fails (not a revert) leaves the allowlist unavailable and the caps shown', async () => {
+  reset();
+  const g = await loadGovernance(
+    { ...config, operatorAddress: TREASURY },
+    fakeRPC(basePool, baseVault, { operators: { allowed: [TREASURY], delayFails: true } }),
+  );
+  assert.ok(g.status === 'ok');
+  if (g.status !== 'ok') return;
+  assert.equal(g.lossBudget.ceiling, '50000000');
+  assert.equal(g.operatorAllowlist.status, 'unavailable');
+  assert.doesNotMatch(g.operatorAllowlist.status === 'unavailable' ? g.operatorAllowlist.reason : '', /rpc\.example|fake-key/);
 });

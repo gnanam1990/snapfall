@@ -8,6 +8,8 @@
  *      (a borrower other than SNAPFALL_TREASURY_ADDRESS), or
  *    - `operatorAllowlist.discovery.status` is not `complete` for longer than a few polls
  *      (`partial` resumes on the next poll; `failed` means the RPC refused the log scan),
+ *    - `operatorAllowlist.unknown` is non-empty, or `operatorAllowlist.status` is `unavailable`,
+ *      for longer than a few polls (a read failed: those addresses may be allowed),
  *  and you did not start it. The state is read from contract storage at one block
  *  (lib/governanceChain); only the operator ADDRESSES come from FloatPool's events. */
 

@@ -321,6 +321,54 @@ test('sign-in: wrong secret, cross-site, non-JSON and unconfigured attempts set 
   });
 });
 
+/** A sign-in POST whose body is a stream we can watch: how many bytes the route pulled. */
+function streamedSignIn(chunks: Uint8Array[], headers: Record<string, string> = {}) {
+  let pulled = 0;
+  let cancelled = false;
+  let i = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i >= chunks.length) return controller.close();
+      pulled += chunks[i].byteLength;
+      controller.enqueue(chunks[i++]);
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }, { highWaterMark: 0 }); // pull only when the route reads, so `pulled` counts its reads
+  const req = new Request(`${ORIGIN}/api/owner/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: ORIGIN, ...headers },
+    body,
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+  return { req, pulled: () => pulled, cancelled: () => cancelled };
+}
+
+test('sign-in: an oversized body is refused before it is buffered', async () => {
+  await withEnv(CONFIGURED, async () => {
+    const kib = new Uint8Array(1024).fill(0x20);
+
+    // A declared Content-Length over the limit is refused without reading a byte.
+    const declared = streamedSignIn([kib, kib, kib, kib, kib], { 'content-length': String(5 * 1024) });
+    const refused = await sessionRoute.POST(declared.req);
+    assert.equal(refused.status, 413);
+    assert.equal(declared.pulled(), 0, 'nothing was read');
+    assert.equal(refused.headers.get('set-cookie'), null);
+
+    // No Content-Length (chunked): the stream is read with a count and cancelled at the limit.
+    const endless = streamedSignIn(Array.from({ length: 64 }, () => kib));
+    const cut = await sessionRoute.POST(endless.req);
+    assert.equal(cut.status, 413);
+    assert.ok(endless.pulled() <= 5 * 1024, `read ${endless.pulled()} bytes of 64 KiB, not all of it`);
+    assert.equal(endless.cancelled(), true);
+
+    // A small streamed body still signs in.
+    const ok = streamedSignIn([new TextEncoder().encode(JSON.stringify({ secret: FAKE_SECRET }))]);
+    assert.equal((await sessionRoute.POST(ok.req)).status, 204);
+  });
+});
+
 test('sign-out clears the cookie', async () => {
   await withEnv(CONFIGURED, async () => {
     const res = await sessionRoute.DELETE(

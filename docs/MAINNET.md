@@ -252,7 +252,9 @@ limits a compromised admin key:
   start it. The same section lists the operator allowlist: alert whenever
   `operatorAllowlist.pendingGrants` is non-empty and you did not queue it, whenever an
   operator is `allowed` but not `configured` (not the daemon's `SNAPFALL_TREASURY_ADDRESS`),
-  and whenever `operatorAllowlist.discovery.status` stays other than `complete`. A pool
+  whenever `operatorAllowlist.discovery.status` stays other than `complete`, whenever
+  `operatorAllowlist.unknown` is non-empty (an operator whose state could not be read), and
+  whenever `operatorAllowlist.status` is `unavailable` (the allowlist itself could not be read). A pool
   deployed before the allowlist reports it as unsupported; see "Live pools deployed before
   the operator allowlist" above.
 - **Move admin off the deployer** right after deploying (`SNAPFALL_ADMIN` in `Deploy.s.sol`

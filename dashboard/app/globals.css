@@ -1542,6 +1542,8 @@ table.t { width: 100%; border-collapse: collapse; }
 }
 .portal-wallet-name input:focus-visible { outline: 2px solid var(--sky); outline-offset: 1px; }
 .portal-wallet-actions { display: flex; flex-direction: column; gap: 10px; }
+/* Check again (and, while settling, the retry) under an accepted-but-unsettled delivery. */
+.portal-recheck { margin-top: 10px; }
 .portal-secondary {
   width: 100%; min-height: 44px; border-radius: var(--radius); border: 1px solid var(--border);
   background: transparent; color: var(--text); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer;

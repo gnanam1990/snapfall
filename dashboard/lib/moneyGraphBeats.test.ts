@@ -197,6 +197,8 @@ const INTENTIONALLY_SILENT: Record<string, string> = {
   'settlement.reverted': 'reverted on chain; the waterfall did not divide anything',
   'settlement.submitted': 'broadcast, not landed; JobSettled divides the money if it mines',
   'settlement.dropped': 'never mined (nonce moved past it); nothing settled',
+  'settlement.unseen': 'one look at a broadcast the node does not know; it resolves nothing by itself',
+  'settlement.rebroadcast': 'the same signed bytes sent again; the broadcast stays open, nothing landed',
   'task.withheld': 'a QA hold on delivery, not a movement of money',
   'freeze.engaged': 'a control-plane state, not a money beat',
   'freeze.lifted': 'a control-plane state, not a money beat',
