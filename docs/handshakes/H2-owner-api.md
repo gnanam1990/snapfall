@@ -208,6 +208,84 @@ open cross-stream seam, and both sides assuming the other handled it is how gaps
 happen. Until that is decided all-three, the customer copy stays unserved; serving it
 will be a versioned addition to this contract, not a silent one.
 
+### 4.3 Customer acceptance: `settlement` status
+
+Customer routes are gated by the per-job accept credential (`Authorization: Bearer act_…`),
+never by the owner token.
+
+`GET /api/v1/customer/jobs/{jobId}/acceptance`: response `200`:
+
+```jsonc
+{ "jobId": "job_demo_1",
+  "stage": "accepted",               // the job's stage, verbatim
+  "accepted": true,                  // stage == "accepted": the CLAIM happened, nothing more
+  "settlement": "none" | "settled" | "pending" | "retry",
+  "vaultJobId": "0x…" }              // present only once a chain identity is bound
+```
+
+`POST /api/v1/customer/jobs/{jobId}/accept`: response `200`:
+
+```jsonc
+{ "jobId": "job_demo_1",
+  "state": "accepted-settled" | "accepted-pending-chain" | "accepted-settlement-reverted",
+  "settlement": "none" | "settled" | "pending" | "retry" }   // read AFTER the attempt
+```
+
+`accepted: true` does **not** mean settled. `settlement` is what says whether pressing
+Accept again does anything. It always holds exactly one of four values:
+
+| `settlement` | meaning | portal |
+|---|---|---|
+| `none` | not accepted yet | show Accept |
+| `settled` | a `settlement.executed` is recorded | accepted and settled; hide Accept |
+| `pending` | accepted, and nothing the customer does changes anything right now: an attempt is in flight, a broadcast `acceptDelivery` has no outcome yet, the job has no chain identity or no settle lane is wired, or the chain has not reached `Delivered` | Accept is safe but will most likely report pending again |
+| `retry` | accepted, and the last attempt reverted, failed, was dropped or was never recorded (or the chain shows a settlement no record has yet, which an Accept records) | show Accept again |
+
+It comes from the same rules the retried Accept acts on (`brain.nextSettlementStep`). It
+is not a second copy of them. When a chain oracle is wired the read consults it (settled
+on chain? `Delivered`?), and a failed read is a `500 INTERNAL`, never a guessed value. Both
+customer routes return `500` bodies with a generic message (`"the settlement status could
+not be read; try again shortly"` / `"the acceptance could not be processed; try again
+shortly"`) and log the detail server-side against the job. A chain error can carry the RPC
+URL and its API key, and these routes are reachable by any credential holder. `401
+UNAUTHENTICATED` (bad or missing credential), `404 UNKNOWN_JOB`, `409 NOT_READY`, `423
+FROZEN`, `503 NOT_WIRED` (any customer seam, `settlement` included, unwired).
+
+**Settlement recovery, as recorded (daemon event log, per job):**
+
+- `settlement.submitted` is written once the lane's `acceptDelivery` is out and before
+  its receipt wait: `tx_hash`, `nonce`, `signer_address` (the signing account), and
+  `raw_tx` (the signed bytes as sent). While it has no outcome the job is `pending` and
+  nothing new is submitted.
+- Open broadcasts are resolved at boot, every minute by the `settlement-resolver`
+  worker, and on every Accept. All three run the same code, which records outcomes and
+  never submits a new transaction. A receipt gives `settlement.executed` or
+  `settlement.reverted`. The mined nonce compared is always `signer_address`'s, so
+  rotating the key across a restart cannot redirect it.
+- A transaction with no receipt that the node does not know (`eth_getTransactionByHash`
+  null) is one observation, recorded as `settlement.unseen` with `verdict` and chain
+  `head`. It acts only when a later observation with the same verdict is taken at a
+  strictly higher head. A load-balanced RPC whose nonce backend is ahead of its receipt
+  backend makes a mined transaction look exactly like this.
+  - verdict `dropped` (signer nonce past it): confirmed → `settlement.dropped`, and the
+    job becomes `retry`.
+  - verdict `evicted` (signer nonce still open): confirmed → the recorded `raw_tx` is
+    re-sent unchanged (`settlement.rebroadcast`). It has the same nonce and the same hash,
+    so it cannot settle twice. Nothing is re-sent while the job is frozen.
+- **Manual recovery** applies to a `settlement.submitted` written before `raw_tx` was
+  stored. An evicted transaction of that kind cannot be re-sent, so it stays `pending`
+  until its nonce is used. The operator recovers it by sending any transaction from the
+  customer lane's signer at that nonce, e.g. a zero-value self-transfer. The broadcast
+  then confirms as dropped and the next Accept resubmits. JobVault refuses a second
+  `acceptDelivery` for a settled job, so this cannot double-settle.
+- If the `settlement.submitted` write fails and the receipt wait fails too, the Accept
+  fails with an error naming the transaction, and the daemon logs it at ERROR. The next
+  attempt in that process writes the record first and resubmits nothing until it has.
+  After a restart, the on-chain read (`settled on chain?`) is what stands between that
+  transaction and a resubmission, so an unreadable chain fails every Accept closed. If the
+  chain can be read and the job settled, the Accept records it as settled. It never
+  submits again.
+
 ## 5. What ships when
 
 - **Daemon-source stream + approvals endpoints:** implemented with this document, on the

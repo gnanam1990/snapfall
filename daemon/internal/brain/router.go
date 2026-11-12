@@ -79,6 +79,12 @@ type Brain struct {
 	// by mu and is deliberately in memory only: it serializes attempts within this process,
 	// and after a restart nothing is in flight, so an empty map is the correct state.
 	settling map[string]bool
+	// unrecorded holds an acceptDelivery that went out while its settlement.submitted record
+	// could not be written (and its receipt was not read either). Guarded by mu. The next
+	// attempt for that job writes the record FIRST and resubmits nothing until it has; it is
+	// in memory only because the record it stands in for is exactly what could not be
+	// persisted. After a restart the chain read is what remains (observe before submit).
+	unrecorded map[string]funding.Broadcast
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).
@@ -139,6 +145,7 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 		tasks:                     make(map[string]*taskHandle),
 		milestoneObservationGates: make(map[string]*milestoneObservationGate),
 		settling:                  make(map[string]bool),
+		unrecorded:                make(map[string]funding.Broadcast),
 	}
 
 	b.maxRevisions = 2

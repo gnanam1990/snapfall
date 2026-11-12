@@ -113,7 +113,27 @@ const (
 	// nothing in the sidecar ever leaves RECONCILING, and a signed authorization is a bearer
 	// instrument that may still settle (H3 §7 step 4).
 	reconcileDeadline = 24 * time.Hour
+	// settlementResolveInterval re-asks the chain about every recorded acceptDelivery
+	// broadcast no record resolves yet. Each pass is one observation; a dropped or evicted
+	// verdict is acted on only when a later pass, at a higher chain head, agrees, so this
+	// cadence is also how long such a confirmation takes without a customer pressing Accept.
+	settlementResolveInterval = time.Minute
 )
+
+// resolveOpenSettlements runs one resolution pass over every open acceptDelivery broadcast
+// (brain.ResolveOpenSettlements: the same code a retried Accept uses; it records, it never
+// submits a new transaction) and logs what it did. Boot calls it once, and the
+// settlement-resolver worker calls it on settlementResolveInterval.
+func resolveOpenSettlements(ctx context.Context, br *brain.Brain, log *slog.Logger, when string) {
+	n, err := br.ResolveOpenSettlements(ctx)
+	if err != nil {
+		log.Warn("could not resolve every open settlement broadcast; they stay open and the next pass retries",
+			"when", when, "err", err)
+	}
+	if n > 0 {
+		log.Info("resolved open settlement broadcasts", "when", when, "jobs", n)
+	}
+}
 
 // statusPoller reads one payment's durable state from the H3 sidecar. *h3.Client satisfies
 // it; the interface exists so the reclaim paths name a READ capability rather than the whole
@@ -179,12 +199,20 @@ func (l customerSettleLane) SubmitTracked(ctx context.Context, calldata []byte, 
 	return outcomeOf(r), nil
 }
 
-func (l customerSettleLane) Resolve(ctx context.Context, b funding.Broadcast) (funding.TxState, funding.ChainOutcome, error) {
-	st, r, err := l.c.Resolve(ctx, b)
-	if err != nil || st != chain.TxMined {
-		return st, funding.ChainOutcome{}, err
+func (l customerSettleLane) Resolve(ctx context.Context, b funding.Broadcast) (funding.Resolution, error) {
+	r, err := l.c.Resolve(ctx, b)
+	if err != nil {
+		return funding.Resolution{State: funding.TxPending}, err
 	}
-	return st, outcomeOf(r), nil
+	res := funding.Resolution{State: r.State, Head: r.Head}
+	if r.State == chain.TxMined {
+		res.Outcome = outcomeOf(r.Receipt)
+	}
+	return res, nil
+}
+
+func (l customerSettleLane) Rebroadcast(ctx context.Context, b funding.Broadcast) error {
+	return l.c.Rebroadcast(ctx, b)
 }
 
 // chainBudget is V6 §1.C's alarm. Two independent 6.00 figures govern one job's spending:
@@ -528,6 +556,7 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		}
 		return string(js.Stage), true
 	}
+	api.Settlement = br.SettlementStatus
 	api.VaultJobID = br.VaultJobID
 	// The snap's owner-initiated trigger: the proposal lands pending in this same
 	// inbox; the owner's approval mints the Grant and Funding stops honestly at
@@ -592,6 +621,24 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 	}
 	if err := sup.Register(workerFunc{name: "owner-api", fn: func(wctx context.Context) error {
 		return api.Run(wctx, apiAddr)
+	}}); err != nil {
+		return err
+	}
+
+	// A recorded acceptDelivery broadcast whose receipt was never read (a timed-out wait, a
+	// crash) is resolved here too, not only when the customer presses Accept again: one
+	// observation per tick, recorded exactly as a retried Accept records it.
+	if err := sup.Register(workerFunc{name: "settlement-resolver", fn: func(wctx context.Context) error {
+		tick := time.NewTicker(settlementResolveInterval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-wctx.Done():
+				return nil
+			case <-tick.C:
+				resolveOpenSettlements(wctx, br, log, "tick")
+			}
+		}
 	}}); err != nil {
 		return err
 	}
@@ -1075,6 +1122,10 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		return nil, nil, nil, err
 	}
 	log.Info("brain serving", "jobs_recovered", br.JobCount())
+	// Every acceptDelivery broadcast a previous run left open (its receipt wait timed out,
+	// or the process died during it) is resolved once now, with the lanes and oracles above
+	// already wired, before the customer surface serves.
+	resolveOpenSettlements(ctx, br, log, "boot")
 
 	// V6 §1.C at boot, over every job that already HAS a chain identity. Milestones are the
 	// only jobs whose vault ids the daemon can enumerate (Brain's in-memory job state carries

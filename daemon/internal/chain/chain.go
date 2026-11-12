@@ -131,11 +131,17 @@ func (c *Client) SubmitWithGas(ctx context.Context, to common.Address, calldata 
 	return c.submit(ctx, to, calldata, gasLimit)
 }
 
-// Broadcast identifies one signed transaction the node has accepted: its hash and the
-// signer nonce it occupies. Both are public chain data, never key material.
+// Broadcast identifies one signed transaction the node has accepted: its hash, the signer
+// nonce it occupies, the address that signed it, and the signed bytes exactly as sent. All
+// of it is public chain data the moment it is broadcast, never key material.
+//
+// Signer and Raw are zero in records written before they were stored. Resolve then falls
+// back to this client's own address, and Rebroadcast refuses (nothing to re-send).
 type Broadcast struct {
 	TxHash string
 	Nonce  uint64
+	Signer common.Address
+	Raw    []byte
 }
 
 // SubmitTracked is Submit with one extra step: onBroadcast runs as soon as the node has
@@ -151,53 +157,153 @@ func (c *Client) SubmitTracked(ctx context.Context, to common.Address, calldata 
 	return c.submitTracked(ctx, to, calldata, 0, onBroadcast)
 }
 
-// TxState is what the chain says, right now, about a transaction this signer broadcast.
+// TxState is what ONE look at the chain says about a transaction this signer broadcast.
 type TxState int
 
 const (
-	// TxPending: no receipt, and the signer's mined nonce has not passed the transaction's
-	// nonce. It may still mine; nothing about it is known yet.
+	// TxPending: no receipt yet, but nothing says the transaction cannot mine. The node
+	// knows it (in the mempool, or mined with its receipt not yet readable), or the reads
+	// were inconclusive. Nothing about it is known yet.
 	TxPending TxState = iota
 	// TxMined: a receipt exists. Receipt.Reverted says how it ended.
 	TxMined
-	// TxDropped: no receipt, and the signer's mined nonce has moved past the transaction's
-	// nonce. Some other transaction took that nonce, so this one can never mine.
+	// TxDropped: in THIS observation there is no receipt, the node does not know the
+	// transaction (eth_getTransactionByHash is null), and the signer's mined nonce has moved
+	// past it. That is what a transaction whose nonce went to another one looks like, but it
+	// is also what a mined transaction looks like through a load-balanced RPC whose nonce
+	// backend is ahead of its receipt backend. One observation is NOT proof: the caller
+	// records it and confirms with a second one after the chain head has advanced.
 	TxDropped
+	// TxEvicted: no receipt, the node does not know the transaction, and the signer's mined
+	// nonce has NOT moved past it. The mempool lost it; nothing else has taken the nonce, so
+	// the very same signed bytes can still mine if they are sent again (Rebroadcast). Like
+	// TxDropped it is one observation, confirmed by the caller before it acts.
+	TxEvicted
 )
 
-// Resolve reports a broadcast transaction's state without waiting for it. It reads the
-// signer's MINED nonce first and the receipt second: if the nonce has already passed b.Nonce
-// and the receipt read that follows still finds nothing, the slot went to another
-// transaction, so b can never mine (reading the other way round could mistake a
-// transaction that mined between the two reads for a dropped one). Any read failure is
-// returned as an error, never guessed as a state.
-func (c *Client) Resolve(ctx context.Context, b Broadcast) (TxState, Receipt, error) {
-	if c.key == nil {
-		return TxPending, Receipt{}, fmt.Errorf("refusing to resolve: this client is read-only (no signer nonce to compare)")
-	}
+// Resolution is one observation of a broadcast: its state, the receipt when mined, and the
+// chain head the observation was taken at, so a caller can require a later observation to
+// be taken at a strictly higher head before believing a TxDropped or TxEvicted.
+type Resolution struct {
+	State   TxState
+	Receipt Receipt
+	Head    uint64
+}
+
+// Resolve reports a broadcast transaction's state without waiting for it. Reads, in order:
+// the chain head, the SIGNER's mined nonce (b.Signer, the address recorded with the
+// broadcast, so a key rotated across a restart does not compare the wrong account), the
+// receipt, then eth_getTransactionByHash. A receipt is TxMined. A transaction the node
+// knows is TxPending. Only a transaction with no receipt AND unknown to the node is
+// TxDropped (mined nonce past it) or TxEvicted (mined nonce not past it), and both are
+// single observations the caller must confirm. Any read failure is returned as an error,
+// never guessed as a state.
+func (c *Client) Resolve(ctx context.Context, b Broadcast) (Resolution, error) {
 	if strings.TrimSpace(b.TxHash) == "" {
-		return TxPending, Receipt{}, fmt.Errorf("resolve: transaction hash is empty")
+		return Resolution{}, fmt.Errorf("resolve: transaction hash is empty")
+	}
+	signer := b.Signer
+	if signer == (common.Address{}) {
+		if c.key == nil {
+			return Resolution{}, fmt.Errorf("refusing to resolve: the broadcast names no signer and this client is read-only (no signer nonce to compare)")
+		}
+		signer = c.addr
 	}
 	if err := c.VerifyChainID(ctx); err != nil {
-		return TxPending, Receipt{}, err
+		return Resolution{}, err
+	}
+	head, err := c.headHeight(ctx)
+	if err != nil {
+		return Resolution{}, fmt.Errorf("chain head: %w", err)
 	}
 	var nonceHex string
-	if err := c.rpc(ctx, "eth_getTransactionCount", []any{c.addr.Hex(), "latest"}, &nonceHex); err != nil {
-		return TxPending, Receipt{}, fmt.Errorf("mined nonce: %w", err)
+	if err := c.rpc(ctx, "eth_getTransactionCount", []any{signer.Hex(), "latest"}, &nonceHex); err != nil {
+		return Resolution{}, fmt.Errorf("mined nonce: %w", err)
 	}
 	mined := new(big.Int).SetBytes(common.FromHex(nonceHex)).Uint64()
 	rec, found, err := c.receiptOnce(ctx, b.TxHash)
 	if err != nil {
-		return TxPending, Receipt{}, err
+		return Resolution{}, err
 	}
+	if found {
+		return Resolution{State: TxMined, Receipt: rec, Head: head}, nil
+	}
+	known, err := c.txKnown(ctx, b.TxHash)
+	if err != nil {
+		return Resolution{}, err
+	}
+	res := Resolution{Receipt: Receipt{TxHash: b.TxHash}, Head: head}
 	switch {
-	case found:
-		return TxMined, rec, nil
+	case known:
+		res.State = TxPending
 	case mined > b.Nonce:
-		return TxDropped, Receipt{TxHash: b.TxHash}, nil
+		res.State = TxDropped
 	default:
-		return TxPending, Receipt{TxHash: b.TxHash}, nil
+		res.State = TxEvicted
 	}
+	return res, nil
+}
+
+// Rebroadcast sends a broadcast's recorded signed bytes again, unchanged: the same nonce,
+// the same hash, the same signature. It cannot create a second settlement. If the original
+// is still in some mempool the node answers "already known" (success here); if it or any
+// other transaction has taken the nonce, the node refuses the bytes. The bytes are checked
+// against the record before anything is sent: they must decode to b.TxHash at b.Nonce,
+// signed by b.Signer when one is recorded. It needs no key, but holds the signer mutex so it
+// never interleaves with a fresh submission's nonce-fetch-to-send.
+func (c *Client) Rebroadcast(ctx context.Context, b Broadcast) error {
+	if len(b.Raw) == 0 {
+		return fmt.Errorf("rebroadcast %s: no signed bytes were recorded with this broadcast", b.TxHash)
+	}
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(b.Raw); err != nil {
+		return fmt.Errorf("rebroadcast %s: the recorded bytes do not decode: %w", b.TxHash, err)
+	}
+	if !strings.EqualFold(tx.Hash().Hex(), b.TxHash) || tx.Nonce() != b.Nonce {
+		return fmt.Errorf("rebroadcast %s: the recorded bytes are transaction %s at nonce %d, not the recorded one",
+			b.TxHash, tx.Hash().Hex(), tx.Nonce())
+	}
+	if b.Signer != (common.Address{}) {
+		from, err := types.Sender(types.LatestSignerForChainID(c.chainID), tx)
+		if err != nil || from != b.Signer {
+			return fmt.Errorf("rebroadcast %s: the recorded bytes are not signed by the recorded signer %s", b.TxHash, b.Signer.Hex())
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.VerifyChainID(ctx); err != nil {
+		return err
+	}
+	var got string
+	if err := c.rpc(ctx, "eth_sendRawTransaction", []any{"0x" + hex.EncodeToString(b.Raw)}, &got); err != nil {
+		if m := strings.ToLower(err.Error()); strings.Contains(m, "already known") || strings.Contains(m, "known transaction") {
+			return nil
+		}
+		return fmt.Errorf("rebroadcast %s: %w", b.TxHash, err)
+	}
+	if !strings.EqualFold(got, b.TxHash) {
+		return fmt.Errorf("rebroadcast %s: the node reported hash %s", b.TxHash, got)
+	}
+	return nil
+}
+
+// txKnown reports whether the node has any record of the transaction (mempool or mined).
+func (c *Client) txKnown(ctx context.Context, txHash string) (bool, error) {
+	var tx json.RawMessage
+	found := false
+	if err := c.rpcMaybeNull(ctx, "eth_getTransactionByHash", []any{txHash}, &tx, &found); err != nil {
+		return false, fmt.Errorf("transaction lookup: %w", err)
+	}
+	return found, nil
+}
+
+// headHeight is the current chain head as a number (BlockNumber's guard against 0x0 holds).
+func (c *Client) headHeight(ctx context.Context) (uint64, error) {
+	tag, err := c.BlockNumber(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return new(big.Int).SetBytes(common.FromHex(tag)).Uint64(), nil
 }
 
 func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte, fixedGas uint64) (Receipt, error) {
@@ -265,7 +371,7 @@ func (c *Client) submitTracked(ctx context.Context, to common.Address, calldata 
 		return Receipt{}, fmt.Errorf("send: %w", err)
 	}
 	if onBroadcast != nil {
-		onBroadcast(Broadcast{TxHash: txHash, Nonce: nonce})
+		onBroadcast(Broadcast{TxHash: txHash, Nonce: nonce, Signer: c.addr, Raw: rawTx})
 	}
 
 	return c.AwaitReceipt(ctx, txHash)

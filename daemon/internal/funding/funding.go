@@ -109,28 +109,43 @@ type Submitter interface {
 }
 
 // Broadcast and TxState are the chain package's: a settlement transaction that has left
-// the lane (its hash and nonce), and what the chain says about it later.
+// the lane (its hash, nonce, signer and signed bytes), and what one look at the chain says
+// about it later.
 type (
 	Broadcast = chain.Broadcast
 	TxState   = chain.TxState
 )
 
-// The three answers Resolve gives, re-exported so callers need not import the chain writer.
+// The answers Resolve gives, re-exported so callers need not import the chain writer.
+// TxDropped and TxEvicted are single observations: the caller confirms either with a second
+// one, taken at a higher chain head, before acting on it.
 const (
 	TxPending = chain.TxPending // may still mine
 	TxMined   = chain.TxMined   // receipt exists; ChainOutcome.Reverted says how it ended
-	TxDropped = chain.TxDropped // can never mine: the signer's nonce moved past it
+	TxDropped = chain.TxDropped // looks unminable: unknown to the node, the signer's nonce past it
+	TxEvicted = chain.TxEvicted // unknown to the node, its nonce still open: the same bytes can be re-sent
 )
+
+// Resolution is one observation of a settlement broadcast: its state, the outcome when it
+// mined, and the chain head the observation was taken at.
+type Resolution struct {
+	State   TxState
+	Outcome ChainOutcome
+	Head    uint64
+}
 
 // TrackedSubmitter is a lane that also reports each broadcast BEFORE its receipt wait and
 // can later say what became of it. The settlement lane needs both: a receipt wait that
 // fails says nothing about whether the transaction mines, so the caller records the
 // broadcast and asks about that exact transaction on the next attempt rather than sending
-// another one. A plain Submitter still works everywhere; it just cannot be resolved.
+// another one. Rebroadcast re-sends a recorded broadcast's signed bytes unchanged (same
+// nonce, same hash), which is how an evicted transaction is recovered without a second one.
+// A plain Submitter still works everywhere; it just cannot be resolved.
 type TrackedSubmitter interface {
 	Submitter
 	SubmitTracked(ctx context.Context, calldata []byte, onBroadcast func(Broadcast)) (ChainOutcome, error)
-	Resolve(ctx context.Context, b Broadcast) (TxState, ChainOutcome, error)
+	Resolve(ctx context.Context, b Broadcast) (Resolution, error)
+	Rebroadcast(ctx context.Context, b Broadcast) error
 }
 
 // ErrSettlementUnresolvable means no wired settle lane can answer for a broadcast: none is
@@ -201,15 +216,39 @@ func (a *Agent) SettleOnChain(ctx context.Context, vaultJobID string, onBroadcas
 // ResolveSettlement asks the settle lane what became of a broadcast it sent earlier. It is
 // a READ: it signs nothing and sends nothing. ErrSettlementUnresolvable when no wired lane
 // can answer.
-func (a *Agent) ResolveSettlement(ctx context.Context, b Broadcast) (TxState, ChainOutcome, error) {
+func (a *Agent) ResolveSettlement(ctx context.Context, b Broadcast) (Resolution, error) {
+	tl, ok := a.trackedSettleLane()
+	if !ok {
+		return Resolution{State: TxPending}, ErrSettlementUnresolvable
+	}
+	return tl.Resolve(ctx, b)
+}
+
+// RebroadcastSettlement re-sends a recorded settlement broadcast's signed bytes, unchanged.
+// It signs nothing new and cannot settle twice (same nonce, same hash).
+// ErrSettlementUnresolvable when no wired lane can send it.
+func (a *Agent) RebroadcastSettlement(ctx context.Context, b Broadcast) error {
+	tl, ok := a.trackedSettleLane()
+	if !ok {
+		return ErrSettlementUnresolvable
+	}
+	return tl.Rebroadcast(ctx, b)
+}
+
+// SettleLaneWired reports whether a customer settle lane is wired at all. Without one an
+// Accept can only stop at settlement.pending_chain.
+func (a *Agent) SettleLaneWired() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.settleLane != nil
+}
+
+func (a *Agent) trackedSettleLane() (TrackedSubmitter, bool) {
 	a.mu.Lock()
 	lane := a.settleLane
 	a.mu.Unlock()
 	tl, ok := lane.(TrackedSubmitter)
-	if !ok {
-		return TxPending, ChainOutcome{}, ErrSettlementUnresolvable
-	}
-	return tl.Resolve(ctx, b)
+	return tl, ok
 }
 
 // Execute performs one approved movement. Phase 2 records it; the real signer wrap

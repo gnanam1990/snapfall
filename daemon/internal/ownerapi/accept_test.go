@@ -3,6 +3,7 @@ package ownerapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -40,6 +41,12 @@ func wireAccept(s *Server) (mintedToken *string) {
 			return "accepted", true
 		}
 		return "delivery_ready", true
+	}
+	s.Settlement = func(_ context.Context, jobID string) (string, error) {
+		if accepted {
+			return brain.SettlementPending, nil
+		}
+		return brain.SettlementNone, nil
 	}
 	return &token
 }
@@ -287,5 +294,86 @@ func TestAPI_AcceptanceReadNamesTheVaultJob(t *testing.T) {
 	vault = "0x" + strings.Repeat("ab", 32)
 	if got := read()["vaultJobId"]; got != vault {
 		t.Fatalf("vaultJobId = %v, want %s", got, vault)
+	}
+}
+
+// customerCall sends one credential-bearing request to a customer route and decodes it.
+func customerCall(t *testing.T, s *Server, method, path, token string) (int, map[string]any, string) {
+	t.Helper()
+	r := ownerRequest(method, path, nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	var out map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	return w.Code, out, w.Body.String()
+}
+
+// The acceptance read and the Accept response both carry `settlement`, exactly the value the
+// Brain derives, for each of the four values; the existing fields are unchanged.
+func TestAPI_AcceptanceAndAcceptCarryTheSettlementStatus(t *testing.T) {
+	s, _ := newAPI(t)
+	tokPtr := wireAccept(s)
+	s.Handler().ServeHTTP(httptest.NewRecorder(), ownerRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil))
+	if *tokPtr == "" {
+		t.Fatal("no credential minted")
+	}
+	for _, v := range []string{brain.SettlementNone, brain.SettlementSettled, brain.SettlementPending, brain.SettlementRetry} {
+		s.Settlement = func(context.Context, string) (string, error) { return v, nil }
+		code, out, body := customerCall(t, s, "GET", "/api/v1/customer/jobs/job_acc/acceptance", *tokPtr)
+		if code != 200 || out["settlement"] != v || out["jobId"] != "job_acc" || out["stage"] == nil {
+			t.Fatalf("acceptance read with %q: %d %s", v, code, body)
+		}
+		if _, has := out["accepted"]; !has {
+			t.Fatalf("acceptance read dropped the accepted field: %s", body)
+		}
+		code, out, body = customerCall(t, s, "POST", "/api/v1/customer/jobs/job_acc/accept", *tokPtr)
+		if code != 200 || out["settlement"] != v || out["state"] != "accepted-pending-chain" {
+			t.Fatalf("accept with %q: %d %s", v, code, body)
+		}
+	}
+}
+
+// A customer-route 500 never echoes the underlying error: chain errors can carry the RPC
+// URL with its API key. The code stays INTERNAL; the message is generic. Covers the
+// acceptance read, the Accept's own failure, and the Accept whose status read fails.
+func TestAPI_CustomerRoute500sDoNotEchoTheError(t *testing.T) {
+	s, _ := newAPI(t)
+	tokPtr := wireAccept(s)
+	s.Handler().ServeHTTP(httptest.NewRecorder(), ownerRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil))
+	secret := "https://rpc.example/v2/SECRET-API-KEY-123: dial tcp: sqlite: database is locked"
+	s.Settlement = func(context.Context, string) (string, error) { return "", errors.New(secret) }
+
+	check := func(name string, code int, out map[string]any, body string) {
+		t.Helper()
+		if code != 500 || out["error"] == nil || out["error"].(map[string]any)["code"] != "INTERNAL" {
+			t.Fatalf("%s: %d %s, want 500 INTERNAL", name, code, body)
+		}
+		for _, leak := range []string{"SECRET-API-KEY-123", "rpc.example", "sqlite", "database is locked"} {
+			if strings.Contains(body, leak) {
+				t.Fatalf("%s: the 500 body leaks %q: %s", name, leak, body)
+			}
+		}
+		if _, has := out["settlement"]; has {
+			t.Fatalf("%s: a failed read must not carry a guessed settlement: %s", name, body)
+		}
+	}
+	code, out, body := customerCall(t, s, "GET", "/api/v1/customer/jobs/job_acc/acceptance", *tokPtr)
+	check("acceptance read", code, out, body)
+	code, out, body = customerCall(t, s, "POST", "/api/v1/customer/jobs/job_acc/accept", *tokPtr)
+	check("accept, status read fails", code, out, body)
+	s.Accept = func(context.Context, string) (string, error) { return "", errors.New(secret) }
+	code, out, body = customerCall(t, s, "POST", "/api/v1/customer/jobs/job_acc/accept", *tokPtr)
+	check("accept fails", code, out, body)
+}
+
+// The settlement seam is part of the customer surface: unwired, the surface refuses.
+func TestAPI_CustomerSurfaceRefusesWithoutTheSettlementSeam(t *testing.T) {
+	s, _ := newAPI(t)
+	tokPtr := wireAccept(s)
+	s.Handler().ServeHTTP(httptest.NewRecorder(), ownerRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil))
+	s.Settlement = nil
+	if code, _, body := customerCall(t, s, "GET", "/api/v1/customer/jobs/job_acc/acceptance", *tokPtr); code != 503 {
+		t.Fatalf("acceptance read with no settlement seam: %d %s, want 503", code, body)
 	}
 }

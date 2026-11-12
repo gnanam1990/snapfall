@@ -22,31 +22,68 @@ import (
 
 // POST /api/v1/customer/jobs/{id}/accept — the customer's Accept: authentication done
 // by withCustomerAuth; Brain owns state, freeze, exactly-once, and the honest
-// pending-chain stop.
+// pending-chain stop. The response carries the same `settlement` status the acceptance
+// read does (H2 §4.3), read after the attempt, so the portal never infers it from the
+// state label.
 func (s *Server) handleCustomerAccept(w http.ResponseWriter, r *http.Request) {
 	state, err := s.Accept(r.Context(), r.PathValue("id"))
 	switch {
 	case err == nil:
-		writeJSON(w, http.StatusOK, map[string]any{"jobId": r.PathValue("id"), "state": state})
+		settlement, serr := s.Settlement(r.Context(), r.PathValue("id"))
+		if serr != nil {
+			// The Accept ran; what it left is unreadable. Never a guessed status: the
+			// customer may safely press Accept again, which re-reads everything.
+			s.customerInternal(w, r, "accept processed, settlement status unreadable", serr, msgSettlementUnreadable, "state", state)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"jobId": r.PathValue("id"), "state": state, "settlement": settlement})
 	case errors.Is(err, brain.ErrFrozen):
 		writeErr(w, http.StatusLocked, "FROZEN", "the kill switch is engaged; settlement actions are stopped", nil)
 	case errors.Is(err, brain.ErrNotDeliveryReady):
 		writeErr(w, http.StatusConflict, "NOT_READY", err.Error(), nil)
 	default:
-		writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		s.customerInternal(w, r, "customer accept failed", err, msgAcceptFailed)
 	}
 }
 
+// Customer routes are reachable by any accept-credential holder through the dashboard
+// proxy, so a 500 there never echoes the underlying error: chain and RPC errors can carry
+// the RPC URL with its API key, and store errors describe internals. The detail is logged
+// server-side against the job; the client gets the code and a generic message. (Owner
+// routes, behind the owner token, keep their detail.)
+const (
+	msgSettlementUnreadable = "the settlement status could not be read; try again shortly"
+	msgAcceptFailed         = "the acceptance could not be processed; try again shortly"
+	msgInvoiceUnreadable    = "the receipt could not be read; try again shortly"
+)
+
+func (s *Server) customerInternal(w http.ResponseWriter, r *http.Request, what string, err error, msg string, attrs ...any) {
+	if s.log != nil {
+		s.log.Error(what, append([]any{"job", r.PathValue("id"), "route", r.URL.Path, "err", err}, attrs...)...)
+	}
+	writeErr(w, http.StatusInternalServerError, "INTERNAL", msg, nil)
+}
+
 // GET /api/v1/customer/jobs/{id}/acceptance — the customer's read: the job's stage as
-// the customer may see it. Guarded by the same credential — the read side is not free.
+// the customer may see it, and its settlement status (H2 §4.3): "none" | "settled" |
+// "pending" | "retry". `accepted` alone says only that the claim happened, not that the
+// job settled; `settlement` is what tells the portal whether Accept is worth pressing
+// again. A failed read is a 500, never a guessed status. Guarded by the same credential —
+// the read side is not free.
 func (s *Server) handleCustomerAcceptance(w http.ResponseWriter, r *http.Request) {
 	stage, ok := s.JobState(r.PathValue("id"))
 	if !ok {
 		writeErr(w, http.StatusNotFound, "UNKNOWN_JOB", "the daemon has no such job", nil)
 		return
 	}
+	settlement, err := s.Settlement(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.customerInternal(w, r, "customer acceptance read failed", err, msgSettlementUnreadable)
+		return
+	}
 	out := map[string]any{
 		"jobId": r.PathValue("id"), "stage": stage, "accepted": stage == string(brain.StageAccepted),
+		"settlement": settlement,
 	}
 	if s.VaultJobID != nil {
 		if v := s.VaultJobID(r.PathValue("id")); v != "" {
@@ -75,7 +112,7 @@ func (s *Server) handleCustomerInvoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		s.customerInternal(w, r, "customer invoice read failed", err, msgInvoiceUnreadable)
 		return
 	}
 	var rec billing.Record
@@ -109,7 +146,7 @@ func (s *Server) handleMintAcceptLink(w http.ResponseWriter, r *http.Request) {
 // never fall open.
 func (s *Server) withCustomerAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.VerifyAccept == nil || s.Accept == nil || s.JobState == nil {
+		if s.VerifyAccept == nil || s.Accept == nil || s.JobState == nil || s.Settlement == nil {
 			writeErr(w, http.StatusServiceUnavailable, "NOT_WIRED", "customer surface is not wired in this build", nil)
 			return
 		}

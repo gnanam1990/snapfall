@@ -10,8 +10,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/gnanam1990/snapfall/daemon/internal/billing"
+	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
 )
 
@@ -38,13 +42,27 @@ type trackedLane struct {
 	resolves   int
 	resolveErr error
 	txs        map[string]*trackedTx
+	// head is the chain head each Resolve reports; it advances by one per Resolve unless
+	// stillHead is set (a chain that has not moved between two looks).
+	head      uint64
+	stillHead bool
+	// rebroadcasts are the broadcasts re-sent, in order; rebroadcastErr fails them.
+	rebroadcasts   []funding.Broadcast
+	rebroadcastErr error
+	// sent are the broadcasts the lane reported to its hook, in order.
+	sent []funding.Broadcast
 }
+
+var _ funding.TrackedSubmitter = (*trackedLane)(nil)
 
 func newTrackedLane(t *testing.T, script ...trackedStep) *trackedLane {
 	return &trackedLane{t: t, script: script, txs: map[string]*trackedTx{}}
 }
 
 func txHashN(n int) string { return fmt.Sprintf("0x%064x", n) }
+
+// laneSigner is the address the tracked lane signs as.
+var laneSigner = common.HexToAddress("0x00000000000000000000000000000000000000a1")
 
 func (l *trackedLane) Submit(context.Context, []byte) (funding.ChainOutcome, error) {
 	l.t.Error("a tracked lane was submitted to without its broadcast hook")
@@ -62,12 +80,14 @@ func (l *trackedLane) SubmitTracked(_ context.Context, _ []byte, onBroadcast fun
 	}
 	step := l.script[i]
 	hash := txHashN(i + 1)
+	bc := funding.Broadcast{TxHash: hash, Nonce: uint64(i), Signer: laneSigner, Raw: []byte{0xf8, byte(i + 1)}}
 	if step.broadcast {
 		l.txs[hash] = &trackedTx{state: funding.TxPending}
+		l.sent = append(l.sent, bc)
 	}
 	l.mu.Unlock()
 	if step.broadcast {
-		onBroadcast(funding.Broadcast{TxHash: hash, Nonce: uint64(i)})
+		onBroadcast(bc)
 	}
 	out := step.out
 	if out.Submitted {
@@ -76,22 +96,39 @@ func (l *trackedLane) SubmitTracked(_ context.Context, _ []byte, onBroadcast fun
 	return out, step.err
 }
 
-func (l *trackedLane) Resolve(_ context.Context, b funding.Broadcast) (funding.TxState, funding.ChainOutcome, error) {
+func (l *trackedLane) Resolve(_ context.Context, b funding.Broadcast) (funding.Resolution, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.resolves++
+	if !l.stillHead {
+		l.head++
+	}
 	if l.resolveErr != nil {
-		return funding.TxPending, funding.ChainOutcome{}, l.resolveErr
+		return funding.Resolution{State: funding.TxPending}, l.resolveErr
 	}
 	tx, ok := l.txs[b.TxHash]
 	if !ok {
 		l.t.Errorf("resolve asked about %s, which this lane never broadcast", b.TxHash)
-		return funding.TxPending, funding.ChainOutcome{}, nil
+		return funding.Resolution{State: funding.TxPending, Head: l.head}, nil
 	}
 	if tx.state != funding.TxMined {
-		return tx.state, funding.ChainOutcome{}, nil
+		return funding.Resolution{State: tx.state, Head: l.head}, nil
 	}
-	return funding.TxMined, funding.ChainOutcome{Submitted: true, TxHash: b.TxHash, Block: 9, GasUsed: 90000, Reverted: tx.reverted}, nil
+	return funding.Resolution{State: funding.TxMined, Head: l.head,
+		Outcome: funding.ChainOutcome{Submitted: true, TxHash: b.TxHash, Block: 9, GasUsed: 90000, Reverted: tx.reverted}}, nil
+}
+
+func (l *trackedLane) Rebroadcast(_ context.Context, b funding.Broadcast) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.rebroadcastErr != nil {
+		return l.rebroadcastErr
+	}
+	l.rebroadcasts = append(l.rebroadcasts, b)
+	if tx, ok := l.txs[b.TxHash]; ok && tx.state == funding.TxEvicted {
+		tx.state = funding.TxPending // back in the mempool
+	}
+	return nil
 }
 
 func (l *trackedLane) set(n int, st funding.TxState, reverted bool) {
@@ -233,16 +270,33 @@ func TestAcceptBroadcast_RevertedBroadcastAllowsResubmit(t *testing.T) {
 }
 
 // A recorded broadcast that can never mine (its nonce went to another transaction) is
-// recorded as dropped, and the same Accept resubmits.
-func TestAcceptBroadcast_DroppedBroadcastIsResubmitted(t *testing.T) {
+// recorded as dropped only after TWO observations agree with the chain head advancing
+// between them; the first is persisted as settlement.unseen. The Accept that confirms it
+// resubmits.
+func TestAcceptBroadcast_DroppedBroadcastIsConfirmedThenResubmitted(t *testing.T) {
 	b, lane, jobID := trackedRig(t, receiptTimeout, trackedSettled)
 	ctx := context.Background()
 	if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
 		t.Fatal(err)
 	}
 	lane.set(1, funding.TxDropped, false)
+	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+		t.Fatalf("accept#2 (first dropped look): state=%q err=%v, want accepted-pending-chain", s, err)
+	}
+	if n := countEvents(t, b.store, "settlement.dropped", jobID); n != 0 {
+		t.Fatalf("settlement.dropped = %d after ONE observation, want 0", n)
+	}
+	if n := countEvents(t, b.store, "settlement.unseen", jobID); n != 1 {
+		t.Fatalf("settlement.unseen = %d, want the first observation persisted", n)
+	}
+	if subs, _ := lane.counts(); subs != 1 {
+		t.Fatalf("lane submissions = %d after one dropped look, want 1", subs)
+	}
+	if s, err := b.SettlementStatus(ctx, jobID); err != nil || s != SettlementPending {
+		t.Fatalf("status = %q err=%v, want pending", s, err)
+	}
 	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
-		t.Fatalf("accept#2: state=%q err=%v, want accepted-settled", s, err)
+		t.Fatalf("accept#3 (second look, higher head): state=%q err=%v, want accepted-settled", s, err)
 	}
 	if n := countEvents(t, b.store, "settlement.dropped", jobID); n != 1 {
 		t.Fatalf("settlement.dropped = %d, want 1", n)
@@ -250,6 +304,159 @@ func TestAcceptBroadcast_DroppedBroadcastIsResubmitted(t *testing.T) {
 	if subs, _ := lane.counts(); subs != 2 {
 		t.Fatalf("lane submissions = %d, want 2", subs)
 	}
+}
+
+// The lagging-receipt case end to end: one look says "dropped" (a load-balanced RPC whose
+// nonce backend is ahead), and the chain head has NOT advanced by the next look, so nothing
+// is recorded as dropped and nothing is resubmitted however often the customer presses
+// Accept. When the receipt becomes readable the broadcast resolves as mined, and the first
+// observation is survived by a restart rather than repeated.
+func TestAcceptBroadcast_LaggingReceiptIsNeverRecordedDropped(t *testing.T) {
+	b, lane, jobID := trackedRig(t, receiptTimeout)
+	ctx := context.Background()
+	if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+	lane.mu.Lock()
+	lane.stillHead = true
+	lane.mu.Unlock()
+	lane.set(1, funding.TxDropped, false)
+	for i := 0; i < 4; i++ {
+		if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+			t.Fatalf("accept with the head still: state=%q err=%v", s, err)
+		}
+	}
+	if n := countEvents(t, b.store, "settlement.dropped", jobID); n != 0 {
+		t.Fatalf("settlement.dropped = %d with the chain head unmoved, want 0", n)
+	}
+	if n := countEvents(t, b.store, "settlement.unseen", jobID); n != 1 {
+		t.Fatalf("settlement.unseen = %d, want exactly the first observation", n)
+	}
+	// A restart keeps that observation (it is in the log), and the receipt is readable now.
+	fund := funding.New()
+	b2 := New(slog.New(slog.NewTextHandler(io.Discard, nil)), b.store, b.memory, fund)
+	if err := b2.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	fund.SetChain(nil, lane)
+	lane.set(1, funding.TxMined, false)
+	if s, err := b2.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
+		t.Fatalf("after the receipt appeared: state=%q err=%v, want accepted-settled", s, err)
+	}
+	if subs, _ := lane.counts(); subs != 1 {
+		t.Fatalf("lane submissions = %d, want 1", subs)
+	}
+}
+
+// An evicted broadcast (unknown to the node, its nonce still open) is NOT left pending
+// forever: confirmed by a second look at a higher head, its recorded signed bytes are sent
+// again unchanged, which cannot settle twice, and it then mines and settles. A failed
+// re-send records nothing; a frozen job re-sends nothing.
+func TestAcceptBroadcast_EvictedBroadcastIsRebroadcastUnchanged(t *testing.T) {
+	b, lane, jobID := trackedRig(t, receiptTimeout)
+	ctx := context.Background()
+	if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+	lane.set(1, funding.TxEvicted, false)
+	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+		t.Fatalf("first evicted look: state=%q err=%v", s, err)
+	}
+	if len(lane.rebroadcasts) != 0 {
+		t.Fatal("re-sent after a single observation")
+	}
+	lane.mu.Lock()
+	lane.rebroadcastErr = errors.New("node refused")
+	lane.mu.Unlock()
+	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+		t.Fatalf("failed re-send: state=%q err=%v", s, err)
+	}
+	if n := countEvents(t, b.store, "settlement.rebroadcast", jobID); n != 0 {
+		t.Fatalf("settlement.rebroadcast = %d after a failed re-send, want 0", n)
+	}
+	lane.mu.Lock()
+	lane.rebroadcastErr = nil
+	lane.mu.Unlock()
+	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+		t.Fatalf("re-send: state=%q err=%v", s, err)
+	}
+	lane.mu.Lock()
+	got := append([]funding.Broadcast(nil), lane.rebroadcasts...)
+	orig := lane.sent[0]
+	lane.mu.Unlock()
+	if len(got) != 1 || got[0].TxHash != orig.TxHash || got[0].Nonce != orig.Nonce ||
+		got[0].Signer != orig.Signer || string(got[0].Raw) != string(orig.Raw) {
+		t.Fatalf("re-sent %+v, want exactly the recorded broadcast %+v", got, orig)
+	}
+	if n := countEvents(t, b.store, "settlement.rebroadcast", jobID); n != 1 {
+		t.Fatalf("settlement.rebroadcast = %d, want 1", n)
+	}
+	if subs, _ := lane.counts(); subs != 1 {
+		t.Fatalf("lane submissions = %d, want 1: a re-send is not a new submission", subs)
+	}
+	lane.set(1, funding.TxMined, false)
+	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
+		t.Fatalf("after the re-sent tx mined: state=%q err=%v", s, err)
+	}
+	if _, p := executedRecord(t, b, jobID); p["tx_hash"] != txHashN(1) {
+		t.Fatalf("settled by %v, want the original tx1", p["tx_hash"])
+	}
+}
+
+// Freeze stops a re-send like it stops a settlement: the confirmation happens, nothing is sent.
+func TestAcceptBroadcast_FrozenJobIsNotRebroadcast(t *testing.T) {
+	b, lane, jobID := trackedRig(t, receiptTimeout)
+	ctx := context.Background()
+	if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+	lane.set(1, funding.TxEvicted, false)
+	for i := 0; i < 2; i++ {
+		if _, err := b.ResolveOpenSettlements(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			reg, err := freeze.NewRegistry(ctx, b.store, time.Now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b.SetFreeze(reg, "org_demo")
+			if _, err := reg.Engage(ctx, freeze.KindJob, jobID, "gnanam", "incident"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(lane.rebroadcasts) != 0 || countEvents(t, b.store, "settlement.rebroadcast", jobID) != 0 {
+		t.Fatalf("a frozen job was re-sent (%d)", len(lane.rebroadcasts))
+	}
+}
+
+// The broadcast record names the signing ADDRESS and the signed bytes, and a resolution
+// asks about exactly that signer: a key rotated across a restart cannot redirect it.
+func TestAcceptBroadcast_SubmittedRecordNamesSignerAndBytes(t *testing.T) {
+	b, lane, jobID := trackedRig(t, receiptTimeout)
+	ctx := context.Background()
+	if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := b.store.DB().QueryRow(`SELECT payload_json FROM events WHERE kind='settlement.submitted' AND entity_id=?`,
+		jobID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var p map[string]any
+	_ = json.Unmarshal([]byte(raw), &p)
+	if p["signer_address"] != laneSigner.Hex() || p["raw_tx"] != "0xf801" || p["signer"] != signerDaemonLane {
+		t.Fatalf("settlement.submitted payload %v, want signer_address %s and raw_tx 0xf801", p, laneSigner.Hex())
+	}
+	rec, err := b.readSettlementRecord(ctx, jobID)
+	if err != nil || len(rec.unresolved) != 1 {
+		t.Fatalf("record %+v err=%v", rec, err)
+	}
+	if got := rec.unresolved[0]; got.Signer != laneSigner || string(got.Raw) != "\xf8\x01" {
+		t.Fatalf("read back %+v, want the recorded signer and bytes", got)
+	}
+	_ = lane
 }
 
 // A recorded broadcast the lane cannot read fails closed: an error, and no submission.

@@ -94,6 +94,14 @@ func TestFunding_SoleEntryPointDemandsAGrant(t *testing.T) {
 		// lane what became of a transaction that lane already broadcast (receipt and mined
 		// nonce), and signs and sends nothing.
 		"ResolveSettlement": true,
+		// RebroadcastSettlement takes NO Grant, classified: it signs NOTHING. It re-sends
+		// the exact signed bytes the settle lane already broadcast for an authorized
+		// Accept (verified against the recorded hash, nonce and signer before sending),
+		// so it can only put the same transaction back in the mempool: same nonce, same
+		// hash, no new authorization, and it cannot settle twice.
+		"RebroadcastSettlement": true,
+		// SettleLaneWired is a READ: whether a settle lane is installed. Moves nothing.
+		"SettleLaneWired": true,
 		// The H3 payment lane (classified at the V6 review):
 		// ExecutePayment DEMANDS the Grant like Execute and derives the wire intent, the
 		// approvalToken and the paymentId FROM the grant: no caller-supplied payee,
