@@ -70,7 +70,14 @@ pool prices the work.
 
 ## 2. What stops an operator self-dealing fake jobs to inflate their rate, then defaulting?
 
-Nothing, today. Say so.
+Nothing, today, for an operator the admin has allowed. Say so.
+
+Until Nov 2026 it was worse than that: *any* address could be an operator. `createJob` accepts a
+self-named operator, and `requestAdvance` trusted it, so a stranger could fund its own job, draw
+an advance, refund the escrow to itself and leave the LPs the write-off, with a fresh address
+each time. A security audit found it. Borrowing is now an admin grant in FloatPool
+(`allowedOperator`, `OperatorNotAllowed()`), delayed by `OPERATOR_GRANT_DELAY` on a configured
+pool, so the question below is about a *known* operator, not an anonymous one.
 
 The rate rises with accepted jobs (`advanceRate` climbs from the 5000 bps base toward the 8500 cap)
 and falls with write-offs, so the mechanism *notices* a default after the fact — the write-off path

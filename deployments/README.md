@@ -1,11 +1,16 @@
 # Deployment configuration
 
+> **The addresses committed in both files predate the operator allowlist** (FloatPool
+> `allowedOperator`, Nov 2026). Those contracts cannot be patched, and any address can borrow
+> from those pools and leave the LPs the write-off. Put no capital into them. Retire and
+> redeploy them by following
+> [docs/MAINNET.md, "Live pools deployed before the operator allowlist"](../docs/MAINNET.md#live-pools-deployed-before-the-operator-allowlist)
+> before updating these files.
+
 `arc-mainnet.json` is the same artifact for Arc **mainnet** (chain 5042, live 16 Sep 2026).
-Its contract addresses are env-only because nothing is deployed there yet; loading it fails
-closed until `SNAPFALL_JOB_VAULT_ADDRESS`, `SNAPFALL_FLOAT_POOL_ADDRESS` and
-`SNAPFALL_AUDIT_ANCHOR_ADDRESS` are set, which is the correct state before a deployment
-exists. Read `docs/MAINNET.md` before deploying — the capital caps are mandatory there, and
-the RPC hostname is `rpc.mainnet.arc.io` (`rpc.mainnet.arc.network` does not resolve).
+It commits the 12 Nov 2026 mainnet set (`docs/addresses.md` §9). The env vars it names still
+override each address. Read `docs/MAINNET.md` before deploying — the capital caps are mandatory
+there, and the RPC hostname is `rpc.mainnet.arc.io` (`rpc.mainnet.arc.network` does not resolve).
 
 `arc-testnet.json` is the machine-readable A1 handoff used by the indexer and, later, Funding,
 Billing and the dashboard. It contains no private keys. Addresses that do not exist until deploy
@@ -31,8 +36,12 @@ when the indexed contracts genuinely begin at genesis.
 validates it as an absolute HTTP(S) URL; H2 consumers append only validated `/tx/{hash}` and
 `/address/{address}` paths through `daemon/internal/explorer`.
 
-The ABI files under `contracts/abi/indexer/` deliberately contain the event surface needed by
-H1. Transaction-writing callers must use compiler-generated full ABIs from the frozen contracts.
+The ABI files under `contracts/abi/indexer/` are a hand-curated subset of each contract's events:
+the eight H1 events, `AuditAnchor.JobAnchored`, and FloatPool's operator-allowlist events
+(`OperatorAllowed`, `OperatorGrantQueued`, `OperatorGrantCancelled`). Each entry is copied from
+the compiler's artifact (`forge inspect <Contract> abi --json`), and
+`contracts/test/IndexerAbi.t.sol` fails if an entry drifts from the compiled contract or the set
+of events changes. Transaction-writing callers must use compiler-generated full ABIs.
 
 ## Deployed — Arc testnet, 23 Jul 2026 (block 53268443)
 

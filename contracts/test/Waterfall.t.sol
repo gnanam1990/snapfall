@@ -58,6 +58,7 @@ contract WaterfallTest is Test {
         // See Advance.t.sol: the Sep 2026 absolute controls fail closed and are exercised in
         // Caps.t.sol. Opened here so these waterfall assertions test what they always did.
         vault.setMaxJobPayment(type(uint256).max);
+        pool.setOperatorAllowed(OPERATOR, true); // before the first setCaps: immediate
         pool.setCaps(type(uint256).max, type(uint256).max);
         pool.setDepositorAllowed(LP, true);
         vm.stopPrank();

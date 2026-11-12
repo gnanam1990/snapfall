@@ -66,9 +66,12 @@ contract CapsTest is Test {
 
     // ── helpers ──────────────────────────────────────────────────────────
 
-    /// Open the contracts to the degree a normal test needs: caps set, LP allowed to deposit.
+    /// Open the contracts to the degree a normal test needs: operator allowed to borrow, caps
+    /// set, LP allowed to deposit. The operator grant comes first because before the first
+    /// setCaps it applies at once; afterwards it would be queued (OperatorAllowlist.t.sol).
     function _openForBusiness() internal {
         vm.startPrank(ADMIN);
+        pool.setOperatorAllowed(OPERATOR, true);
         pool.setCaps(MAX_EXPOSURE, MAX_ADVANCE);
         pool.setDepositorAllowed(LP, true);
         vault.setMaxJobPayment(MAX_JOB);

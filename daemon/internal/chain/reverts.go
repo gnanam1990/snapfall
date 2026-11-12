@@ -15,8 +15,9 @@ var contractErrors = []string{
 	"AdminTransferTimelocked", "AdvanceTooLarge", "AlreadyWired", "CapExceeded", "CapNotSet",
 	"CapRaiseTimelocked", "DepositorNotAllowed", "DuplicateAdvance", "EnforcedPause",
 	"ExposureCapExceeded", "InsufficientLiquidity", "JobNotFunded", "MixedCapChange",
-	"NoCapRaiseQueued", "NoOpenAdvance", "NotAuthorized", "NotJobVault", "NotPendingAdmin",
-	"NotTreasury", "NotWired", "WrongRepayment", "ZeroAddress", "ZeroAmount",
+	"NoCapRaiseQueued", "NoOpenAdvance", "NoOperatorGrantQueued", "NotAuthorized", "NotJobVault",
+	"NotPendingAdmin", "NotTreasury", "NotWired", "OperatorGrantTimelocked", "OperatorNotAllowed",
+	"WrongRepayment", "ZeroAddress", "ZeroAmount",
 	// JobVault (beyond the shared names above)
 	"AlreadyFunded", "InvalidStatus", "JobExists", "JobTooLarge", "OverBudget", "UnknownJob", "ZeroHash",
 	// AuditAnchor
