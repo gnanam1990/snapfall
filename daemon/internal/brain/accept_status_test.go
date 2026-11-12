@@ -6,8 +6,12 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/gnanam1990/snapfall/daemon/internal/billing"
+	"github.com/gnanam1990/snapfall/daemon/internal/freeze"
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 )
@@ -89,13 +93,16 @@ func TestSettlementStatus_FourValues(t *testing.T) {
 		}
 		wantStatus(t, b, jobID, SettlementRetry)
 	})
-	t.Run("retry when the chain shows a settlement no record has yet", func(t *testing.T) {
+	t.Run("settled, recorded by the read, when the chain shows a settlement no record has yet", func(t *testing.T) {
 		b, _, jobID := retryRig(t, []funding.ChainOutcome{revertedOut}, []error{nil})
 		if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
 			t.Fatal(err)
 		}
 		b.SetSettlementOracle(func(context.Context, string) (bool, error) { return true, nil })
-		wantStatus(t, b, jobID, SettlementRetry)
+		wantStatus(t, b, jobID, SettlementSettled)
+		if n := countEvents(t, b.store, "settlement.executed", jobID); n != 1 {
+			t.Fatalf("settlement.executed = %d, want the observation recorded once", n)
+		}
 	})
 	t.Run("a read error is an error, never a value", func(t *testing.T) {
 		b, _, jobID := retryRig(t, []funding.ChainOutcome{revertedOut}, []error{nil})
@@ -237,5 +244,166 @@ func TestAcceptBroadcast_FailedWriteAheadRecordSendsNothing(t *testing.T) {
 	}
 	if _, p := executedRecord(t, b, jobID); p["tx_hash"] != txHashN(2) {
 		t.Fatalf("settled by %v, want tx2 (tx1 was never sent)", p["tx_hash"])
+	}
+}
+
+// oracleFailedAccept is the reviewer's case: the first Accept claims the job, but the
+// on-chain settlement read fails, so nothing is recorded and nothing is submitted. Then the
+// customer's own wallet settles on chain. Returns the rig and a switch for the oracle.
+func oracleFailedAccept(t *testing.T) (*Brain, *trackedLane, string, *atomic.Bool) {
+	t.Helper()
+	b, lane, jobID := trackedRig(t) // no submission is scripted: any would fail the test
+	b.SetBilling(billing.New(b.store, g12Chain, nil))
+	var landed atomic.Bool
+	var down atomic.Bool
+	down.Store(true)
+	b.SetSettlementOracle(func(context.Context, string) (bool, error) {
+		if down.Load() {
+			return false, errors.New("rpc down")
+		}
+		return landed.Load(), nil
+	})
+	if _, err := b.AcceptDelivery(context.Background(), jobID); err == nil {
+		t.Fatal("accept over an unreadable oracle returned no error")
+	}
+	b.mu.Lock()
+	stage := b.jobs[jobID].Stage
+	b.mu.Unlock()
+	if stage != StageAccepted {
+		t.Fatalf("stage = %s, want the claim to stand", stage)
+	}
+	down.Store(false)
+	landed.Store(true) // the customer's own wallet settled it
+	return b, lane, jobID, &landed
+}
+
+// A settlement the chain shows and no record has (the oracle read failed during the first
+// Accept, then the customer settled from their own wallet) is recorded by the status read
+// as an OBSERVATION, attributed from the indexed JobSettled hash, and reported settled. A
+// self-custody customer has no Accept left to press; nothing is ever submitted for it.
+func TestSettlementStatus_RecordsASettlementTheChainShows(t *testing.T) {
+	ctx := context.Background()
+	t.Run("indexed: attributed to the hash's signer", func(t *testing.T) {
+		b, lane, jobID, _ := oracleFailedAccept(t)
+		customerTx := "0x" + repeat64("d")
+		seedChainRow(t, b.store, "JobSettled", "0x"+repeat64("b"), customerTx, 77,
+			map[string]string{"advanceRepaidAtomic": "0", "operatorNetAtomic": "1000000"})
+		wantStatus(t, b, jobID, SettlementSettled)
+		actor, p := executedRecord(t, b, jobID)
+		if actor != "customer" || p["signer"] != signerCustomer || p["tx_hash"] != customerTx || p["block"] != float64(77) {
+			t.Fatalf("actor=%q payload=%v, want the customer's indexed transaction", actor, p)
+		}
+		wantStatus(t, b, jobID, SettlementSettled)
+		if n := countEvents(t, b.store, "settlement.executed", jobID); n != 1 {
+			t.Fatalf("settlement.executed = %d after two reads, want 1", n)
+		}
+		if subs, resolves := lane.counts(); subs != 0 || resolves != 0 {
+			t.Fatalf("submits=%d resolves=%d, want 0 and 0: an observation is never a transaction", subs, resolves)
+		}
+	})
+	t.Run("not indexed yet: the customer, with the hash marked pending", func(t *testing.T) {
+		b, lane, jobID, _ := oracleFailedAccept(t)
+		wantStatus(t, b, jobID, SettlementSettled)
+		actor, p := executedRecord(t, b, jobID)
+		if actor != "customer" || p["signer"] != signerCustomer || p["tx_hash_pending"] == nil || p["tx_hash"] != nil {
+			t.Fatalf("actor=%q payload=%v, want the customer with tx_hash_pending", actor, p)
+		}
+		if subs, _ := lane.counts(); subs != 0 {
+			t.Fatalf("submits=%d, want 0", subs)
+		}
+	})
+	t.Run("an attempt in flight: pending, nothing recorded", func(t *testing.T) {
+		b, _, jobID, _ := oracleFailedAccept(t)
+		b.mu.Lock()
+		b.settling[jobID] = true
+		b.mu.Unlock()
+		wantStatus(t, b, jobID, SettlementPending)
+		b.clearSettling(jobID)
+		if n := countEvents(t, b.store, "settlement.executed", jobID); n != 0 {
+			t.Fatalf("settlement.executed = %d while an attempt held the marker, want 0", n)
+		}
+	})
+	t.Run("frozen: still recorded and read accurately", func(t *testing.T) {
+		b, lane, jobID, _ := oracleFailedAccept(t)
+		reg, err := freeze.NewRegistry(ctx, b.store, time.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.SetFreeze(reg, "org_demo")
+		if _, err := reg.Engage(ctx, freeze.KindJob, jobID, "gnanam", "incident"); err != nil {
+			t.Fatal(err)
+		}
+		wantStatus(t, b, jobID, SettlementSettled)
+		if subs, _ := lane.counts(); subs != 0 {
+			t.Fatalf("submits=%d, want 0", subs)
+		}
+	})
+	t.Run("the chain says not settled: retry, nothing recorded", func(t *testing.T) {
+		b, _, jobID, landed := oracleFailedAccept(t)
+		landed.Store(false)
+		wantStatus(t, b, jobID, SettlementRetry)
+		if n := countEvents(t, b.store, "settlement.executed", jobID); n != 0 {
+			t.Fatalf("settlement.executed = %d, want 0", n)
+		}
+	})
+}
+
+// The settlement-resolver records the same observation without anyone reading the status:
+// an accepted, unsettled job with no open broadcast whose chain shows it settled gets its
+// settlement.executed from the per-minute pass, and never a transaction.
+func TestResolveOpenSettlements_RecordsASettlementTheChainShows(t *testing.T) {
+	ctx := context.Background()
+	b, lane, jobID, landed := oracleFailedAccept(t)
+	landed.Store(false)
+	if n, err := b.ResolveOpenSettlements(ctx); err != nil || n != 0 {
+		t.Fatalf("not settled on chain: resolved %d err=%v, want 0", n, err)
+	}
+	landed.Store(true)
+	customerTx := "0x" + repeat64("d")
+	seedChainRow(t, b.store, "JobSettled", "0x"+repeat64("b"), customerTx, 77,
+		map[string]string{"advanceRepaidAtomic": "0", "operatorNetAtomic": "1000000"})
+	if n, err := b.ResolveOpenSettlements(ctx); err != nil || n != 1 {
+		t.Fatalf("settled on chain: resolved %d err=%v, want 1", n, err)
+	}
+	if actor, p := executedRecord(t, b, jobID); actor != "customer" || p["tx_hash"] != customerTx {
+		t.Fatalf("actor=%q payload=%v, want the customer's indexed transaction", actor, p)
+	}
+	if n, err := b.ResolveOpenSettlements(ctx); err != nil || n != 0 {
+		t.Fatalf("second pass: resolved %d err=%v, want 0", n, err)
+	}
+	if n := countEvents(t, b.store, "settlement.executed", jobID); n != 1 {
+		t.Fatalf("settlement.executed = %d, want 1", n)
+	}
+	if subs, resolves := lane.counts(); subs != 0 || resolves != 0 {
+		t.Fatalf("submits=%d resolves=%d, want 0 and 0", subs, resolves)
+	}
+	wantStatus(t, b, jobID, SettlementSettled)
+
+	// An unreadable oracle is reported against the job, and records nothing.
+	b2, _, job2, _ := oracleFailedAccept(t)
+	b2.SetSettlementOracle(func(context.Context, string) (bool, error) { return false, errors.New("rpc down") })
+	if _, err := b2.ResolveOpenSettlements(ctx); err == nil || !strings.Contains(err.Error(), job2) {
+		t.Fatalf("unreadable oracle: err=%v, want it reported against the job", err)
+	}
+	if n := countEvents(t, b2.store, "settlement.executed", job2); n != 0 {
+		t.Fatalf("settlement.executed = %d over an unreadable oracle, want 0", n)
+	}
+}
+
+// A done context stops the pass before the next job: the bounded boot pass leaves the rest
+// to the per-minute resolver instead of holding up serving.
+func TestResolveOpenSettlements_StopsWhenTheContextIsDone(t *testing.T) {
+	b, lane, jobID := trackedRig(t, receiptTimeout)
+	if _, err := b.AcceptDelivery(context.Background(), jobID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	n, err := b.ResolveOpenSettlements(ctx)
+	if n != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("resolved %d err=%v, want 0 and context.Canceled", n, err)
+	}
+	if _, resolves := lane.counts(); resolves != 0 {
+		t.Fatalf("resolves=%d after the context was done, want 0", resolves)
 	}
 }

@@ -119,14 +119,19 @@ const (
 	// cadence is also how long such a confirmation takes without a customer pressing Accept.
 	// It also paces fee replacement of a stalled broadcast (brain's replace-after age).
 	settlementResolveInterval = time.Minute
+	// settlementBootResolveBudget bounds the boot resolution pass, which runs before the
+	// owner API serves: a slow or unreachable RPC must not hold the daemon's start. Whatever
+	// the pass does not reach in time is left to the per-minute settlement-resolver.
+	settlementBootResolveBudget = 20 * time.Second
 )
 
 // resolveOpenSettlements runs one resolution pass over every open acceptDelivery broadcast
 // (brain.ResolveOpenSettlements: the same code a retried Accept uses; it records, re-sends an
 // evicted transaction's same bytes, and fee-replaces a stalled one at its OWN nonce, but never
-// submits at a new nonce) and logs what it did. Boot calls it once, and the
-// settlement-resolver worker calls it on settlementResolveInterval.
-func resolveOpenSettlements(ctx context.Context, br *brain.Brain, log *slog.Logger, when string) {
+// submits at a new nonce) and logs what it did. Boot calls it once, through
+// bootResolveOpenSettlements, and the settlement-resolver worker calls it on
+// settlementResolveInterval.
+func resolveOpenSettlements(ctx context.Context, br settlementResolver, log *slog.Logger, when string) {
 	n, err := br.ResolveOpenSettlements(ctx)
 	if err != nil {
 		log.Warn("could not resolve every open settlement broadcast; they stay open and the next pass retries",
@@ -135,6 +140,21 @@ func resolveOpenSettlements(ctx context.Context, br *brain.Brain, log *slog.Logg
 	if n > 0 {
 		log.Info("resolved open settlement broadcasts", "when", when, "jobs", n)
 	}
+}
+
+// settlementResolver is the one Brain method the resolution passes need (*brain.Brain).
+type settlementResolver interface {
+	ResolveOpenSettlements(ctx context.Context) (int, error)
+}
+
+// bootResolveOpenSettlements is the boot pass, bounded by budget: it runs before the owner API
+// serves, so a slow or unreachable RPC must not hold the start. A pass cut short stops
+// between jobs (and signs nothing new once the budget is spent); what it did not reach waits
+// for the settlement-resolver's first tick.
+func bootResolveOpenSettlements(ctx context.Context, br settlementResolver, log *slog.Logger, budget time.Duration) {
+	bctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	resolveOpenSettlements(bctx, br, log, "boot")
 }
 
 // statusPoller reads one payment's durable state from the H3 sidecar. *h3.Client satisfies
@@ -203,8 +223,9 @@ func (l customerSettleLane) SubmitTracked(ctx context.Context, calldata []byte, 
 
 func (l customerSettleLane) Resolve(ctx context.Context, b funding.Broadcast) (funding.Resolution, error) {
 	r, err := l.c.Resolve(ctx, b)
-	if errors.Is(err, chain.ErrSignerUnknown) {
-		// No account to compare a nonce against: unresolvable, never "dropped".
+	if errors.Is(err, chain.ErrSignerUnknown) || errors.Is(err, chain.ErrBroadcastMismatch) {
+		// No account to compare a nonce against (none recorded, or the recorded bytes are not
+		// the recorded transaction): unresolvable, never "dropped".
 		return funding.Resolution{State: funding.TxPending}, fmt.Errorf("%w: %w", funding.ErrSettlementUnresolvable, err)
 	}
 	if err != nil {
@@ -1134,8 +1155,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	log.Info("brain serving", "jobs_recovered", br.JobCount())
 	// Every acceptDelivery broadcast a previous run left open (its receipt wait timed out,
 	// or the process died during it) is resolved once now, with the lanes and oracles above
-	// already wired, before the customer surface serves.
-	resolveOpenSettlements(ctx, br, log, "boot")
+	// already wired, before the customer surface serves, within a bounded budget: what it
+	// does not reach in time waits for the settlement-resolver's first tick.
+	bootResolveOpenSettlements(ctx, br, log, settlementBootResolveBudget)
 
 	// V6 §1.C at boot, over every job that already HAS a chain identity. Milestones are the
 	// only jobs whose vault ids the daemon can enumerate (Brain's in-memory job state carries

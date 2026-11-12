@@ -139,6 +139,11 @@ func (c *Client) SubmitWithGas(ctx context.Context, to common.Address, calldata 
 // Signer, Raw and SentHead are zero in records written before they were stored. Resolve
 // then derives the signer from Raw, and with neither it refuses to classify an unseen
 // transaction (ErrSignerUnknown); Rebroadcast refuses (nothing to re-send).
+//
+// Recorded bytes are verified before ANY use (decoded): they must be the recorded
+// transaction (its hash, its nonce) and, when a signer is recorded, signed by it. A record
+// that fails the check (ErrBroadcastMismatch) gives no signer, no previous fee and no bytes
+// to send.
 type Broadcast struct {
 	TxHash   string
 	Nonce    uint64
@@ -158,6 +163,22 @@ var ErrSignerMismatch = errors.New("the broadcast was signed by another key than
 
 // ErrNonceUsed: the broadcast's nonce is already mined, so there is nothing to replace.
 var ErrNonceUsed = errors.New("the broadcast's nonce is already used on chain")
+
+// ErrBroadcastMismatch: a broadcast's recorded signed bytes are not the recorded
+// transaction. They do not decode, they hash to another transaction, they sit at another
+// nonce, or they recover to another account than the recorded signer. Nothing in such a
+// record is trusted: no signer is taken from it, no fee is read from it, and its bytes are
+// never sent.
+var ErrBroadcastMismatch = errors.New("the broadcast's recorded signed bytes are not the recorded transaction")
+
+// ErrFeeCapExceeded: a fee replacement would have to pay more than replacementFeeCapMultiple
+// times the chain's fresh price. Nothing is signed; the caller records the broadcast stuck.
+var ErrFeeCapExceeded = errors.New("a fee replacement would exceed the fee cap")
+
+// replacementFeeCapMultiple caps a fee replacement's gas price at this many times the
+// fresh price, max(eth_gasPrice, latest base fee). A replacement that must outbid the
+// previous price by a quarter and cannot stay under the cap is not signed.
+const replacementFeeCapMultiple = 3
 
 // SubmitTracked is Submit with a write-ahead step: onSigned runs once the transaction is
 // SIGNED and BEFORE eth_sendRawTransaction. The hash, nonce, signer and raw bytes are all
@@ -216,13 +237,17 @@ type Resolution struct {
 // is TxMined. A transaction the node knows is TxPending. Only a transaction with no receipt
 // AND unknown to the node is TxDropped (mined nonce past it) or TxEvicted (mined nonce not
 // past it), and both are single observations the caller must confirm. With no signer to
-// compare, such a transaction is ErrSignerUnknown, never a state. Any read failure is
+// compare, such a transaction is ErrSignerUnknown, never a state, and with signed bytes
+// that are not the recorded transaction it is ErrBroadcastMismatch. Any read failure is
 // returned as an error, never guessed as a state.
 func (c *Client) Resolve(ctx context.Context, b Broadcast) (Resolution, error) {
 	if strings.TrimSpace(b.TxHash) == "" {
 		return Resolution{}, fmt.Errorf("resolve: transaction hash is empty")
 	}
-	signer, signerKnown := b.signer(c.chainID)
+	// A record whose signed bytes are not its transaction yields no signer: neither the
+	// recorded address nor the bytes are trusted. The hash can still be asked about.
+	signer, signerErr := b.signer(c.chainID)
+	signerKnown := signerErr == nil
 	if err := c.VerifyChainID(ctx); err != nil {
 		return Resolution{}, err
 	}
@@ -254,7 +279,7 @@ func (c *Client) Resolve(ctx context.Context, b Broadcast) (Resolution, error) {
 	case known:
 		res.State = TxPending
 	case !signerKnown:
-		return Resolution{}, fmt.Errorf("resolve %s: %w", b.TxHash, ErrSignerUnknown)
+		return Resolution{}, fmt.Errorf("resolve %s: %w", b.TxHash, signerErr)
 	case mined > b.Nonce:
 		res.State = TxDropped
 	default:
@@ -263,24 +288,44 @@ func (c *Client) Resolve(ctx context.Context, b Broadcast) (Resolution, error) {
 	return res, nil
 }
 
-// signer is the account that signed the broadcast: the recorded one, else the one its
-// signed bytes recover to. ok=false when neither is available.
-func (b Broadcast) signer(chainID *big.Int) (common.Address, bool) {
-	if b.Signer != (common.Address{}) {
-		return b.Signer, true
-	}
+// signer is the account that signed the broadcast. With signed bytes recorded, they are
+// verified first (decoded tx); the signer is the account they recover to, and a recorded
+// signer must be that same account. With no bytes, the recorded signer is all there is.
+// ErrSignerUnknown when neither is recorded; ErrBroadcastMismatch when the bytes do not
+// check out.
+func (b Broadcast) signer(chainID *big.Int) (common.Address, error) {
 	if len(b.Raw) == 0 {
-		return common.Address{}, false
+		if b.Signer == (common.Address{}) {
+			return common.Address{}, ErrSignerUnknown
+		}
+		return b.Signer, nil
 	}
+	_, from, err := b.decoded(chainID)
+	return from, err
+}
+
+// decoded verifies a broadcast's recorded signed bytes against the rest of its record
+// before anything uses them: they must decode, hash to b.TxHash, sit at b.Nonce, and
+// recover to a sender, which must be b.Signer when one is recorded. It returns the decoded
+// transaction and its sender; any failure is ErrBroadcastMismatch.
+func (b Broadcast) decoded(chainID *big.Int) (*types.Transaction, common.Address, error) {
 	tx := new(types.Transaction)
-	if err := tx.UnmarshalBinary(b.Raw); err != nil || !strings.EqualFold(tx.Hash().Hex(), b.TxHash) {
-		return common.Address{}, false
+	if err := tx.UnmarshalBinary(b.Raw); err != nil {
+		return nil, common.Address{}, fmt.Errorf("%w: %s's bytes do not decode: %v", ErrBroadcastMismatch, b.TxHash, err)
+	}
+	if !strings.EqualFold(tx.Hash().Hex(), b.TxHash) || tx.Nonce() != b.Nonce {
+		return nil, common.Address{}, fmt.Errorf("%w: the bytes recorded for %s at nonce %d are transaction %s at nonce %d",
+			ErrBroadcastMismatch, b.TxHash, b.Nonce, tx.Hash().Hex(), tx.Nonce())
 	}
 	from, err := types.Sender(types.LatestSignerForChainID(chainID), tx)
 	if err != nil {
-		return common.Address{}, false
+		return nil, common.Address{}, fmt.Errorf("%w: %s's signature does not recover: %v", ErrBroadcastMismatch, b.TxHash, err)
 	}
-	return from, true
+	if b.Signer != (common.Address{}) && from != b.Signer {
+		return nil, common.Address{}, fmt.Errorf("%w: %s's bytes are signed by %s, not the recorded signer %s",
+			ErrBroadcastMismatch, b.TxHash, from.Hex(), b.Signer.Hex())
+	}
+	return tx, from, nil
 }
 
 // minedNonce is addr's count of MINED transactions (eth_getTransactionCount at "latest").
@@ -299,11 +344,15 @@ func (c *Client) minedNonce(ctx context.Context, addr common.Address) (uint64, e
 // was signed by another one (ErrSignerMismatch) or when prev's nonce is already mined
 // (ErrNonceUsed: nothing to replace, the caller resolves what took it).
 //
+// prev's recorded bytes are verified before they are used (ErrBroadcastMismatch otherwise),
+// and its previous price is read only from verified bytes.
+//
 // Fees follow Arc's rule: the base fee is read from chain right now, never cached. The new
 // gas price is the highest of the node's fresh eth_gasPrice, the latest block's fresh base
 // fee, and prev's own price bumped by a quarter (nodes refuse a replacement under a ~10%
-// bump). The gas limit is estimated fresh: a call that would now revert is refused before
-// anything is signed.
+// bump), capped at replacementFeeCapMultiple times the fresh price: a bump past the cap
+// signs nothing (ErrFeeCapExceeded). The gas limit is estimated fresh: a call that would now
+// revert is refused before anything is signed.
 //
 // onSigned is the same write-ahead hook as SubmitTracked's: it runs after signing and
 // before the send, and an error from it sends nothing. Replace does NOT wait for a receipt;
@@ -315,8 +364,21 @@ func (c *Client) Replace(ctx context.Context, to common.Address, calldata []byte
 	if c.key == nil {
 		return Broadcast{}, fmt.Errorf("refusing to replace: this client is read-only (no signing key)")
 	}
-	if signer, ok := prev.signer(c.chainID); !ok || signer != c.addr {
+	signer, err := prev.signer(c.chainID)
+	if err != nil {
+		return Broadcast{}, fmt.Errorf("replace %s: %w", prev.TxHash, err)
+	}
+	if signer != c.addr {
 		return Broadcast{}, fmt.Errorf("replace %s: %w", prev.TxHash, ErrSignerMismatch)
+	}
+	// The previous price is read only from bytes that were just verified to be prev.
+	var prevPrice *big.Int
+	if len(prev.Raw) > 0 {
+		tx, _, err := prev.decoded(c.chainID)
+		if err != nil {
+			return Broadcast{}, fmt.Errorf("replace %s: %w", prev.TxHash, err)
+		}
+		prevPrice = tx.GasPrice()
 	}
 	if err := c.VerifyChainID(ctx); err != nil {
 		return Broadcast{}, fmt.Errorf("refusing to sign: %w", err)
@@ -332,9 +394,9 @@ func (c *Client) Replace(ctx context.Context, to common.Address, calldata []byte
 	if mined > prev.Nonce {
 		return Broadcast{}, fmt.Errorf("replace %s: %w (mined nonce %d)", prev.TxHash, ErrNonceUsed, mined)
 	}
-	price, err := c.replacementGasPrice(ctx, prev)
+	price, err := c.replacementGasPrice(ctx, prevPrice)
 	if err != nil {
-		return Broadcast{}, err
+		return Broadcast{}, fmt.Errorf("replace %s: %w", prev.TxHash, err)
 	}
 	gas, err := c.estimateGas(ctx, to, calldata)
 	if err != nil {
@@ -362,13 +424,16 @@ func (c *Client) Replace(ctx context.Context, to common.Address, calldata []byte
 	return bc, nil
 }
 
-// replacementGasPrice is max(fresh eth_gasPrice, fresh latest base fee, prev's price * 5/4 + 1).
-func (c *Client) replacementGasPrice(ctx context.Context, prev Broadcast) (*big.Int, error) {
+// replacementGasPrice is max(fresh, prevPrice * 5/4 + 1), where fresh is max(fresh
+// eth_gasPrice, fresh latest base fee), and never more than replacementFeeCapMultiple *
+// fresh: a bump past the cap is ErrFeeCapExceeded and nothing is signed. prevPrice is nil
+// when the previous transaction's bytes were not recorded. All arithmetic is big.Int.
+func (c *Client) replacementGasPrice(ctx context.Context, prevPrice *big.Int) (*big.Int, error) {
 	var gasPriceHex string
 	if err := c.rpc(ctx, "eth_gasPrice", []any{}, &gasPriceHex); err != nil {
 		return nil, fmt.Errorf("gas price: %w", err)
 	}
-	price := new(big.Int).SetBytes(common.FromHex(gasPriceHex))
+	fresh := new(big.Int).SetBytes(common.FromHex(gasPriceHex))
 	var block struct {
 		BaseFee string `json:"baseFeePerGas"`
 	}
@@ -376,18 +441,21 @@ func (c *Client) replacementGasPrice(ctx context.Context, prev Broadcast) (*big.
 		return nil, fmt.Errorf("base fee: %w", err)
 	}
 	if block.BaseFee != "" {
-		if base := new(big.Int).SetBytes(common.FromHex(block.BaseFee)); base.Cmp(price) > 0 {
-			price = base
+		if base := new(big.Int).SetBytes(common.FromHex(block.BaseFee)); base.Cmp(fresh) > 0 {
+			fresh = base
 		}
 	}
-	if len(prev.Raw) > 0 {
-		tx := new(types.Transaction)
-		if err := tx.UnmarshalBinary(prev.Raw); err == nil && tx.GasPrice() != nil {
-			bumped := new(big.Int).Div(new(big.Int).Mul(tx.GasPrice(), big.NewInt(5)), big.NewInt(4))
-			bumped.Add(bumped, big.NewInt(1))
-			if bumped.Cmp(price) > 0 {
-				price = bumped
-			}
+	price := new(big.Int).Set(fresh)
+	if prevPrice != nil {
+		bumped := new(big.Int).Div(new(big.Int).Mul(prevPrice, big.NewInt(5)), big.NewInt(4))
+		bumped.Add(bumped, big.NewInt(1))
+		limit := new(big.Int).Mul(fresh, big.NewInt(replacementFeeCapMultiple))
+		if bumped.Cmp(limit) > 0 {
+			return nil, fmt.Errorf("%w: the previous price %s bumped is %s, over %d times the fresh price %s",
+				ErrFeeCapExceeded, prevPrice, bumped, replacementFeeCapMultiple, fresh)
+		}
+		if bumped.Cmp(price) > 0 {
+			price = bumped
 		}
 	}
 	return price, nil
@@ -431,19 +499,8 @@ func (c *Client) Rebroadcast(ctx context.Context, b Broadcast) error {
 	if len(b.Raw) == 0 {
 		return fmt.Errorf("rebroadcast %s: no signed bytes were recorded with this broadcast", b.TxHash)
 	}
-	tx := new(types.Transaction)
-	if err := tx.UnmarshalBinary(b.Raw); err != nil {
-		return fmt.Errorf("rebroadcast %s: the recorded bytes do not decode: %w", b.TxHash, err)
-	}
-	if !strings.EqualFold(tx.Hash().Hex(), b.TxHash) || tx.Nonce() != b.Nonce {
-		return fmt.Errorf("rebroadcast %s: the recorded bytes are transaction %s at nonce %d, not the recorded one",
-			b.TxHash, tx.Hash().Hex(), tx.Nonce())
-	}
-	if b.Signer != (common.Address{}) {
-		from, err := types.Sender(types.LatestSignerForChainID(c.chainID), tx)
-		if err != nil || from != b.Signer {
-			return fmt.Errorf("rebroadcast %s: the recorded bytes are not signed by the recorded signer %s", b.TxHash, b.Signer.Hex())
-		}
+	if _, _, err := b.decoded(c.chainID); err != nil {
+		return fmt.Errorf("rebroadcast %s: %w", b.TxHash, err)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

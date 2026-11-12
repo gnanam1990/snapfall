@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -335,36 +336,70 @@ func TestAPI_AcceptanceAndAcceptCarryTheSettlementStatus(t *testing.T) {
 }
 
 // A customer-route 500 never echoes the underlying error: chain errors can carry the RPC
-// URL with its API key. The code stays INTERNAL; the message is generic. Covers the
-// acceptance read, the Accept's own failure, and the Accept whose status read fails.
+// URL with its API key. The code stays INTERNAL; the message is generic.
 func TestAPI_CustomerRoute500sDoNotEchoTheError(t *testing.T) {
 	s, _ := newAPI(t)
 	tokPtr := wireAccept(s)
 	s.Handler().ServeHTTP(httptest.NewRecorder(), ownerRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil))
 	secret := "https://rpc.example/v2/SECRET-API-KEY-123: dial tcp: sqlite: database is locked"
-	s.Settlement = func(context.Context, string) (string, error) { return "", errors.New(secret) }
+	s.Accept = func(context.Context, string) (string, error) { return "", errors.New(secret) }
+	code, out, body := customerCall(t, s, "POST", "/api/v1/customer/jobs/job_acc/accept", *tokPtr)
+	if code != 500 || out["error"] == nil || out["error"].(map[string]any)["code"] != "INTERNAL" {
+		t.Fatalf("accept fails: %d %s, want 500 INTERNAL", code, body)
+	}
+	for _, leak := range []string{"SECRET-API-KEY-123", "rpc.example", "sqlite", "database is locked"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("the 500 body leaks %q: %s", leak, body)
+		}
+	}
+	if _, has := out["settlement"]; has {
+		t.Fatalf("a failed accept must not carry a settlement: %s", body)
+	}
+}
 
-	check := func(name string, code int, out map[string]any, body string) {
+// A settlement status that cannot be read (a chain oracle down, say) degrades instead of
+// failing the route: the acceptance read is still 200 with its stage fields and
+// `settlement: "unknown"`, and an Accept that was processed is still 200 with its state and
+// `settlement: "unknown"`. The detail is logged server-side and never reaches the body.
+func TestAPI_UnreadableSettlementDegradesToUnknown(t *testing.T) {
+	s, _ := newAPI(t)
+	var logs strings.Builder
+	s.log = slog.New(slog.NewTextHandler(&logs, nil))
+	tokPtr := wireAccept(s)
+	s.Handler().ServeHTTP(httptest.NewRecorder(), ownerRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil))
+	secret := "https://rpc.example/v2/SECRET-API-KEY-123: cannot read on-chain settlement"
+	s.Settlement = func(context.Context, string) (string, error) { return "", errors.New(secret) }
+	s.VaultJobID = func(string) string { return "0x" + strings.Repeat("b", 64) }
+
+	noLeak := func(name, body string) {
 		t.Helper()
-		if code != 500 || out["error"] == nil || out["error"].(map[string]any)["code"] != "INTERNAL" {
-			t.Fatalf("%s: %d %s, want 500 INTERNAL", name, code, body)
-		}
-		for _, leak := range []string{"SECRET-API-KEY-123", "rpc.example", "sqlite", "database is locked"} {
+		for _, leak := range []string{"SECRET-API-KEY-123", "rpc.example", "cannot read"} {
 			if strings.Contains(body, leak) {
-				t.Fatalf("%s: the 500 body leaks %q: %s", name, leak, body)
+				t.Fatalf("%s: the body leaks %q: %s", name, leak, body)
 			}
-		}
-		if _, has := out["settlement"]; has {
-			t.Fatalf("%s: a failed read must not carry a guessed settlement: %s", name, body)
 		}
 	}
 	code, out, body := customerCall(t, s, "GET", "/api/v1/customer/jobs/job_acc/acceptance", *tokPtr)
-	check("acceptance read", code, out, body)
+	if code != 200 || out["settlement"] != brain.SettlementUnknown || out["jobId"] != "job_acc" ||
+		out["stage"] != "delivery_ready" || out["accepted"] != false || out["vaultJobId"] == nil {
+		t.Fatalf("acceptance read over an unreadable status: %d %s, want 200 with the stage fields and settlement unknown", code, body)
+	}
+	noLeak("acceptance read", body)
+
 	code, out, body = customerCall(t, s, "POST", "/api/v1/customer/jobs/job_acc/accept", *tokPtr)
-	check("accept, status read fails", code, out, body)
-	s.Accept = func(context.Context, string) (string, error) { return "", errors.New(secret) }
-	code, out, body = customerCall(t, s, "POST", "/api/v1/customer/jobs/job_acc/accept", *tokPtr)
-	check("accept fails", code, out, body)
+	if code != 200 || out["settlement"] != brain.SettlementUnknown || out["state"] != "accepted-pending-chain" {
+		t.Fatalf("accept over an unreadable status: %d %s, want 200 with the state and settlement unknown", code, body)
+	}
+	noLeak("accept", body)
+
+	code, out, body = customerCall(t, s, "GET", "/api/v1/customer/jobs/job_acc/acceptance", *tokPtr)
+	if code != 200 || out["settlement"] != brain.SettlementUnknown || out["accepted"] != true || out["stage"] != "accepted" {
+		t.Fatalf("acceptance read after the accept: %d %s", code, body)
+	}
+	if got := logs.String(); strings.Count(got, "SECRET-API-KEY-123") != 3 || !strings.Contains(got, "level=ERROR") ||
+		!strings.Contains(got, "job=job_acc") {
+		t.Fatalf("the detail is not logged server-side against the job for each read: %s", got)
+	}
 }
 
 // The settlement seam is part of the customer surface: unwired, the surface refuses.

@@ -24,19 +24,15 @@ import (
 // by withCustomerAuth; Brain owns state, freeze, exactly-once, and the honest
 // pending-chain stop. The response carries the same `settlement` status the acceptance
 // read does (H2 §4.3), read after the attempt, so the portal never infers it from the
-// state label.
+// state label. The Accept ran either way: if only the status read after it fails, the
+// response is still 200 with `settlement: "unknown"` (the detail logged server-side), never
+// a guessed value and never a hard error over an Accept that was processed.
 func (s *Server) handleCustomerAccept(w http.ResponseWriter, r *http.Request) {
 	state, err := s.Accept(r.Context(), r.PathValue("id"))
 	switch {
 	case err == nil:
-		settlement, serr := s.Settlement(r.Context(), r.PathValue("id"))
-		if serr != nil {
-			// The Accept ran; what it left is unreadable. Never a guessed status: the
-			// customer may safely press Accept again, which re-reads everything.
-			s.customerInternal(w, r, "accept processed, settlement status unreadable", serr, msgSettlementUnreadable, "state", state)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"jobId": r.PathValue("id"), "state": state, "settlement": settlement})
+		writeJSON(w, http.StatusOK, map[string]any{"jobId": r.PathValue("id"), "state": state,
+			"settlement": s.settlementOrUnknown(r, "accept processed, settlement status unreadable", "state", state)})
 	case errors.Is(err, brain.ErrFrozen):
 		writeErr(w, http.StatusLocked, "FROZEN", "the kill switch is engaged; settlement actions are stopped", nil)
 	case errors.Is(err, brain.ErrNotDeliveryReady):
@@ -52,10 +48,24 @@ func (s *Server) handleCustomerAccept(w http.ResponseWriter, r *http.Request) {
 // server-side against the job; the client gets the code and a generic message. (Owner
 // routes, behind the owner token, keep their detail.)
 const (
-	msgSettlementUnreadable = "the settlement status could not be read; try again shortly"
-	msgAcceptFailed         = "the acceptance could not be processed; try again shortly"
-	msgInvoiceUnreadable    = "the receipt could not be read; try again shortly"
+	msgAcceptFailed      = "the acceptance could not be processed; try again shortly"
+	msgInvoiceUnreadable = "the receipt could not be read; try again shortly"
 )
+
+// settlementOrUnknown is the job's settlement status for a customer response, or
+// brain.SettlementUnknown when it cannot be read (a chain oracle or the record is
+// unreadable). The detail is logged server-side against the job and never reaches the body:
+// a chain error can carry the RPC URL with its API key.
+func (s *Server) settlementOrUnknown(r *http.Request, what string, attrs ...any) string {
+	settlement, err := s.Settlement(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if s.log != nil {
+			s.log.Error(what, append([]any{"job", r.PathValue("id"), "route", r.URL.Path, "err", err}, attrs...)...)
+		}
+		return brain.SettlementUnknown
+	}
+	return settlement
+}
 
 func (s *Server) customerInternal(w http.ResponseWriter, r *http.Request, what string, err error, msg string, attrs ...any) {
 	if s.log != nil {
@@ -66,24 +76,21 @@ func (s *Server) customerInternal(w http.ResponseWriter, r *http.Request, what s
 
 // GET /api/v1/customer/jobs/{id}/acceptance — the customer's read: the job's stage as
 // the customer may see it, and its settlement status (H2 §4.3): "none" | "settled" |
-// "pending" | "retry". `accepted` alone says only that the claim happened, not that the
-// job settled; `settlement` is what tells the portal whether Accept is worth pressing
-// again. A failed read is a 500, never a guessed status. Guarded by the same credential —
-// the read side is not free.
+// "pending" | "retry" | "unknown". `accepted` alone says only that the claim happened, not
+// that the job settled; `settlement` is what tells the portal whether Accept is worth
+// pressing again. A settlement status that cannot be read (a chain oracle or the record is
+// unreadable) degrades to "unknown" with the stage fields intact, never a guessed value and
+// never a 500 over a stage that read fine; the detail is logged server-side. Guarded by the
+// same credential — the read side is not free.
 func (s *Server) handleCustomerAcceptance(w http.ResponseWriter, r *http.Request) {
 	stage, ok := s.JobState(r.PathValue("id"))
 	if !ok {
 		writeErr(w, http.StatusNotFound, "UNKNOWN_JOB", "the daemon has no such job", nil)
 		return
 	}
-	settlement, err := s.Settlement(r.Context(), r.PathValue("id"))
-	if err != nil {
-		s.customerInternal(w, r, "customer acceptance read failed", err, msgSettlementUnreadable)
-		return
-	}
 	out := map[string]any{
 		"jobId": r.PathValue("id"), "stage": stage, "accepted": stage == string(brain.StageAccepted),
-		"settlement": settlement,
+		"settlement": s.settlementOrUnknown(r, "customer acceptance read: settlement status unreadable"),
 	}
 	if s.VaultJobID != nil {
 		if v := s.VaultJobID(r.PathValue("id")); v != "" {

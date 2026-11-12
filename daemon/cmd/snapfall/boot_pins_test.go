@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The boot-sequence pins — closing a CLASS of defect, not an instance.
@@ -87,4 +89,35 @@ func serveSource(t *testing.T) string {
 		b.Write(raw)
 	}
 	return b.String()
+}
+
+// blockingResolver stands in for a resolution pass over an RPC that never answers: it
+// returns only when its context is done.
+type blockingResolver struct {
+	deadline time.Time
+	hasDL    bool
+}
+
+func (r *blockingResolver) ResolveOpenSettlements(ctx context.Context) (int, error) {
+	r.deadline, r.hasDL = ctx.Deadline()
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+// The boot resolution pass runs before the owner API serves, so it is bounded: an RPC that
+// never answers costs at most the budget, and the rest is left to the per-minute resolver.
+func TestBoot_SettlementResolutionPassIsBounded(t *testing.T) {
+	if settlementBootResolveBudget <= 0 || settlementBootResolveBudget > settlementResolveInterval {
+		t.Fatalf("boot budget %s, want a positive bound no longer than the resolver interval %s",
+			settlementBootResolveBudget, settlementResolveInterval)
+	}
+	r := &blockingResolver{}
+	start := time.Now()
+	bootResolveOpenSettlements(context.Background(), r, quietLog(), 50*time.Millisecond)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the boot pass took %s over a 50ms budget", took)
+	}
+	if !r.hasDL || r.deadline.Sub(start) > time.Second {
+		t.Fatalf("the pass ran with deadline %v (set=%v), want one within the budget", r.deadline, r.hasDL)
+	}
 }

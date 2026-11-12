@@ -1,12 +1,14 @@
 package brain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -59,6 +61,8 @@ type trackedLane struct {
 	replacements   []funding.Broadcast
 	replaceErr     error
 	replaceSendErr error
+	// replaceCalls counts every Replace asked of the lane, refused ones included.
+	replaceCalls int
 }
 
 var _ funding.TrackedSubmitter = (*trackedLane)(nil)
@@ -149,6 +153,7 @@ func (l *trackedLane) Rebroadcast(_ context.Context, b funding.Broadcast) error 
 
 func (l *trackedLane) Replace(_ context.Context, _ []byte, prev funding.Broadcast, onSigned func(funding.Broadcast) error) (funding.Broadcast, error) {
 	l.mu.Lock()
+	l.replaceCalls++
 	if l.replaceErr != nil {
 		err := l.replaceErr
 		l.mu.Unlock()
@@ -843,5 +848,158 @@ func TestAcceptBroadcast_EvictedAndRefusedIsReplaced(t *testing.T) {
 	lane.setHash(replHash(1), funding.TxMined, false)
 	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
 		t.Fatalf("state=%q err=%v, want accepted-settled", s, err)
+	}
+}
+
+// stuckPayloads are the job's settlement.stuck payloads, oldest first.
+func stuckPayloads(t *testing.T, b *Brain, jobID string) []map[string]any {
+	t.Helper()
+	rows, err := b.store.DB().Query(`SELECT payload_json FROM events WHERE kind='settlement.stuck' AND entity_id=? ORDER BY seq`, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var p map[string]any
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// syncBuffer is a log sink the race detector accepts.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (w *syncBuffer) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *syncBuffer) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+// A stalled broadcast the lane refuses to replace FOR GOOD (another key signed it after a
+// rotation, outbidding it would pass the fee cap, its recorded bytes are not its
+// transaction, or it names no signer) is recorded settlement.stuck the first time, with the
+// reason, logged at ERROR, exactly once; the lane is not asked again. A refusal that may
+// pass (an RPC error) records nothing and is asked again next pass.
+func TestAcceptBroadcast_PermanentReplaceRefusalIsRecordedStuckOnce(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		err    error
+		reason string
+	}{
+		{fmt.Errorf("replace 0x01: %w", funding.ErrSignerMismatch), "signer_mismatch"},
+		{fmt.Errorf("replace 0x01: %w: over the cap", funding.ErrFeeCapExceeded), "fee_cap"},
+		{fmt.Errorf("replace 0x01: %w: swapped bytes", funding.ErrBroadcastMismatch), "record_mismatch"},
+		{fmt.Errorf("replace 0x01: %w", funding.ErrSignerUnknown), "signer_unknown"},
+		{errors.New("gas price: dial tcp: connection refused"), ""},
+	} {
+		name := tc.reason
+		if name == "" {
+			name = "transient"
+		}
+		t.Run(name, func(t *testing.T) {
+			b, lane, jobID := trackedRig(t, receiptTimeout)
+			logs := &syncBuffer{}
+			b.log = slog.New(slog.NewTextHandler(logs, nil))
+			b.replaceAfterBlocks = 1
+			lane.head = 10
+			if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
+				t.Fatal(err)
+			}
+			lane.mu.Lock()
+			lane.replaceErr = tc.err
+			lane.mu.Unlock()
+			for i := 0; i < 4; i++ {
+				if _, err := b.ResolveOpenSettlements(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lane.mu.Lock()
+			calls := lane.replaceCalls
+			lane.mu.Unlock()
+			stuck := stuckPayloads(t, b, jobID)
+			if tc.reason == "" {
+				if len(stuck) != 0 || calls < 2 {
+					t.Fatalf("transient refusal: stuck=%v replace calls=%d, want none and asked again", stuck, calls)
+				}
+				return
+			}
+			if len(stuck) != 1 || stuck[0]["reason"] != tc.reason || stuck[0]["tx_hash"] != txHashN(1) || stuck[0]["nonce"] != float64(0) {
+				t.Fatalf("settlement.stuck %v, want exactly one for tx1 with reason %q", stuck, tc.reason)
+			}
+			if calls != 1 {
+				t.Fatalf("replace calls = %d, want 1: a stuck transaction is not asked about again", calls)
+			}
+			if out := logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "reason="+tc.reason) {
+				t.Fatalf("no ERROR log naming the reason: %s", out)
+			}
+			if len(lane.replacements) != 0 {
+				t.Fatalf("%d replacements were sent", len(lane.replacements))
+			}
+			wantStatus(t, b, jobID, SettlementPending)
+		})
+	}
+}
+
+// An evicted transaction the node keeps evicting is re-sent at most maxRebroadcasts times
+// (each re-send starts its observations over, so without a bound it would stay open
+// forever); past that it falls through to fee replacement at its nonce.
+func TestAcceptBroadcast_RebroadcastsAreBoundedThenReplaced(t *testing.T) {
+	b, lane, jobID := trackedRig(t, receiptTimeout)
+	b.replaceAfterBlocks = 1
+	lane.head = 10
+	ctx := context.Background()
+	if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+	evictedTwoLooks := func() {
+		t.Helper()
+		lane.set(1, funding.TxEvicted, false)
+		for i := 0; i < 2; i++ {
+			if _, err := b.ResolveOpenSettlements(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for round := 1; round <= defaultSettlementMaxRebroadcasts; round++ {
+		evictedTwoLooks()
+		lane.mu.Lock()
+		n, r := len(lane.rebroadcasts), len(lane.replacements)
+		lane.mu.Unlock()
+		if n != round || r != 0 {
+			t.Fatalf("round %d: rebroadcasts=%d replacements=%d, want %d and 0", round, n, r, round)
+		}
+	}
+	evictedTwoLooks()
+	lane.mu.Lock()
+	n, r := len(lane.rebroadcasts), append([]funding.Broadcast(nil), lane.replacements...)
+	lane.mu.Unlock()
+	if n != defaultSettlementMaxRebroadcasts {
+		t.Fatalf("rebroadcasts = %d, want the bound %d", n, defaultSettlementMaxRebroadcasts)
+	}
+	if len(r) != 1 || r[0].Nonce != 0 {
+		t.Fatalf("replacements %+v, want one at nonce 0 once the re-sends ran out", r)
+	}
+	if c := countEvents(t, b.store, "settlement.rebroadcast", jobID); c != defaultSettlementMaxRebroadcasts {
+		t.Fatalf("settlement.rebroadcast = %d, want %d", c, defaultSettlementMaxRebroadcasts)
+	}
+	if subs, _ := lane.counts(); subs != 1 {
+		t.Fatalf("submits=%d, want 1", subs)
 	}
 }

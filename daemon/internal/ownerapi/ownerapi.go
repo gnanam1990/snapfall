@@ -64,7 +64,8 @@ type Server struct {
 	Accept       func(ctx context.Context, jobID string) (string, error)
 	JobState     func(jobID string) (string, bool)
 	// Settlement is the job's customer-facing settlement status, exactly one of "none",
-	// "settled", "pending" or "retry" (H2 §4.3). An error is served as a 500, never guessed.
+	// "settled", "pending" or "retry" (H2 §4.3). An error is served as "unknown" (the detail
+	// logged server-side), never guessed.
 	Settlement func(ctx context.Context, jobID string) (string, error)
 	// VaultJobID names the job's on-chain identity for the customer's own wallet. Optional:
 	// nil, or an empty answer, leaves it out of the acceptance read.

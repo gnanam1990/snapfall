@@ -152,6 +152,16 @@ type TrackedSubmitter interface {
 	Replace(ctx context.Context, calldata []byte, prev Broadcast, onSigned func(Broadcast) error) (Broadcast, error)
 }
 
+// Why a settle lane refuses to fee-replace a recorded broadcast, re-exported so callers
+// need not import the chain writer. Each is permanent for that broadcast: the caller records
+// it stuck rather than asking again.
+var (
+	ErrSignerMismatch    = chain.ErrSignerMismatch    // another key signed it (the key rotated)
+	ErrSignerUnknown     = chain.ErrSignerUnknown     // the record names no signer and has no bytes
+	ErrBroadcastMismatch = chain.ErrBroadcastMismatch // the recorded bytes are not the recorded transaction
+	ErrFeeCapExceeded    = chain.ErrFeeCapExceeded    // outbidding it would pass the fee cap
+)
+
 // ErrSettlementUnresolvable means no wired settle lane can answer for a broadcast: none is
 // wired, or the wired one cannot resolve. The caller must not treat that as "never sent".
 var ErrSettlementUnresolvable = errors.New("no wired settlement lane can resolve this broadcast")

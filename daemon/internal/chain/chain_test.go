@@ -934,3 +934,126 @@ func TestResolve_FailsClosed(t *testing.T) {
 		t.Fatal("a read-only client resolved a broadcast that names no signer")
 	}
 }
+
+// A tampered record is never trusted: before a recorded signer, a previous fee or the bytes
+// themselves are used, the bytes must be the recorded transaction (its hash, its nonce) and
+// recover to the recorded signer. A record that fails gives no signer to Resolve (an unseen
+// transaction is ErrBroadcastMismatch, never dropped or evicted) and nothing to Replace
+// (nothing signed, nothing sent).
+func TestReplaceAndResolve_RefuseATamperedRecord(t *testing.T) {
+	f, c := newFake(t)
+	ctx := context.Background()
+	to := common.HexToAddress("0xAA")
+	f.mu.Lock()
+	f.holdNext = true
+	f.mu.Unlock()
+	var mine, other Broadcast
+	heldSubmit(t, c, to, []byte{0x01}, &mine)
+	heldSubmit(t, c, to, []byte{0x02}, &other)
+
+	swapped := mine
+	swapped.Raw = other.Raw // another transaction's bytes under mine's hash
+	foreignSigner := mine
+	foreignSigner.Signer = common.HexToAddress("0x00000000000000000000000000000000000000CC")
+	garbage := mine
+	garbage.Raw = []byte{0xde, 0xad, 0xbe, 0xef}
+	unknownHash := mine
+	unknownHash.TxHash = "0x" + strings.Repeat("ee", 32) // bytes that hash to mine, not this
+
+	f.mu.Lock()
+	sends := f.rawSends
+	f.mu.Unlock()
+	for name, b := range map[string]Broadcast{"swapped bytes": swapped, "foreign signer": foreignSigner, "garbage bytes": garbage, "unknown hash": unknownHash} {
+		if _, err := c.Replace(ctx, to, []byte{0x01}, b, func(Broadcast) error {
+			t.Errorf("%s: a replacement was signed over a tampered record", name)
+			return nil
+		}); !errors.Is(err, ErrBroadcastMismatch) {
+			t.Fatalf("%s: replace err=%v, want ErrBroadcastMismatch", name, err)
+		}
+		if err := c.Rebroadcast(ctx, b); !errors.Is(err, ErrBroadcastMismatch) {
+			t.Fatalf("%s: rebroadcast err=%v, want ErrBroadcastMismatch", name, err)
+		}
+	}
+	f.mu.Lock()
+	if f.rawSends != sends {
+		f.mu.Unlock()
+		t.Fatalf("a tampered record reached the node (%d sends)", f.rawSends-sends)
+	}
+	f.mu.Unlock()
+	// The node does not know the unknown hash: with the bytes untrusted there is no signer to
+	// compare a nonce against, and the recorded signer alone is not believed.
+	if r, err := c.Resolve(ctx, unknownHash); !errors.Is(err, ErrBroadcastMismatch) {
+		t.Fatalf("resolve of a tampered unseen record: %+v err=%v, want ErrBroadcastMismatch", r, err)
+	}
+	// The hash itself can still be asked about: the node knows mine's hash, so it is pending.
+	if r, err := c.Resolve(ctx, swapped); err != nil || r.State != TxPending {
+		t.Fatalf("resolve of a tampered record the node knows by hash: %+v err=%v, want pending", r, err)
+	}
+}
+
+// The replacement fee is capped at replacementFeeCapMultiple times the fresh price,
+// max(eth_gasPrice, base fee). A previous price whose quarter bump would pass the cap
+// signs nothing (ErrFeeCapExceeded); one under it is replaced as usual. Prices far past
+// 64 bits do not overflow.
+func TestReplace_FeeIsCappedAtAMultipleOfTheFreshPrice(t *testing.T) {
+	f, c := newFake(t)
+	ctx := context.Background()
+	to := common.HexToAddress("0xAA")
+	f.mu.Lock()
+	f.holdNext = true
+	f.mu.Unlock()
+	var held Broadcast
+	heldSubmit(t, c, to, []byte{0x01}, &held)
+
+	// A genuine transaction from this key at the held nonce, signed at prevPrice.
+	signedAt := func(prevPrice *big.Int) Broadcast {
+		t.Helper()
+		tx, err := types.SignTx(types.NewTx(&types.LegacyTx{
+			Nonce: held.Nonce, To: &to, Value: big.NewInt(0), Gas: 0x30000, GasPrice: prevPrice, Data: []byte{0x01},
+		}), types.NewEIP155Signer(c.chainID), c.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := tx.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Broadcast{TxHash: tx.Hash().Hex(), Nonce: held.Nonce, Signer: c.addr, Raw: raw}
+	}
+	gweiN := func(n int64) *big.Int { return new(big.Int).Mul(big.NewInt(n), big.NewInt(1_000_000_000)) }
+
+	f.mu.Lock()
+	sends := f.rawSends
+	f.mu.Unlock()
+	// Fresh price 1 gwei: the cap is 3 gwei. 2.4 gwei bumped is 3 gwei + 1 wei: over.
+	over := new(big.Int).Div(gweiN(12), big.NewInt(5))
+	huge, _ := new(big.Int).SetString("1"+strings.Repeat("0", 40), 10)
+	for _, p := range []*big.Int{over, gweiN(1000), huge} {
+		if _, err := c.Replace(ctx, to, []byte{0x01}, signedAt(p), func(Broadcast) error {
+			t.Errorf("a replacement past the fee cap was signed (previous price %s)", p)
+			return nil
+		}); !errors.Is(err, ErrFeeCapExceeded) {
+			t.Fatalf("previous price %s: err=%v, want ErrFeeCapExceeded", p, err)
+		}
+	}
+	f.mu.Lock()
+	if f.rawSends != sends {
+		f.mu.Unlock()
+		t.Fatalf("a replacement past the cap reached the node (%d sends)", f.rawSends-sends)
+	}
+	f.mu.Unlock()
+
+	// The fresh price rises to 1000 gwei: the cap is 3000 gwei, and 1000 gwei bumped fits.
+	f.mu.Lock()
+	f.gasPrice = "0xe8d4a51000" // 1000 gwei
+	f.mu.Unlock()
+	prev := signedAt(gweiN(1000))
+	repl, err := c.Replace(ctx, to, []byte{0x01}, prev, nil)
+	if err != nil {
+		t.Fatalf("replace under the cap: %v", err)
+	}
+	want := new(big.Int).Add(gweiN(1250), big.NewInt(1))
+	if tx := heldTx(f, repl.TxHash); tx == nil || tx.GasPrice().Cmp(want) != 0 {
+		t.Fatalf("replacement %v, want price %s", tx, want)
+	}
+}

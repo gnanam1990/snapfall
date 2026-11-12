@@ -85,6 +85,9 @@ type Brain struct {
 	// settlement.stuck is recorded. Guarded by mu.
 	replaceAfterBlocks uint64
 	maxReplacements    int
+	// maxRebroadcasts bounds how often one evicted transaction's same bytes are re-sent
+	// before it is left to fee replacement. Guarded by mu.
+	maxRebroadcasts int
 	// stallSince is the chain head at which this process first saw a recorded broadcast
 	// with no sent_head stall (lower-cased tx hash -> head), the age a record without one
 	// is measured from. In memory only: after a restart the age restarts, which delays a
@@ -152,6 +155,7 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 		settling:                  make(map[string]bool),
 		replaceAfterBlocks:        defaultSettlementReplaceAfterBlocks,
 		maxReplacements:           defaultSettlementMaxReplacements,
+		maxRebroadcasts:           defaultSettlementMaxRebroadcasts,
 		stallSince:                make(map[string]uint64),
 	}
 
