@@ -71,6 +71,35 @@ The 2-USDC job funded by the bridge was then taken through the normal lifecycle,
 
 `jobStatus` is now 4. The customer's Arc balance is unchanged at 3.500282 USDC, because the gas was sponsored.
 
+### The portal's "Accept & settle from my wallet", live
+
+Job `0xdb56f7426a5f4d1d93ca9230a543cb87567c0e6b3992d5cce17dbcb50ef75eac`, 1 USDC, customer = the passkey wallet, operator = the Circle treasury:
+
+- Created by the Circle treasury: https://testnet.arcscan.app/tx/0x701f4b8ce2060b5f233713a2ed4f8c2118cef8e57e3d0bb82b158f28c0f04644
+- Funded by the customer on `/pay`: https://testnet.arcscan.app/tx/0x2a2905dfcf9bd6f6eb4feb0aaaaf7dad6bf1ebbc7847ad9d2f2001dbe3e3ef92
+- Start work: https://testnet.arcscan.app/tx/0x8a004d59366495d79421d4343870e87fa8b0b811ebab7a20885c2dea54507d37
+- Submit delivery: https://testnet.arcscan.app/tx/0x07171436e7276f4f4723dbfb1fdf160da090ff4fc36b6cb66284f8bdea4d1867. The delivery hash `0xb52191c4…84c6` is the SHA-256 of a plain record saying the deliverable is the bootstrap DD stub only.
+- Accepted from the portal, as one sponsored user operation: https://testnet.arcscan.app/tx/0xd76d2647981f9d550cd07a74990d044052a63462bb1b0e8a85edf87b2dae44f0. Receipt status 1, `JobSettled`, 1 USDC moved from JobVault to the treasury, and `jobStatus` is 4.
+
+**What the daemon did.**
+
+- A local daemon bound daemon job `job_c4` to the vault job. In its DD run, the one paid source (4 USDC) was rejected by the owner, and the run reached `delivery_ready`.
+- The owner minted an accept link through the owner API.
+- After the wallet settled on chain, the portal's credential-gated Accept reached the daemon: `POST /api/v1/customer/jobs/job_c4/accept` returned 200.
+- The daemon recorded `settlement.executed` with `actor: customer` and submitted no second transaction.
+- A local indexer pass over blocks 71981000–71985840 found 3 events and 0 reconciliation mismatches.
+- The customer invoice lists only those three on-chain records. Its status stays "partial — awaiting chain records" for the stages that have none.
+- After settlement, the funding agent raised an approval request for a 0.50 USDC advance. It was not approved, and stopping the daemon dropped it.
+
+**How the hosted portal reached it.**
+
+- A Cloudflare quick tunnel pointed at a local proxy, which forwarded only `GET`/`POST` on `/api/v1/customer/jobs/<id>/(accept|acceptance|invoice)`. Everything else got a 404, owner routes and `..` paths included.
+- `SNAPFALL_OWNER_API_URL` was set to the tunnel for the test. The dashboard appends `/customer/…` to that value, so the value must include the `/api/v1` base.
+- The owner token was never set on Vercel.
+- Afterwards the tunnel, the proxy and the daemon were stopped, and the variable was deleted.
+
+An earlier attempt with daemon job `job_c3` stalled: its daemon was stopped while the DD task waited on the approval, so the approval expired with nothing waiting on it. That is why the run was repeated as `job_c4`.
+
 ### Duplicate-burn prevention
 
 Code inspection found that the source wallet's `send` waited for a user-operation receipt before returning its transaction hash, while the bridge only persisted pending state after that promise resolved. A receipt timeout or page closure after submission could therefore leave no saved burn and permit a second attempt. The component also lacked a synchronous start guard and cross-tab locking. These are verified code paths, not proof of which browser event caused the observed duplicate burns.
