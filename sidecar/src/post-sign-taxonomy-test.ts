@@ -16,7 +16,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { PaymentFailed, PolicyViolation, POST_SIGN_CODES, isPostSign, type PaymentCode } from './buyer.js';
+import {
+  PaymentFailed,
+  PolicyViolation,
+  POST_SIGN_CODES,
+  SigningFailed,
+  isPostSign,
+  provenNotSent,
+  type PaymentCode,
+} from './buyer.js';
 
 // Every code buyer.ts defines, split the way its own doc comment splits them.
 const PRE_SIGN: PaymentCode[] = [
@@ -86,4 +94,36 @@ test('a policy violation is never post-sign, whatever its code', () => {
   assert.equal(isPostSign(new PolicyViolation('MERCHANT_CHANGED', 'payee swapped')), false);
   assert.equal(isPostSign(new Error('something else')), false);
   assert.equal(isPostSign(undefined), false);
+});
+
+// ── after the write-ahead: FAILED only for a proven non-settlement ────────────────────────────
+//
+// service.ts records FAILED (daemon: release) only when provenNotSent says so, and RECONCILING
+// (daemon: hold) for everything else. The previous rule asked isPostSign instead, so any
+// exception that was not one of its two codes -- a TypeError on a 200 without a receipt, a null
+// body -- was recorded FAILED although X-PAYMENT had already been delivered.
+
+test('only a signature that was never produced is a proven non-settlement', () => {
+  assert.equal(provenNotSent(new SigningFailed('the signer refused')), true);
+});
+
+test('every other failure after the write-ahead is indeterminate, whatever its type', () => {
+  const indeterminate: Array<[string, unknown]> = [
+    ...[...PRE_SIGN, ...POST_SIGN].map((c): [string, unknown] => [`PaymentFailed ${c}`, new PaymentFailed(c, 'x')]),
+    ['TypeError on a receipt-less 200', new TypeError("Cannot read properties of undefined (reading 'amount')")],
+    ['SyntaxError from a body parse', new SyntaxError('Unexpected token')],
+    ['plain Error', new Error('something else')],
+    ['PolicyViolation', new PolicyViolation('PRICE_CHANGED', 'x')],
+    ['a thrown string', 'boom'],
+    ['undefined', undefined],
+    ['null', null],
+  ];
+  for (const [name, e] of indeterminate) {
+    assert.equal(
+      provenNotSent(e),
+      false,
+      `${name} read as proven-unsent: service.ts would record FAILED and the daemon would release the ` +
+        'hold behind an authorization the seller may already hold',
+    );
+  }
 });

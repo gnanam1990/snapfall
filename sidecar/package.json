@@ -17,6 +17,7 @@
     "test:circle-facilitator-fixture": "tsx src/circle-facilitator-fixture-test.ts",
     "test:h3-vectors": "tsx --test src/h3-golden-vector-test.ts",
     "test:post-sign": "tsx --test src/post-sign-taxonomy-test.ts",
+    "test:service-post-sign": "tsx --test src/service-post-sign-test.ts",
     "test:seller-hostile": "tsx --test src/seller-hostile-test.ts",
     "test:facilitator": "tsx --test src/facilitator-test.ts src/capture-gate-test.ts",
     "test:facilitator-wiring": "tsx --test src/facilitator-wiring-test.ts",

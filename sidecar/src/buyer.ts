@@ -162,6 +162,41 @@ export class PaymentFailed extends Error {
   }
 }
 
+/**
+ * Thrown by `signAndSubmit` when producing the signature itself failed, so NO authorization
+ * exists and nothing was sent. The one post-write-ahead failure that is a proven non-settlement.
+ */
+export class SigningFailed extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SigningFailed';
+  }
+}
+
+/**
+ * True ONLY when a failure raised after the write-ahead record is PROVEN not to have let a signed
+ * authorization out of this process: the signature was never produced. That is the only case the
+ * sidecar may record as FAILED, which the daemon reads as "nothing settled, release the hold".
+ *
+ * Everything else is indeterminate and must be recorded RECONCILING (hold, reconcile): once
+ * X-PAYMENT has been sent the seller holds a bearer instrument, and no shape of its answer -- a
+ * 200 with no receipt, a null body, a v2 PAYMENT-RESPONSE header, a parse error, a bug in our own
+ * post-processing -- proves it will not be settled. This is deliberately a positive test for
+ * "provably unsent" rather than a negative test for "known post-sign codes": an error type nobody
+ * anticipated must default to keeping the hold, never to releasing it.
+ */
+export function provenNotSent(e: unknown): boolean {
+  return e instanceof SigningFailed;
+}
+
+/** Default bound on the 402 probe (headers + challenge body), in ms. SIDECAR_PROBE_TIMEOUT_MS
+ *  overrides it; anything unparseable or non-positive falls back to the default. */
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+function probeTimeoutMs(): number {
+  const v = Number(process.env.SIDECAR_PROBE_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_PROBE_TIMEOUT_MS;
+}
+
 /** Fresh 32-byte nonce. Replay protection lives with the seller; uniqueness lives here.
  *  H3 supplies a deterministic nonce instead (derived from the intent hash) so the seller's
  *  replay guard survives a sidecar restart; this random default is for non-H3 callers. */
@@ -190,9 +225,13 @@ export async function probeChallenge(resource: string, chainId: number): Promise
     throw new PaymentFailed('RESOURCE_NOT_FOUND', `resource must be http(s), got ${url.protocol}`);
   }
 
+  // Bounded. The seller chooses how long an unbounded probe lasts, and the H3 caller is holding a
+  // budget reservation for exactly that long; the signal covers the headers AND the body read in
+  // readChallenge, so a seller that trickles its challenge is cut off too (a body aborted mid-read
+  // parses as no challenge: CHALLENGE_UNAVAILABLE, still pre-sign).
   let probe: Response;
   try {
-    probe = await fetch(resource, { method: 'GET' });
+    probe = await fetch(resource, { method: 'GET', signal: AbortSignal.timeout(probeTimeoutMs()) });
   } catch (e) {
     throw new PaymentFailed('UPSTREAM_UNREACHABLE', `cannot reach ${resource}: ${(e as Error).message}`);
   }
@@ -323,7 +362,9 @@ async function signAuthorization(
  * not re-probe, so the signed message binds the exact validated terms (no TOCTOU).
  *
  * @throws PaymentFailed  code `PAYMENT_REJECTED` (seller said no) or `FACILITATOR_ERROR`
- *                        (transport failed AFTER signing — the authorization may still settle).
+ *                        (transport failed AFTER signing, or a 200 without a usable receipt —
+ *                        the authorization may still settle).
+ * @throws SigningFailed  the signature was never produced; nothing left the process.
  */
 export async function signAndSubmit(
   accept: AcceptOption,
@@ -332,8 +373,16 @@ export async function signAndSubmit(
   chainId: number,
   authNonce?: Hex,
 ): Promise<PurchaseResult> {
-  const payment = await signAuthorization(account, accept, chainId, authNonce);
+  let payment: PaymentPayload;
+  try {
+    payment = await signAuthorization(account, accept, chainId, authNonce);
+  } catch (e) {
+    // No signature was produced, so nothing can be presented for settlement. See provenNotSent.
+    throw new SigningFailed(`signing the authorization for ${intent.resource} failed: ${(e as Error).message}`);
+  }
 
+  // ── From here the signed authorization is about to leave, or has left, this process. Every
+  //    failure below is post-sign: PAYMENT_REJECTED or FACILITATOR_ERROR, never a bare throw. ──
   let paid: Response;
   try {
     paid = await fetch(intent.resource, {
@@ -359,9 +408,9 @@ export async function signAndSubmit(
   // and delivered, so the outcome is unknown, not a clean failure. Surface it as
   // FACILITATOR_ERROR (may still settle; reconcile) rather than letting a raw
   // SyntaxError escape (review fix).
-  let parsed: PurchaseResult;
+  let parsed: unknown;
   try {
-    parsed = (await paid.json()) as PurchaseResult;
+    parsed = await paid.json();
   } catch (e) {
     throw new PaymentFailed(
       'FACILITATOR_ERROR',
@@ -369,20 +418,45 @@ export async function signAndSubmit(
         `the signed authorization was submitted and may still settle — reconcile`,
     );
   }
-  const { data, receipt } = parsed;
+  const body = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : null;
 
-  // Prefer the header receipt when present (FR-X402-004 evidence chain).
-  const headerReceipt = paid.headers.get('x-payment-response');
-  const finalReceipt = headerReceipt
-    ? decodeBase64Json<PurchaseResult['receipt']>(headerReceipt) ?? receipt
-    : receipt;
+  // The receipt, from the first transport that carries a usable one: the v1 X-PAYMENT-RESPONSE
+  // header (FR-X402-004 evidence chain), then the v2 PAYMENT-RESPONSE header, then the body.
+  // A 200 with NONE of them -- a plain resource body, a null body, or a v2 settlement response
+  // that is not a Snapfall receipt -- is not a failure: the seller holds the authorization and
+  // may settle it, so it is FACILITATOR_ERROR (post-sign, reconcile), never a TypeError that the
+  // service would record as FAILED and the daemon would read as "release".
+  const candidates: unknown[] = [];
+  for (const h of ['x-payment-response', 'payment-response']) {
+    const raw = paid.headers.get(h);
+    if (raw) candidates.push(decodeBase64Json<unknown>(raw.trim()));
+  }
+  if (body) candidates.push(body.receipt);
+  const receipt = candidates.find(isReceipt);
+  if (!receipt) {
+    throw new PaymentFailed(
+      'FACILITATOR_ERROR',
+      `seller returned 200 for ${intent.resource} without a usable payment receipt ` +
+        `(body ${body === null ? JSON.stringify(parsed) : 'has no receipt'}; ` +
+        `x-payment-response ${paid.headers.has('x-payment-response') ? 'unusable' : 'absent'}; ` +
+        `payment-response ${paid.headers.has('payment-response') ? 'unusable' : 'absent'}); ` +
+        'the signed authorization was delivered and may still settle — reconcile',
+    );
+  }
 
   return {
-    data,
-    receipt: finalReceipt,
+    data: body?.data ?? null,
+    receipt,
     authorizationSignature: payment.payload.signature,
     amountPaid: BigInt(accept.amount),
   };
+}
+
+/** A receipt the H3 record can be built from: every field it reads is a string. */
+function isReceipt(r: unknown): r is PurchaseResult['receipt'] {
+  if (typeof r !== 'object' || r === null) return false;
+  const o = r as Record<string, unknown>;
+  return ['amount', 'payer', 'payee', 'nonce', 'settlement'].every((k) => typeof o[k] === 'string');
 }
 
 /**
