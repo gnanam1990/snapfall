@@ -21,23 +21,35 @@ func mainnetWallets(k string) (string, bool) {
 	return "", false
 }
 
-// Nothing is deployed to mainnet yet, so the artifact commits no contract addresses. Loading
-// it with none supplied must FAIL — a mainnet config that silently resolved to a zero address
-// would point the indexer, and eventually a signer, at nothing.
-func TestLoad_MainnetArtifactFailsClosedWithoutAddresses(t *testing.T) {
-	_, err := Load(mainnetArtifact(), mainnetWallets)
-	if err == nil {
-		t.Fatal("arc-mainnet.json must not load while its contract addresses are unknown")
+// The 12 Nov 2026 mainnet deployment (docs/addresses.md, "Arc mainnet") is committed, so the
+// artifact loads with no address env at all, and it must resolve to exactly those contracts:
+// a wrong committed address points the indexer, and eventually a signer, at someone else's code.
+func TestLoad_MainnetArtifactCommitsTheDeployment(t *testing.T) {
+	d, err := Load(mainnetArtifact(), mainnetWallets)
+	if err != nil {
+		t.Fatalf("arc-mainnet.json must load from its committed addresses: %v", err)
 	}
-	// The failure has to be the missing address, not any error: a typo, a missing ABI or a bad
-	// wallet would also fail Load, and would let this test pass while proving nothing.
-	if !strings.Contains(err.Error(), "no committed address and SNAPFALL_JOB_VAULT_ADDRESS is not set") {
-		t.Fatalf("expected the missing-address failure, got: %v", err)
+	for name, got := range map[string]string{
+		"jobVault":    d.Contracts.JobVault.Address,
+		"floatPool":   d.Contracts.FloatPool.Address,
+		"auditAnchor": d.Contracts.AuditAnchor.Address,
+	} {
+		want := map[string]string{
+			"jobVault":    "0x67FeD7B5eaA966c4cc2738d1530f230B31B6f372",
+			"floatPool":   "0xD2FaB9CD08a73B476e8DC81Afb7b57564dEef08f",
+			"auditAnchor": "0xe8886A39158C7CC504F31789513b926704CCaB4D",
+		}[name]
+		if !strings.EqualFold(got, want) {
+			t.Fatalf("%s %s, want %s", name, got, want)
+		}
+	}
+	if d.Network.StartBlock != 30820652 {
+		t.Fatalf("startBlock %d, want 30820652 (the AuditAnchor creation block)", d.Network.StartBlock)
 	}
 }
 
-// Once a deployment exists and its addresses are in the environment, the same artifact loads
-// and carries the mainnet network identity.
+// An address in the environment still overrides the committed one (a redeploy is pointed at
+// before its record is committed), and the artifact carries the mainnet network identity.
 func TestLoad_MainnetArtifactResolvesFromEnv(t *testing.T) {
 	const (
 		jobVault    = "0x00000000000000000000000000000000000000A1"

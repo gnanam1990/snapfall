@@ -344,6 +344,72 @@ The sidecar does not read these addresses.
 
 That would also leave the live proofs above on a pool that is no longer the active one.
 
+## 9. Arc mainnet (12 Nov 2026)
+
+The same source as §8 (`main` at `dc07e9d`) was deployed on **Arc mainnet, chain 5042**, with
+`script/Deploy.s.sol` from a fresh deployer `0xb6e55668efB27a1571DBe14A9e388eed8A654fAC`. The deployer
+was at nonce 0 on both networks and was used for nothing else. The deploy was signed from an
+encrypted Foundry keystore (`--account snapfall-mainnet`).
+
+| Contract | Address | Created in block |
+| --- | --- | --- |
+| AuditAnchor | `0xe8886A39158C7CC504F31789513b926704CCaB4D` | 30,820,652 |
+| JobVault | `0x67FeD7B5eaA966c4cc2738d1530f230B31B6f372` | 30,820,657 |
+| FloatPool | `0xD2FaB9CD08a73B476e8DC81Afb7b57564dEef08f` | 30,820,660 |
+
+The 9 transactions all have status 1. In order:
+
+| Step | Block | Tx |
+| --- | --- | --- |
+| AuditAnchor created | 30,820,652 | `0x2626cf7a…a810` |
+| JobVault created | 30,820,657 | `0x692649a6…3b6c` |
+| FloatPool created | 30,820,660 | `0x6a88ab78…2d03` |
+| `wireFloatPool` | 30,820,662 | `0x1e7e8a7c…07d1` |
+| `wireJobVault` | 30,820,667 | `0x58de5082…f926` |
+| `setCaps` | 30,820,671 | `0xd77583d8…1271` |
+| `setMaxJobPayment` | 30,820,676 | `0xbcef320c…c50f` |
+| `transferAdmin` on FloatPool | 30,820,681 | `0x32bf1dd3…3bff` |
+| `transferAdmin` on JobVault | 30,820,687 | `0x7bc89678…7f95` |
+
+Total gas paid was 0.0856 USDC.
+
+**Deliberately tiny.** All three caps are 1.00 USDC: `maxTotalExposure`, `maxAdvance` and
+`maxJobPayment`. The most this deployment can ever lose is 1 USDC.
+
+Read back from chain afterwards:
+
+- **Wiring:** both directions are wired.
+- **Caps and state:** the caps read as above, `totalWrittenOff` is 0, neither contract is paused, and `depositAllowlistEnabled` is true.
+- **Fail closed (`eth_call`, nothing sent):**
+  - `createJob` for 2 USDC reverts `JobTooLarge`.
+  - A deposit from any address but the deployer reverts `DepositorNotAllowed`.
+
+**Admin handover in progress.** Both contracts still have the deployer as `admin`, with
+`pendingAdmin` set to `0x0f094eec6B569c3f33033102ad3ce33EAbFeb2fB`. That signer can call
+`acceptAdmin()` on each contract after `adminTransferAcceptableAt`:
+
+- FloatPool: 1794639448 (14 Nov 2026, 06:57 UTC);
+- JobVault: 1794639451.
+
+Until then the deployer can cancel with `transferAdmin(<deployer>)`. Watch for any
+`AdminTransferStarted` or `CapsRaiseQueued` you did not start.
+
+```bash
+export ARCM=https://rpc.mainnet.arc.io
+export FPM=0xD2FaB9CD08a73B476e8DC81Afb7b57564dEef08f JVM=0x67FeD7B5eaA966c4cc2738d1530f230B31B6f372
+cast call $FPM "maxTotalExposure()(uint256)" --rpc-url $ARCM
+cast call $JVM "maxJobPayment()(uint256)" --rpc-url $ARCM
+cast call $FPM "admin()(address)" --rpc-url $ARCM
+cast call $FPM "pendingAdmin()(address)" --rpc-url $ARCM
+cast call $JVM "pendingAdmin()(address)" --rpc-url $ARCM
+```
+
+**Not done:**
+
+- No LP capital, no org rate, no job, no advance.
+- Nothing has run on mainnet, and no service is pointed at it. `deployments/arc-mainnet.json` now commits these addresses, but the hosted dashboard is a testnet build (`SNAPFALL_NETWORK` unset).
+- Unaudited.
+
 ## Security review
 
 The settlement waterfall (§4) was reviewed against **every reachable path** through

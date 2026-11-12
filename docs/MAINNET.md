@@ -30,6 +30,10 @@ separate set, and its caps, allowlist and fail-closed reverts were read back fro
 ([addresses §8](addresses.md#8-a-second-deployment-with-the-mainnet-capital-controls-12-nov-2026)).
 No service points at it yet.
 
+**Deployed on Arc mainnet on 12 Nov 2026**, with every cap at 1.00 USDC and the admin handover to
+the owner's wallet in progress. See
+[addresses §9](addresses.md#9-arc-mainnet-12-nov-2026) and `deployments/arc-mainnet.json`.
+
 ## The controls
 
 All of them are admin-only and **fail closed**: a freshly deployed pool lends nothing and
