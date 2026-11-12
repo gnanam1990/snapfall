@@ -152,6 +152,10 @@ jobs:
         # Twelve bodies that each used to exit the process, including a well-formed payment whose
         # signature does not recover. A dead seller mid-demo is unrecoverable on stage.
         run: npm run test:seller-hostile
+      - name: Post-sign outcomes keep the budget hold
+        # A signature that has left the sidecar is RECONCILING, never FAILED, and a pay in
+        # flight answers PAYMENT_IN_PROGRESS on /v1/status, never PAYMENT_NOT_FOUND.
+        run: npm run test:service-post-sign
       # Work-split acceptance criterion AT-18.
       - name: H3 cross-language golden vectors
         # Pins intentHash/paymentId/authNonce against the identical constants asserted in
