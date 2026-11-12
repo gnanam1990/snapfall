@@ -299,7 +299,7 @@ operator liquidity, one automated on independent LP liquidity — is a stronger 
 
 The contracts above predate the capital controls in `docs/MAINNET.md`. The current source
 (`main` at `7fad758`) was deployed separately on Arc Testnet with `script/Deploy.s.sol`,
-from the same deployer `0x99B7…792D`. **No service points at it yet.** The dashboard, daemon
+from the same deployer `0x99B7…792D`. It was deployed with `forge script` directly, not through `daemon/cmd/redeploy-testnet`, so no redeploy-cadence marker was recorded. **No service points at it yet.** The dashboard, daemon
 and sidecar still use the deployment above, so every proof on this page is unaffected.
 
 | Contract | Address | Created in block |
@@ -334,10 +334,13 @@ cast call $FP2 "depositAllowlistEnabled()(bool)" --rpc-url $ARC
 deployer and no org rate, and has made no advance. Moving the services over means doing all of
 the following together:
 
-- seed the pool;
-- set a rate;
-- point `deployments/arc-testnet.json` at these addresses with `startBlock` 71,996,904;
+- seed the pool and set a rate;
+- point `deployments/arc-testnet.json` at these addresses with `startBlock` 71,996,904, and clear any address or start-block overrides in the environment;
+- reset the H1 indexer's cursor (`chain_cursors`, keyed by chain id and stream, not by contract), because otherwise a stored cursor above the new `startBlock` skips the new contracts' early events;
+- restart the indexer and the daemon in the order `docs/RUNBOOK.md` gives;
 - redeploy the dashboard.
+
+The sidecar does not read these addresses.
 
 That would also leave the live proofs above on a pool that is no longer the active one.
 
