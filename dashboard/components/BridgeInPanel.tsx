@@ -30,10 +30,11 @@ import {
 import { fundCalls, type WalletCall } from '@/lib/customerWallet';
 import type { ChainWallet, PasskeySession } from '@/lib/passkeyWallet';
 import { formatUsdcExact } from '@/lib/format';
+import { submitBurnOnce, burnStorageKey } from '@/lib/cctpBurnGuard';
 
 type Pending = PendingBurn;
 
-const storeKey = (vaultJobId: string) => `snapfall.cctp.${vaultJobId}`;
+const storeKey = burnStorageKey;
 
 function loadPending(vaultJobId: string, env: CctpEnv): Pending | null {
   try {
@@ -45,9 +46,9 @@ function loadPending(vaultJobId: string, env: CctpEnv): Pending | null {
 function savePending(vaultJobId: string, p: Pending | null) {
   try {
     if (p) window.localStorage.setItem(storeKey(vaultJobId), JSON.stringify(p));
-    else window.localStorage.removeItem(storeKey(vaultJobId));
+    else window.localStorage.setItem(storeKey(vaultJobId), JSON.stringify({ status: 'completed' }));
   } catch {
-    // Storage blocked: the flow still completes in this tab; only resuming after a close is lost.
+    // Keep any prior pending record on write failure: never silently authorize another burn.
   }
 }
 
@@ -76,6 +77,7 @@ export function BridgeInPanel({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const polling = useRef(false);
+  const starting = useRef(false);
 
   useEffect(() => {
     if (!env || !source) return;
@@ -167,14 +169,18 @@ export function BridgeInPanel({
   );
 
   const start = useCallback(async () => {
-    if (!env || !source || !src || !plan) return;
+    if (!env || !source || !src || !plan || starting.current || polling.current) return;
+    starting.current = true;
     setBusy(true);
     setError(null);
     try {
       setStatus(`Moving USDC from ${source.label}…`);
-      const tx = await src.send(burnCalls({ env, source, arcRecipient: session.address, burn: plan.burn, maxFee: plan.maxFee }));
-      const p = { domain: source.domain, tx };
-      savePending(vaultJobId, p);
+      if (!navigator.locks) throw new Error("Safe transfer locking is unavailable. Nothing was submitted.");
+      const p = await navigator.locks.request(storeKey(vaultJobId), () =>
+        submitBurnOnce(window.localStorage, storeKey(vaultJobId), source.domain, () =>
+          src.send(burnCalls({ env, source, arcRecipient: session.address, burn: plan.burn, maxFee: plan.maxFee })),
+        ),
+      );
       setPending(p);
       setBusy(false);
       await finish(p);
@@ -182,6 +188,8 @@ export function BridgeInPanel({
       setError((e as Error).message);
       setStatus(null);
       setBusy(false);
+    } finally {
+      starting.current = false;
     }
   }, [env, source, src, plan, session, vaultJobId, finish]);
 

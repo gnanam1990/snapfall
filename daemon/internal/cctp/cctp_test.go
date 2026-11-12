@@ -170,3 +170,20 @@ func TestAwait_TimesOutWithTheBurnStanding(t *testing.T) {
 		t.Fatalf("timeout: %v", err)
 	}
 }
+
+func TestAwait_AcceptsTwentyByteRecipient(t *testing.T) {
+	body := message("complete", "6", recipient.Hex())
+	_, err := newIris(t, &fakeIris{responses: []string{body}}).Await(context.Background(), 26, "0xburn", 6, recipient, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAwait_RejectsNonzeroRecipientPadding(t *testing.T) {
+	padded := "0x01" + strings.Repeat("00", 11) + strings.TrimPrefix(recipient.Hex(), "0x")
+	body := message("complete", "6", padded)
+	_, err := newIris(t, &fakeIris{responses: []string{body}}).Await(context.Background(), 26, "0xburn", 6, recipient, time.Second)
+	if err == nil {
+		t.Fatal("accepted nonzero recipient padding")
+	}
+}
