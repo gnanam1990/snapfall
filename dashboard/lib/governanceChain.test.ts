@@ -321,6 +321,50 @@ test('a scan that runs out of budget is partial, says how far it got, and contin
   assert.equal(calls[3]?.from, 81, 'the second load resumed where the first stopped');
 });
 
+test('one eth_getLogs slower than the remaining budget is cut off: partial, cursor kept, next load resumes', async () => {
+  reset();
+  const ops: OperatorFake = { queued: { [ROGUE]: NOW + 10n }, logs: [[90, OT.queued, ROGUE]] };
+  const fast = fakeRPC(basePool, baseVault, { operators: ops });
+  const signals: AbortSignal[] = [];
+  let getLogs = 0;
+  // The second eth_getLogs never answers and ignores its signal: only the scan's own deadline can
+  // end the wait. Real clock, so the budget is real time.
+  const stalls = (async (method: string, params: unknown[], options?: { signal?: AbortSignal }) => {
+    if (method === 'eth_getLogs') {
+      if (options?.signal) signals.push(options.signal);
+      getLogs += 1;
+      if (getLogs === 2) return new Promise(() => {});
+    }
+    return fast(method, params);
+  }) as RPCTransport;
+  const discovery = { startBlock: 51, chunkBlocks: 10, budgetMs: 150 };
+
+  const started = Date.now();
+  const first = await loadGovernance({ ...config, operatorDiscovery: discovery }, stalls);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 1_500, `the load returned within its budget, not with the stalled request (${elapsed}ms)`);
+  assert.ok(first.status === 'ok' && first.operatorAllowlist.status === 'ok');
+  if (first.status !== 'ok' || first.operatorAllowlist.status !== 'ok') return;
+  const d = first.operatorAllowlist.discovery;
+  assert.equal(d.status, 'partial');
+  assert.equal(d.status === 'partial' && d.throughBlock, 60, 'the stalled range (61-70) was not committed');
+  assert.match(d.status === 'partial' ? d.reason : '', /outran the scan budget/);
+  assert.equal(signals.length, 2, 'every eth_getLogs carries a deadline signal');
+  assert.equal(signals[1].aborted, true, 'the stalled request was told to stop');
+  assert.equal(signals[0].aborted, false, 'a request that answered in time was not');
+
+  const calls: Array<{ from: number; to: number }> = [];
+  const second = await loadGovernance(
+    { ...config, operatorDiscovery: discovery },
+    fakeRPC(basePool, baseVault, { operators: { ...ops, getLogsCalls: calls } }),
+  );
+  assert.ok(second.status === 'ok' && second.operatorAllowlist.status === 'ok');
+  if (second.status !== 'ok' || second.operatorAllowlist.status !== 'ok') return;
+  assert.equal(second.operatorAllowlist.discovery.status, 'complete');
+  assert.equal(calls[0]?.from, 61, 'the next load asks for the cut-off range again');
+  assert.equal(second.operatorAllowlist.pendingGrants[0]?.address, ROGUE.toLowerCase());
+});
+
 test('a provider range cap shrinks the scan window instead of failing', async () => {
   reset();
   const calls: Array<{ from: number; to: number }> = [];

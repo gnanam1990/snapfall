@@ -199,6 +199,7 @@ const INTENTIONALLY_SILENT: Record<string, string> = {
   'settlement.dropped': 'never mined (nonce moved past it); nothing settled',
   'settlement.unseen': 'one look at a broadcast the node does not know; it resolves nothing by itself',
   'settlement.rebroadcast': 'the same signed bytes sent again; the broadcast stays open, nothing landed',
+  'settlement.stuck': 'replacements exhausted for an unmined settlement; an alert for the owner, nothing moved',
   'task.withheld': 'a QA hold on delivery, not a movement of money',
   'freeze.engaged': 'a control-plane state, not a money beat',
   'freeze.lifted': 'a control-plane state, not a money beat',

@@ -62,19 +62,27 @@ export function issueSessionValue(secret: string, now: number = Date.now()): { v
 
 export type SessionCheck = 'valid' | 'missing' | 'malformed' | 'bad-signature' | 'expired';
 
-export function verifySessionValue(secret: string, value: string | null | undefined, now: number = Date.now()): SessionCheck {
-  if (!value) return 'missing';
+function checkSessionValue(
+  secret: string,
+  value: string | null | undefined,
+  now: number,
+): { check: Exclude<SessionCheck, 'valid'> } | { check: 'valid'; expiresAt: number } {
+  if (!value) return { check: 'missing' };
   const parts = value.split('.');
-  if (parts.length !== 4) return 'malformed';
+  if (parts.length !== 4) return { check: 'malformed' };
   const [version, exp, nonce, presentedMac] = parts;
-  if (version !== VERSION || !/^\d{1,16}$/.test(exp) || !/^[A-Za-z0-9_-]{16,64}$/.test(nonce)) return 'malformed';
+  if (version !== VERSION || !/^\d{1,16}$/.test(exp) || !/^[A-Za-z0-9_-]{16,64}$/.test(nonce)) return { check: 'malformed' };
   const expected = mac(secret, `${version}.${exp}.${nonce}`);
-  if (!safeEqual(presentedMac, expected)) return 'bad-signature';
+  if (!safeEqual(presentedMac, expected)) return { check: 'bad-signature' };
   const expiresAt = Number(exp);
   // A signed value is unforgeable, but a lifetime longer than one TTL can only come from a clock
   // that was wrong at issue time; refuse it rather than honour an indefinite session.
-  if (expiresAt <= now || expiresAt > now + OWNER_SESSION_TTL_MS + 60_000) return 'expired';
-  return 'valid';
+  if (expiresAt <= now || expiresAt > now + OWNER_SESSION_TTL_MS + 60_000) return { check: 'expired' };
+  return { check: 'valid', expiresAt };
+}
+
+export function verifySessionValue(secret: string, value: string | null | undefined, now: number = Date.now()): SessionCheck {
+  return checkSessionValue(secret, value, now).check;
 }
 
 /**
@@ -105,6 +113,20 @@ export function readCookies(header: string | null, name: string): string[] {
 /** The first value of one cookie, or null. */
 export function readCookie(header: string | null, name: string): string | null {
   return readCookies(header, name)[0] ?? null;
+}
+
+/**
+ * When the longest-lived valid presented session ends (ms since epoch), or null when none is valid.
+ * Anything held open on the strength of a session (the owner event stream) must end by then, so
+ * that continuing past it means passing the guard again.
+ */
+export function validSessionExpiry(secret: string, values: readonly string[], now: number = Date.now()): number | null {
+  let latest: number | null = null;
+  for (const value of values.slice(0, MAX_SESSION_CANDIDATES)) {
+    const result = checkSessionValue(secret, value, now);
+    if (result.check === 'valid' && (latest === null || result.expiresAt > latest)) latest = result.expiresAt;
+  }
+  return latest;
 }
 
 /** 'valid' when any presented value is a valid session; otherwise the first value's failure. */

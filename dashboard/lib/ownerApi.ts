@@ -38,6 +38,7 @@ import {
   OWNER_SECRET_MIN_LENGTH,
   ownerSessionCookieName,
   readCookies,
+  validSessionExpiry,
   verifySessionValues,
   type SessionCheck,
 } from './ownerSession';
@@ -218,11 +219,21 @@ export function ownerSessionState(req: Request, secret: string, now: number = Da
   return verifySessionValues(secret, readCookies(req.headers.get('cookie'), name), now);
 }
 
+/** When the longest-lived valid owner session on this request ends, or null when there is none. */
+export function ownerSessionExpiry(req: Request, secret: string, now: number = Date.now()): number | null {
+  const name = ownerSessionCookieName(secureCookies());
+  return validSessionExpiry(secret, readCookies(req.headers.get('cookie'), name), now);
+}
+
 /** Proof that requireOwnerRequest admitted this request. Nominal (private field) and checked at
- *  runtime, so ownerAuthHeaders cannot be fed a hand-made object. */
+ *  runtime, so ownerAuthHeaders cannot be fed a hand-made object. `sessionExpiresAt` is when the
+ *  session that admitted it ends: a response held open past then (the event stream) must close. */
 class OwnerGrantImpl {
   readonly #admitted = true;
-  constructor(readonly base: string) {}
+  constructor(
+    readonly base: string,
+    readonly sessionExpiresAt: number,
+  ) {}
   static is(value: unknown): value is OwnerGrantImpl {
     return typeof value === 'object' && value !== null && #admitted in value;
   }
@@ -255,7 +266,8 @@ export function requireOwnerRequest(req: Request, now: number = Date.now()): Own
   const badHost = checkHost(req);
   if (badHost) return { ok: false, response: badHost };
 
-  if (ownerSessionState(req, config.secret, now) !== 'valid') {
+  const sessionExpiresAt = ownerSessionExpiry(req, config.secret, now);
+  if (sessionExpiresAt === null) {
     return { ok: false, response: deny(401, 'OWNER_SIGN_IN_REQUIRED', 'Sign in as the owner to use this dashboard’s owner controls.') };
   }
 
@@ -263,7 +275,7 @@ export function requireOwnerRequest(req: Request, now: number = Date.now()): Own
     const csrf = checkSameOriginJson(req);
     if (csrf) return { ok: false, response: csrf };
   }
-  return { ok: true, grant: new OwnerGrantImpl(base) };
+  return { ok: true, grant: new OwnerGrantImpl(base, sessionExpiresAt) };
 }
 
 /** Upstream headers carrying the owner bearer. Only obtainable with a grant from

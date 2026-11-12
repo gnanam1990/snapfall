@@ -10,7 +10,13 @@
  */
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { announceOwnerSessionChange, readOwnerSession, type OwnerSessionStatus } from '@/lib/ownerSessionClient';
+import {
+  OWNER_SESSION_EVENT,
+  announceOwnerSessionChange,
+  listenForOwnerSessionChanges,
+  readOwnerSession,
+  type OwnerSessionStatus,
+} from '@/lib/ownerSessionClient';
 
 export default function OwnerSignIn({ onSignedIn, className = '' }: { onSignedIn?: () => void; className?: string }) {
   const [status, setStatus] = useState<OwnerSessionStatus | null>(null);
@@ -112,7 +118,13 @@ export function OwnerSessionPanel() {
   const [busy, setBusy] = useState(false);
 
   const refresh = () => void readOwnerSession().then(setStatus);
-  useEffect(refresh, []);
+  useEffect(() => {
+    refresh();
+    // A sign-in or sign-out in another tab re-reads this panel too.
+    listenForOwnerSessionChanges();
+    window.addEventListener(OWNER_SESSION_EVENT, refresh);
+    return () => window.removeEventListener(OWNER_SESSION_EVENT, refresh);
+  }, []);
 
   async function signOut() {
     setBusy(true);

@@ -281,6 +281,28 @@ async function settledWithin(p: Promise<unknown>, ms: number): Promise<boolean> 
   }
 }
 
+/**
+ * `p`, but rejected with `signal.reason` as soon as `signal` aborts, even when whatever produced
+ * `p` ignores the signal: a transport cannot hold the scan past its deadline by not listening.
+ */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function scanOperatorEvents(
   rpc: RPCTransport,
   pool: string,
@@ -359,17 +381,41 @@ async function extendOperatorScan(
     }
     const from = state.throughBlock + 1n;
     const end = from + window - 1n < head ? from + window - 1n : head;
+    // Each request gets only what is left of the budget. Checking the budget between requests is
+    // not enough: one slow eth_getLogs would otherwise hold the governance load past it.
+    const call = new AbortController();
+    const timer = setTimeout(() => call.abort(new Error('operator scan budget spent')), Math.max(0, deadline - now()));
     let logs: RPCLog[];
     try {
-      logs = await rpc<RPCLog[]>('eth_getLogs', [
-        {
-          address: pool,
-          fromBlock: hexBlock(from),
-          toBlock: hexBlock(end),
-          topics: [[OPERATOR_TOPIC.allowed, OPERATOR_TOPIC.queued, OPERATOR_TOPIC.cancelled]],
-        },
-      ]);
+      logs = await untilAborted(
+        rpc<RPCLog[]>(
+          'eth_getLogs',
+          [
+            {
+              address: pool,
+              fromBlock: hexBlock(from),
+              toBlock: hexBlock(end),
+              topics: [[OPERATOR_TOPIC.allowed, OPERATOR_TOPIC.queued, OPERATOR_TOPIC.cancelled]],
+            },
+          ],
+          { signal: call.signal },
+        ),
+        call.signal,
+      );
     } catch (error) {
+      if (call.signal.aborted) {
+        // Out of time, not refused: nothing from this range is committed, and the next load asks
+        // for the same range again from the unchanged cursor.
+        return {
+          state,
+          discovery: {
+            status: 'partial',
+            fromBlock,
+            throughBlock: through(),
+            reason: `operator events scanned through block ${through()} of ${head}; an eth_getLogs request outran the scan budget, and the scan continues on the next load`,
+          },
+        };
+      }
       if (isRangeError(error) && window > 1n) {
         window = window / 2n > 0n ? window / 2n : 1n;
         state.rangeCap = window; // the provider's real cap, found once and kept with the cursor
@@ -377,6 +423,8 @@ async function extendOperatorScan(
       }
       // The message is not passed on: a provider error can echo the RPC URL and its key.
       return failed(`the RPC failed the operator-event scan (eth_getLogs) after block ${through()}`);
+    } finally {
+      clearTimeout(timer);
     }
     // A malformed answer stops discovery, not the governance view: the caps and the addresses
     // already found are still read, and the snapshot says the scan did not finish. Nothing from

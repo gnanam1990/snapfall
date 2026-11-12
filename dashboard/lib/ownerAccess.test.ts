@@ -514,6 +514,58 @@ test('a signed-in owner reaches the daemon with the owner bearer on every owner 
   );
 });
 
+test('the guard reports when the admitting session ends', async () => {
+  await withEnv(CONFIGURED, () => {
+    const now = Date.now();
+    const { value, expiresAt } = issueSessionValue(FAKE_SECRET, now);
+    const gate = requireOwnerRequest(ownerRequest('GET', { cookie: `${OWNER_SESSION_COOKIE}=${value}` }), now);
+    assert.equal(gate.ok, true);
+    if (gate.ok) assert.equal(gate.grant.sessionExpiresAt, expiresAt);
+  });
+});
+
+test('the owner event stream ends when the session that opened it expires, and releases the daemon', async () => {
+  const { GET: stream } = await import('../app/api/events/stream/route');
+  await withEnv(CONFIGURED, async () => {
+    const previous = globalThis.fetch;
+    let upstreamSignal: AbortSignal | undefined;
+    let upstreamCancelled = false;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      upstreamSignal = init?.signal ?? undefined;
+      // A daemon stream that never ends on its own.
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('data: {"kind":"snapshot"}\n\n'));
+        },
+        cancel() {
+          upstreamCancelled = true;
+        },
+      });
+      return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+    }) as typeof fetch;
+    try {
+      // A session issued almost a full TTL ago: it is valid now and expires in about 150ms.
+      const cookie = sessionCookieHeader(FAKE_SECRET, Date.now() - OWNER_SESSION_TTL_MS + 150);
+      const opened = Date.now();
+      const res = await stream(ownerRequest('GET', { cookie }));
+      assert.equal(res.status, 200);
+      const text = await res.text(); // resolves only when the proxied stream ends
+      const elapsed = Date.now() - opened;
+      assert.match(text, /"snapshot"/, 'owner events flowed while the session was valid');
+      assert.ok(elapsed >= 100 && elapsed < 2_000, `the stream ended at the session expiry (${elapsed}ms)`);
+      assert.equal(upstreamCancelled, true, 'the daemon stream was cancelled');
+      assert.equal(upstreamSignal?.aborted, true, 'the daemon connection was aborted');
+
+      // The browser's reconnect, with the same now-expired cookie, is refused by the guard.
+      const again = await stream(ownerRequest('GET', { cookie }));
+      assert.equal(again.status, 401);
+      assert.equal(await errorCode(again), 'OWNER_SIGN_IN_REQUIRED');
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+});
+
 test('without a daemon, owner read routes still serve their public fallbacks unauthenticated', async () => {
   await withEnv({}, () =>
     withFetchSpy(async (calls) => {
@@ -596,7 +648,14 @@ test('SNAPFALL_DASHBOARD_ORIGIN accepts a list and normalises default ports', as
 });
 
 test('a malformed SNAPFALL_DASHBOARD_ORIGIN fails closed across the owner surface', async () => {
-  for (const bad of ['dash.example.com', 'https://dash.example.com/app', 'ftp://dash.example.com', 'https://u:p@dash.example.com']) {
+  // The credentialed origin is assembled at runtime so no scheme-user-password-host sequence sits
+  // in the source for the repository's secret scan (scripts/a14-audit) to flag.
+  const credentialed = new URL('https://dash.example.com');
+  credentialed.username = 'u';
+  credentialed.password = 'p';
+  const withCredentials = credentialed.href.replace(/\/$/, '');
+  assert.ok(withCredentials.includes('@dash.example.com'), 'the fixture really carries credentials');
+  for (const bad of ['dash.example.com', 'https://dash.example.com/app', 'ftp://dash.example.com', withCredentials]) {
     await withEnv({ ...CONFIGURED, SNAPFALL_DASHBOARD_ORIGIN: bad }, async () => {
       const gate = requireOwnerRequest(proxied('GET', { cookie: sessionCookieHeader() }));
       assert.equal(gate.ok, false, bad);

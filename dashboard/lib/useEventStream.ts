@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { OWNER_SESSION_EVENT, readOwnerSession } from './ownerSessionClient';
+import { OWNER_SESSION_EVENT, listenForOwnerSessionChanges, readOwnerSession } from './ownerSessionClient';
 import type { StreamMessage } from './types';
 
 /** 'signed-out': a daemon is connected but this visitor has no owner session, so the stream
@@ -20,6 +20,10 @@ export type StreamStatus = 'connecting' | 'live' | 'reconnecting' | 'signed-out'
  * EventSource cannot see a status code, so when the source closes the hook asks
  * /api/owner/session whether the cause is a missing owner session. If it is, it stops retrying
  * and reports 'signed-out' until a sign-in is announced (OWNER_SESSION_EVENT), then reconnects.
+ *
+ * Any session change, in this tab or another (lib/ownerSessionClient relays them), closes the open
+ * source and reconnects through the owner guard. After a sign-out anywhere that reconnect is
+ * refused, so the stream stops at once instead of running on with the old session.
  */
 export function useEventStream(url: string, onMessage: (msg: StreamMessage) => void): StreamStatus {
   const [status, setStatus] = useState<StreamStatus>('connecting');
@@ -70,6 +74,7 @@ export function useEventStream(url: string, onMessage: (msg: StreamMessage) => v
     };
 
     connect();
+    listenForOwnerSessionChanges();
     window.addEventListener(OWNER_SESSION_EVENT, onSessionChange);
     return () => {
       disposed = true;

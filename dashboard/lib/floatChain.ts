@@ -60,7 +60,12 @@ export interface FloatChainConfig {
   scanChunkBlocks?: number;
 }
 
-export type RPCTransport = <T>(method: string, params: unknown[]) => Promise<T>;
+/** Per-call options. `signal` cancels the call: the request in flight and any retry wait. */
+export interface RPCCallOptions {
+  signal?: AbortSignal;
+}
+
+export type RPCTransport = <T>(method: string, params: unknown[], options?: RPCCallOptions) => Promise<T>;
 
 export interface FloatLoadOptions {
   includeHistory?: boolean;
@@ -70,8 +75,19 @@ interface RPCTransportOptions {
   retryDelayMs?: number;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function isTransientRPCError(status: number, message = ''): boolean {
@@ -112,15 +128,18 @@ export function isRangeError(error: unknown): boolean {
 
 export function createRPCTransport(url: string, options: RPCTransportOptions = {}): RPCTransport {
   let id = 0;
-  return async <T>(method: string, params: unknown[]): Promise<T> => {
+  return async <T>(method: string, params: unknown[], call: RPCCallOptions = {}): Promise<T> => {
     const requestId = ++id;
+    const signal = call.signal;
     let lastError = `Arc RPC ${method} failed`;
     for (let attempt = 0; attempt < 4; attempt += 1) {
+      signal?.throwIfAborted();
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }),
         cache: 'no-store',
+        signal,
       });
       if (!response.ok) {
         // READ the body — providers name the problem there (a range cap even suggests a
@@ -138,7 +157,7 @@ export function createRPCTransport(url: string, options: RPCTransportOptions = {
         }
         lastError = `Arc RPC ${method} HTTP ${response.status}${rpcMessage ? `: ${rpcMessage}` : ''}`;
         if (attempt < 3 && isTransientRPCError(response.status, rpcMessage)) {
-          await delay((options.retryDelayMs ?? 350) * 2 ** attempt);
+          await delay((options.retryDelayMs ?? 350) * 2 ** attempt, signal);
           continue;
         }
         throw new RPCError(lastError, response.status, rpcCode, rpcMessage);
@@ -151,7 +170,7 @@ export function createRPCTransport(url: string, options: RPCTransportOptions = {
         const rpcMessage = body.error.message ?? String(body.error.code ?? 'unknown error');
         lastError = `Arc RPC ${method} failed: ${rpcMessage}`;
         if (attempt < 3 && isTransientRPCError(200, rpcMessage)) {
-          await delay((options.retryDelayMs ?? 350) * 2 ** attempt);
+          await delay((options.retryDelayMs ?? 350) * 2 ** attempt, signal);
           continue;
         }
         throw new RPCError(lastError, 200, body.error.code, rpcMessage);

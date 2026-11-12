@@ -229,6 +229,13 @@ export default function JobDetailPage() {
     [jobId, load],
   );
   const status = useEventStream('/api/events/stream', onMessage);
+  // The timeline is daemon events streamed under the owner session. When the session ends it is
+  // dropped, not just hidden, so a later session's feed starts clean. The chain read stays.
+  const signedOut = status === 'signed-out';
+  useEffect(() => {
+    if (signedOut) setTimeline([]);
+  }, [signedOut]);
+  const ownerTimeline = signedOut ? [] : timeline;
 
   const stageIndex = useMemo(
     () => (job?.status ? HAPPY_PATH.indexOf(job.status as (typeof HAPPY_PATH)[number]) : -1),
@@ -479,19 +486,19 @@ export default function JobDetailPage() {
       </div>
 
       {/* timeline */}
-      <ExpenseRows timeline={timeline} total={job?.onchainExpensesUsdc ?? null} />
+      <ExpenseRows timeline={ownerTimeline} total={job?.onchainExpensesUsdc ?? null} />
 
       <AcceptLink jobId={jobId} />
 
       <div className="card mt">
         <p className="card-title">Timeline</p>
-        {timeline.length === 0 ? (
+        {ownerTimeline.length === 0 ? (
           <p className="stat-sub">
             Waiting for events on this job. The chain figures above are already current.
           </p>
         ) : (
           <ol className="job-timeline">
-            {timeline.map((item) => (
+            {ownerTimeline.map((item) => (
               <li key={item.id} className="job-event">
                 <div className="job-event-head">
                   <span className="job-event-actor">{item.actor}</span>

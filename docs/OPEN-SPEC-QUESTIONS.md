@@ -15,7 +15,11 @@ Contradictions and gaps found while implementing against PRD v4.1 FINAL (Jul 202
 >   ruling before writing it.
 > - **SPEC-03** — implemented (admin/operator may create); no formal ruling recorded. The
 >   original "blast radius is job-ID squatting" claim was **wrong**: a self-named operator could
->   borrow from FloatPool. Closed Nov 2026 by the FloatPool operator allowlist, see SPEC-03.
+>   borrow from FloatPool. ⏳ **Fixed in source, OPEN on chain:** the FloatPool operator
+>   allowlist (Nov 2026, see SPEC-03) closes it for pools deployed from current source, but
+>   every live pool predates it and still lends to self-named operators up to its caps. It
+>   stays open until each live set is paused and replaced (`docs/MAINNET.md`, "Live pools
+>   deployed before the operator allowlist").
 > - **SPEC-04** — ✅ RESOLVED 19 Jul: one-shot `wireFloatPool` / `wireJobVault`.
 > - **SPEC-05** — ⏳ OPEN: the flat manifest files on disk are authoritative today.
 > - **SPEC-06** — ✅ RESOLVED in practice by V12: the demo pool depth is computed from the
@@ -28,7 +32,7 @@ Contradictions and gaps found while implementing against PRD v4.1 FINAL (Jul 202
 | --- | --- | --- | --- |
 | [SPEC-01](#spec-01) | **Blocker** | FloatPool advance sizing | ✅ **RESOLVED 19 Jul** — budget term removed; `advance = rate × customerPayment` |
 | [SPEC-02](#spec-02) | Medium | JobVault.recordExpense semantics | Implemented conservatively, needs ruling |
-| [SPEC-03](#spec-03) | ~~Low~~ **High** (security audit, Nov 2026) | createJob authorization | Borrowing gated by the FloatPool operator allowlist; createJob itself still needs a ruling |
+| [SPEC-03](#spec-03) | ~~Low~~ **High** (security audit, Nov 2026) | createJob authorization | ⏳ Fixed in source by the FloatPool operator allowlist; **open on every live pool** until it is replaced; createJob itself still needs a ruling |
 | [SPEC-04](#spec-04) | Medium — **ABI-AFFECTING** | JobVault↔FloatPool wiring | ✅ **RESOLVED 19 Jul** — one-shot `wireFloatPool` / `wireJobVault` |
 | [SPEC-05](#spec-05) | Low | Manifest schema: PRD §8.2 vs. the files on disk | Implemented against the files |
 | [SPEC-06](#spec-06) | Blocker (orig.) | Demo pool seed breaks the exposure cap | ✅ **RESOLVED (V12)** — pool depth computed, not hardcoded |
