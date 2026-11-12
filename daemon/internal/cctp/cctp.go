@@ -17,6 +17,7 @@ package cctp
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -233,8 +234,11 @@ func (i Iris) Await(ctx context.Context, srcDomain uint32, txHash string, destDo
 				if err != nil || uint32(dom) != destDomain {
 					return Attestation{}, fmt.Errorf("the attested burn is for domain %s, not %d; not relaying it", d.DestinationDomain, destDomain)
 				}
-				mr := common.FromHex(d.Body.MintRecipient)
-				if len(mr) != 32 || common.BytesToAddress(mr[12:]) != recipient {
+				// Strict decode: common.FromHex would keep a valid prefix of "0x<addr>zz" and drop the rest.
+				mr, mrErr := hex.DecodeString(strings.TrimPrefix(d.Body.MintRecipient, "0x"))
+				// Iris may return either a 20-byte EVM address or its zero-padded bytes32 form.
+				validRecipient := mrErr == nil && (len(mr) == 20 || (len(mr) == 32 && new(big.Int).SetBytes(mr[:12]).Sign() == 0))
+				if !validRecipient || common.BytesToAddress(mr) != recipient {
 					return Attestation{}, fmt.Errorf("the attested burn mints to %s, not %s; not relaying it", d.Body.MintRecipient, recipient.Hex())
 				}
 				amount, ok := new(big.Int).SetString(d.Body.Amount, 10)
