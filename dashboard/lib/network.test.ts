@@ -39,9 +39,10 @@ test('mainnet never reads ARC_TESTNET_RPC, and testnet never reads ARC_MAINNET_R
   assert.equal(testnet.rpcUrl, deploymentFor('arc-testnet').network.rpcUrl);
 });
 
-test('mainnet has no contract until one is configured, and never falls back to a testnet address', () => {
-  assert.equal(contractAddress('floatPool', {}, 'arc-mainnet'), undefined);
-  assert.throws(() => requireAddress('floatPool', {}, 'arc-mainnet'), /set SNAPFALL_FLOAT_POOL_ADDRESS/);
+test('mainnet uses its own committed deployment, never a testnet address, and env still overrides', () => {
+  assert.equal(contractAddress('floatPool', {}, 'arc-mainnet'), '0xD2FaB9CD08a73B476e8DC81Afb7b57564dEef08f');
+  assert.equal(contractAddress('jobVault', {}, 'arc-mainnet'), '0x67FeD7B5eaA966c4cc2738d1530f230B31B6f372');
+  assert.notEqual(contractAddress('floatPool', {}, 'arc-mainnet'), contractAddress('floatPool', {}, 'arc-testnet'));
   const pool = '0x1234567890123456789012345678901234567890';
   assert.equal(requireAddress('floatPool', { SNAPFALL_FLOAT_POOL_ADDRESS: pool }, 'arc-mainnet'), pool);
   // USDC is the same precompile on both networks, committed in both records.
