@@ -59,7 +59,7 @@ func TestAPI_AcceptCredentialEnforcedPerRequestAndPerPrincipal(t *testing.T) {
 	if w, _ := do(t, h, "POST", "/api/v1/jobs/job_acc/accept-link", ""); w.Code != 401 {
 		t.Fatalf("mint without owner bearer: %d, want 401", w.Code)
 	}
-	r := httptest.NewRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil)
+	r := ownerRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil)
 	r.Header.Set("Authorization", ownerBearer)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -78,7 +78,7 @@ func TestAPI_AcceptCredentialEnforcedPerRequestAndPerPrincipal(t *testing.T) {
 	// Wrong credential -> 401. The OWNER bearer on a customer route -> 401: different
 	// principal, different door.
 	for _, auth := range []string{"Bearer act_" + strings.Repeat("00", 32), ownerBearer} {
-		r := httptest.NewRequest("POST", "/api/v1/customer/jobs/job_acc/accept", nil)
+		r := ownerRequest("POST", "/api/v1/customer/jobs/job_acc/accept", nil)
 		r.Header.Set("Authorization", auth)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
@@ -87,7 +87,7 @@ func TestAPI_AcceptCredentialEnforcedPerRequestAndPerPrincipal(t *testing.T) {
 		}
 	}
 	// The job credential opens nothing owner-side.
-	r = httptest.NewRequest("GET", "/api/v1/approvals", nil)
+	r = ownerRequest("GET", "/api/v1/approvals", nil)
 	r.Header.Set("Authorization", credBearer)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -96,14 +96,14 @@ func TestAPI_AcceptCredentialEnforcedPerRequestAndPerPrincipal(t *testing.T) {
 	}
 
 	// The real credential works on both customer routes.
-	r = httptest.NewRequest("POST", "/api/v1/customer/jobs/job_acc/accept", nil)
+	r = ownerRequest("POST", "/api/v1/customer/jobs/job_acc/accept", nil)
 	r.Header.Set("Authorization", credBearer)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "accepted-pending-chain") {
 		t.Fatalf("accept with credential: %d %s", w.Code, w.Body.String())
 	}
-	r = httptest.NewRequest("GET", "/api/v1/customer/jobs/job_acc/acceptance", nil)
+	r = ownerRequest("GET", "/api/v1/customer/jobs/job_acc/acceptance", nil)
 	r.Header.Set("Authorization", credBearer)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -140,7 +140,7 @@ func TestAPI_AcceptErrorMapping(t *testing.T) {
 	if w, _ := do(t, h, "POST", "/api/v1/jobs/job_acc/accept-link", ""); w.Code != 200 {
 		t.Fatalf("mint: %d", w.Code)
 	}
-	r := httptest.NewRequest("POST", "/api/v1/customer/jobs/job_acc/accept", nil)
+	r := ownerRequest("POST", "/api/v1/customer/jobs/job_acc/accept", nil)
 	r.Header.Set("Authorization", "Bearer "+*tok)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -151,7 +151,7 @@ func TestAPI_AcceptErrorMapping(t *testing.T) {
 	s.Accept = func(context.Context, string) (string, error) {
 		return "", fmt.Errorf("%w: stage assigned", brain.ErrNotDeliveryReady)
 	}
-	r = httptest.NewRequest("POST", "/api/v1/customer/jobs/job_acc/accept", nil)
+	r = ownerRequest("POST", "/api/v1/customer/jobs/job_acc/accept", nil)
 	r.Header.Set("Authorization", "Bearer "+*tok)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -234,7 +234,7 @@ func TestAPI_CustomerInvoiceServesCustomerCopyOnly(t *testing.T) {
 	}
 
 	// With the credential → the CUSTOMER copy, and owner internals absent.
-	r := httptest.NewRequest("GET", "/api/v1/customer/jobs/job_acc/invoice", nil)
+	r := ownerRequest("GET", "/api/v1/customer/jobs/job_acc/invoice", nil)
 	r.Header.Set("Authorization", "Bearer "+*tokPtr)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -259,14 +259,14 @@ func TestAPI_AcceptanceReadNamesTheVaultJob(t *testing.T) {
 	s, _ := newAPI(t)
 	tokPtr := wireAccept(s)
 	h := s.Handler()
-	r := httptest.NewRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil)
+	r := ownerRequest("POST", "/api/v1/jobs/job_acc/accept-link", nil)
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	if *tokPtr == "" {
 		t.Fatal("no credential minted")
 	}
 	read := func() map[string]any {
 		t.Helper()
-		r := httptest.NewRequest("GET", "/api/v1/customer/jobs/job_acc/acceptance", nil)
+		r := ownerRequest("GET", "/api/v1/customer/jobs/job_acc/acceptance", nil)
 		r.Header.Set("Authorization", "Bearer "+*tokPtr)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)

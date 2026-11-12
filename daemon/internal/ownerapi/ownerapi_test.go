@@ -49,7 +49,7 @@ func submitPending(t *testing.T, l *approval.Lifecycle) approval.Request {
 
 func do(t *testing.T, h http.Handler, method, path, body string) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req := ownerRequest(method, path, strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	var out map[string]any
@@ -93,7 +93,7 @@ func TestStreamStoresButDoesNotRelayHeartbeats(t *testing.T) {
 	// few polls, then returns.
 	reqCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events/stream", nil).WithContext(reqCtx)
+	req := ownerRequest(http.MethodGet, "/api/v1/events/stream", nil).WithContext(reqCtx)
 	w := httptest.NewRecorder()
 	s.handleStream(w, req)
 
@@ -320,14 +320,14 @@ func TestAPI_TokenEnforcedOnEveryRequest(t *testing.T) {
 	}
 
 	// Wrong bearer -> 401. Correct bearer -> the decision lands.
-	r := httptest.NewRequest("POST", "/api/v1/approvals/"+req.ID+"/decision", strings.NewReader(body))
+	r := ownerRequest("POST", "/api/v1/approvals/"+req.ID+"/decision", strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer wrong")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != 401 {
 		t.Fatalf("wrong bearer: %d, want 401", w.Code)
 	}
-	r = httptest.NewRequest("POST", "/api/v1/approvals/"+req.ID+"/decision", strings.NewReader(body))
+	r = ownerRequest("POST", "/api/v1/approvals/"+req.ID+"/decision", strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+strings.Repeat("t", 32))
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)

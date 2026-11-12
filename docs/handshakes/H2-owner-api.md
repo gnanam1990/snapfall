@@ -23,6 +23,21 @@ document is the missing half of the done-criterion ("schema committed").
   every route including the stream. A token that only gates startup while requests go
   unauthenticated would be an auth bypass, not auth. `by` on a decision is a recorded
   label; the bearer token is the authenticated identity when configured.
+- **Request guard, in both modes, on every route (owner and customer).** "Anyone who can
+  execute code on the owner's machine" does not include a web page open in the owner's
+  browser, which can reach loopback too. Before any auth check the daemon refuses:
+  a `Host` that is not loopback (`127.0.0.0/8`, `::1`, `localhost`, any port) or listed in
+  `SNAPFALL_OWNER_ALLOWED_HOSTS` (`403 BAD_HOST`, defeats DNS rebinding); a `Sec-Fetch-Site`
+  other than `same-origin`/`none`, or an `Origin` that is not the request's own host
+  (`403 CROSS_ORIGIN`); and a non-GET request whose body is not `application/json`
+  (`415 UNSUPPORTED_MEDIA_TYPE`). A bodyless POST with no `Content-Type` is accepted.
+  Callers without `Origin` or fetch metadata (curl, Go clients, the dashboard's server-side
+  proxy) are unaffected. Tokenless mode stays the local default and logs a startup warning.
+- **Non-loopback deployments.** `SNAPFALL_OWNER_ALLOWED_HOSTS` (comma-separated, `host` for
+  any port or `host:port`) names the Host a reverse proxy forwards or a LAN name clients use;
+  it requires the token. A specific non-loopback bind address is allowed automatically; a
+  wildcard bind (`0.0.0.0`, `::`, `:port`) without `SNAPFALL_OWNER_ALLOWED_HOSTS` is refused
+  at startup.
 
 ## 2. The events stream — ONE stream, TWO sources (decided)
 
