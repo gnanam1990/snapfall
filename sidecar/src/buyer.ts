@@ -29,6 +29,8 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { circleConfigFromEnv, ENV_WALLET_ID, loadCircleAccount } from './circle-wallet.js';
 import { toHex, type Address, type Hex, type LocalAccount } from 'viem';
 import { USDC_EIP712_DOMAIN } from './usdc-domain.js';
+import { NOT_BROADCAST } from './facilitator.js';
+import { isConfirmedSettlement } from './settlement-markers.js';
 import {
   encodeBase64Json,
   decodeBase64Json,
@@ -186,15 +188,64 @@ export class SigningFailed extends Error {
  * anticipated must default to keeping the hold, never to releasing it.
  */
 export function provenNotSent(e: unknown): boolean {
-  return e instanceof SigningFailed;
+  return e instanceof SigningFailed || e instanceof SendDeadlinePassed;
 }
 
-/** Default bound on the 402 probe (headers + challenge body), in ms. SIDECAR_PROBE_TIMEOUT_MS
- *  overrides it; anything unparseable or non-positive falls back to the default. */
-const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+/**
+ * Thrown by `signAndSubmit` when the signature WAS produced but the caller's send deadline (the
+ * approval's `expiresAt`) had passed by the time signing returned, so the authorization was
+ * deliberately never sent.
+ *
+ * This is a proven non-settlement for the same reason as SigningFailed: an EIP-3009 authorization
+ * can only be settled by whoever holds its signature, and this one exists only in this process's
+ * memory. It was not written to the record, not logged, not put in an error message, and the
+ * X-PAYMENT request was never started. (With a Circle developer-controlled wallet, Circle's signing
+ * API also saw it; Circle is the custodian of the key and could sign any authorization at all, so
+ * that changes nothing about who can redeem this one. The seller, the only party that would, never
+ * received it.)
+ */
+export class SendDeadlinePassed extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SendDeadlinePassed';
+  }
+}
+
+/** Default bound on the 402 probe (headers + challenge body), in ms. */
+export const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+/**
+ * The largest delay a Node timer honours. AbortSignal.timeout rejects a fractional delay outright
+ * (ERR_OUT_OF_RANGE), and a delay above this is clamped to 1 ms with only a TimeoutOverflowWarning,
+ * so either kind of setting would turn every probe into UPSTREAM_UNREACHABLE.
+ */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/**
+ * Parse SIDECAR_PROBE_TIMEOUT_MS. Only a whole number of milliseconds in 1..MAX_TIMER_MS is used;
+ * unset or empty means the default silently, and anything else means the default with a warning,
+ * so a typo degrades to the documented bound instead of to a probe that cannot succeed.
+ */
+export function parseProbeTimeoutMs(raw: string | undefined, warn: (message: string) => void = console.warn): number {
+  const s = raw?.trim() ?? '';
+  if (s === '') return DEFAULT_PROBE_TIMEOUT_MS;
+  const v = /^[0-9]+$/.test(s) ? Number(s) : NaN;
+  if (Number.isSafeInteger(v) && v >= 1 && v <= MAX_TIMER_MS) return v;
+  warn(
+    `SIDECAR_PROBE_TIMEOUT_MS=${JSON.stringify(raw)} is not a whole number of milliseconds in 1..${MAX_TIMER_MS}; ` +
+      `using the default ${DEFAULT_PROBE_TIMEOUT_MS} ms`,
+  );
+  return DEFAULT_PROBE_TIMEOUT_MS;
+}
+
+/** The value the last warning was printed for, so a bad setting warns once, not on every probe. */
+let probeTimeoutWarnedFor: string | undefined;
 function probeTimeoutMs(): number {
-  const v = Number(process.env.SIDECAR_PROBE_TIMEOUT_MS);
-  return Number.isFinite(v) && v > 0 ? v : DEFAULT_PROBE_TIMEOUT_MS;
+  const raw = process.env.SIDECAR_PROBE_TIMEOUT_MS;
+  return parseProbeTimeoutMs(raw, (message) => {
+    if (probeTimeoutWarnedFor === raw) return;
+    probeTimeoutWarnedFor = raw;
+    console.warn(`[buyer] ${message}`);
+  });
 }
 
 /** Fresh 32-byte nonce. Replay protection lives with the seller; uniqueness lives here.
@@ -362,9 +413,18 @@ async function signAuthorization(
  * not re-probe, so the signed message binds the exact validated terms (no TOCTOU).
  *
  * @throws PaymentFailed  code `PAYMENT_REJECTED` (seller said no) or `FACILITATOR_ERROR`
- *                        (transport failed AFTER signing, or a 200 without a usable receipt —
- *                        the authorization may still settle).
+ *                        (transport failed AFTER signing, or a 200 without a usable receipt:
+ *                        none, an unresolved settlement, or one that contradicts the signed
+ *                        authorization — the authorization may still settle).
  * @throws SigningFailed  the signature was never produced; nothing left the process.
+ * @throws SendDeadlinePassed  signed, but `opts.sendBy` had passed when signing returned, so the
+ *                        authorization was never sent; nothing left the process.
+ *
+ * `opts.sendBy` (epoch ms) is the approval's expiry. Signing can await a remote signer (the Circle
+ * wallet makes network calls), so an approval that was live when signing started may have lapsed by
+ * the time the signature exists. It is checked after signing and before the X-PAYMENT request, with
+ * nothing awaited in between, so an authorization is never sent on an expired approval. An
+ * unparseable deadline fails closed.
  */
 export async function signAndSubmit(
   accept: AcceptOption,
@@ -372,6 +432,7 @@ export async function signAndSubmit(
   account: LocalAccount,
   chainId: number,
   authNonce?: Hex,
+  opts: { sendBy?: number } = {},
 ): Promise<PurchaseResult> {
   let payment: PaymentPayload;
   try {
@@ -379,6 +440,14 @@ export async function signAndSubmit(
   } catch (e) {
     // No signature was produced, so nothing can be presented for settlement. See provenNotSent.
     throw new SigningFailed(`signing the authorization for ${intent.resource} failed: ${(e as Error).message}`);
+  }
+
+  // `!(now < sendBy)` rather than `now >= sendBy`, so a NaN deadline refuses to send.
+  if (opts.sendBy !== undefined && !(Date.now() < opts.sendBy)) {
+    throw new SendDeadlinePassed(
+      `the approval expired while the authorization for ${intent.resource} was being signed; ` +
+        'it was discarded unsent, so nothing can settle',
+    );
   }
 
   // ── From here the signed authorization is about to leave, or has left, this process. Every
@@ -420,20 +489,21 @@ export async function signAndSubmit(
   }
   const body = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : null;
 
-  // The receipt, from the first transport that carries a usable one: the v1 X-PAYMENT-RESPONSE
-  // header (FR-X402-004 evidence chain), then the v2 PAYMENT-RESPONSE header, then the body.
+  // The receipt candidates, from every transport that carries one: the v1 X-PAYMENT-RESPONSE
+  // header (FR-X402-004 evidence chain), the v2 PAYMENT-RESPONSE header, and the body. Every
+  // receipt-shaped one is then validated below; the first is recorded only if all of them pass.
   // A 200 with NONE of them -- a plain resource body, a null body, or a v2 settlement response
   // that is not a Snapfall receipt -- is not a failure: the seller holds the authorization and
   // may settle it, so it is FACILITATOR_ERROR (post-sign, reconcile), never a TypeError that the
   // service would record as FAILED and the daemon would read as "release".
-  const candidates: unknown[] = [];
+  const candidates: Array<{ source: string; value: unknown }> = [];
   for (const h of ['x-payment-response', 'payment-response']) {
     const raw = paid.headers.get(h);
-    if (raw) candidates.push(decodeBase64Json<unknown>(raw.trim()));
+    if (raw) candidates.push({ source: `${h} header`, value: decodeBase64Json<unknown>(raw.trim()) });
   }
-  if (body) candidates.push(body.receipt);
-  const receipt = candidates.find(isReceipt);
-  if (!receipt) {
+  if (body) candidates.push({ source: 'body', value: body.receipt });
+  const receipts = candidates.filter((c): c is { source: string; value: PurchaseResult['receipt'] } => isReceipt(c.value));
+  if (receipts.length === 0) {
     throw new PaymentFailed(
       'FACILITATOR_ERROR',
       `seller returned 200 for ${intent.resource} without a usable payment receipt ` +
@@ -443,6 +513,33 @@ export async function signAndSubmit(
         'the signed authorization was delivered and may still settle — reconcile',
     );
   }
+
+  // A receipt is only as good as what it says. Five strings are a SHAPE; DELIVERED is a claim that
+  // the money is committed, which the daemon books as spent. So every receipt the seller sent, from
+  // whichever transport, must describe the authorization we actually signed and a settlement that
+  // is resolved -- and if any of them does not, no transport is allowed to win by precedence. A
+  // header naming another nonce or amount next to a correct body is a contradiction, not a choice.
+  // Every refusal here is post-sign (FACILITATOR_ERROR, reconcile): the seller holds the instrument.
+  for (const r of receipts) {
+    const problem = receiptProblem(r.value, payment, intent);
+    if (problem) {
+      throw new PaymentFailed(
+        'FACILITATOR_ERROR',
+        `seller returned 200 for ${intent.resource} but the receipt in its ${r.source} is not usable: ${problem}; ` +
+          'the signed authorization was delivered and may still settle — reconcile',
+      );
+    }
+  }
+  const settlements = new Set(receipts.map((r) => r.value.settlement.trim().toLowerCase()));
+  if (settlements.size > 1) {
+    throw new PaymentFailed(
+      'FACILITATOR_ERROR',
+      `seller returned 200 for ${intent.resource} with receipts that disagree on settlement ` +
+        `(${receipts.map((r) => `${r.source}: ${r.value.settlement}`).join(', ')}); ` +
+        'the signed authorization was delivered and may still settle — reconcile',
+    );
+  }
+  const receipt = receipts[0]!.value;
 
   return {
     data: body?.data ?? null,
@@ -457,6 +554,55 @@ function isReceipt(r: unknown): r is PurchaseResult['receipt'] {
   if (typeof r !== 'object' || r === null) return false;
   const o = r as Record<string, unknown>;
   return ['amount', 'payer', 'payee', 'nonce', 'settlement'].every((k) => typeof o[k] === 'string');
+}
+
+/**
+ * Why a receipt-shaped object cannot back a DELIVERED record, or null when it can.
+ *
+ * Settlement: a real transaction hash, or the seller's explicit NOT_BROADCAST (nothing was attempted,
+ * the dry-run concession service.ts documents as committed-final). Anything else -- PENDING, which
+ * the facilitator layer uses for "submitted, outcome unknown", an empty string, or a word nobody
+ * defined -- means the money may or may not move, which is RECONCILING, never DELIVERED.
+ *
+ * Signed fields: amount, payer, payee and nonce must equal the authorization this process signed,
+ * and the amount and payee must equal the approved intent as well. Addresses and the bytes32 nonce
+ * are compared case-insensitively (the seller canonicalises the nonce to lowercase); the amount
+ * must be a canonical atomic decimal string, compared exactly.
+ */
+export function receiptProblem(
+  receipt: PurchaseResult['receipt'],
+  payment: PaymentPayload,
+  intent: ApprovedIntent,
+): string | null {
+  const auth = payment.payload.authorization;
+  const sameHex = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+  const settlement = receipt.settlement.trim();
+  if (!isConfirmedSettlement(settlement) && settlement.toUpperCase() !== NOT_BROADCAST) {
+    return `settlement ${JSON.stringify(receipt.settlement)} is not resolved (neither a transaction hash nor ${NOT_BROADCAST})`;
+  }
+  if (!/^(0|[1-9][0-9]*)$/.test(receipt.amount)) {
+    return `amount ${JSON.stringify(receipt.amount)} is not a canonical atomic USDC string`;
+  }
+  if (receipt.amount !== auth.value) {
+    return `amount ${receipt.amount} != signed value ${auth.value}`;
+  }
+  if (intent.amount !== undefined && BigInt(receipt.amount) !== intent.amount) {
+    return `amount ${receipt.amount} != approved amount ${intent.amount}`;
+  }
+  if (!sameHex(receipt.payer, auth.from)) {
+    return `payer ${receipt.payer} != signer ${auth.from}`;
+  }
+  if (!sameHex(receipt.payee, auth.to)) {
+    return `payee ${receipt.payee} != signed payee ${auth.to}`;
+  }
+  if (intent.merchant !== undefined && !sameHex(receipt.payee, intent.merchant)) {
+    return `payee ${receipt.payee} != approved merchant ${intent.merchant}`;
+  }
+  if (!sameHex(receipt.nonce, auth.nonce)) {
+    return `nonce ${receipt.nonce} != signed nonce ${auth.nonce}`;
+  }
+  return null;
 }
 
 /**

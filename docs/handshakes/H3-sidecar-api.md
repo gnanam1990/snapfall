@@ -137,7 +137,7 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
    - `accept.amount == intent.amount` else `409 PRICE_CHANGED`
    - `BigInt(accept.amount) <= BigInt(intent.maxAmount)` else `402 PRICE_EXCEEDS_RESERVED` (Gate 2; `details:{quoted,reserved}`)
 8. **Write-ahead** a durable `SIGNED` record keyed by `idempotencyNonce` (with the precomputed `paymentId`, §4.1). From here the error envelope carries `paymentId`. Then sign the EIP-3009 authorization **against that exact validated `accept`** with the deterministic `authNonce` (§4.4). Do **not** re-probe.
-9. Submit `X-PAYMENT`; on seller `200` → `DELIVERED`; on seller non-200 → `PAYMENT_REJECTED`; on transport failure after submit → `RECONCILING` (non-terminal, `FACILITATOR_ERROR`, `retriable:true`).
+9. Re-check `intent.expiresAt` after signing returns and before sending, with nothing awaited in between: if it has passed, the signed authorization is discarded without ever leaving the process (it is not stored, logged or returned), the record becomes `FAILED` and the reply is `410 APPROVAL_EXPIRED` carrying `paymentId`; the reservation may be released. Otherwise submit `X-PAYMENT`. On seller `200` → `DELIVERED` **only** with a usable receipt: every receipt the seller sends (`X-PAYMENT-RESPONSE`, `PAYMENT-RESPONSE`, body) must agree, its amount, payer, payee and nonce must equal the signed authorization (amount and payee also the approved intent), and its settlement must be a 32-byte tx hash or `NOT_BROADCAST`; anything else → `RECONCILING` (`FACILITATOR_ERROR`). On seller non-200 → `PAYMENT_REJECTED`; on transport failure after submit → `RECONCILING` (non-terminal, `FACILITATOR_ERROR`, `retriable:true`). Once a signature exists, only a proven signing failure or the pre-send expiry above records `FAILED`.
 
 **Response `200`** (executed or idempotent replay)
 ```json
@@ -174,7 +174,7 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
 | 401 | `APPROVAL_TOKEN_INVALID` | approval HMAC verify failed (**checked first — authenticate the token before trusting its fields**); OR `token.decision`/`token.expiresAt` diverge from the intent |
 | 409 | `INTENT_HASH_MISMATCH` | recomputed hash != token hash — **AT-05 hash defense**, pre-sign |
 | 409 | `APPROVED_AMOUNT_MISMATCH` | `approvalToken.approvedAmount != intent.amount` — evaluated in step 5, **before** the decision/expiry gates |
-| 410 | `APPROVAL_EXPIRED` | `now >= intent.expiresAt`, OR `intent.expiresAt` is unparseable (fail closed) |
+| 410 | `APPROVAL_EXPIRED` | `now >= intent.expiresAt`, OR `intent.expiresAt` is unparseable (fail closed); checked before signing and again before sending (§2.2 step 9), where it carries `paymentId` and nothing was sent |
 | 403 | `INTENT_NOT_APPROVED` | decision ∉ {AUTO_APPROVE, HUMAN_APPROVED} — Gate 1, pre-sign |
 | 422 | `NO_MATCHING_NETWORK` | live `accept.network != intent.network` |
 | 409 | `MERCHANT_CHANGED` | live `accept.payTo != intent.merchant` — **AT-05 live defense**, pre-sign |
@@ -182,7 +182,7 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
 | 409 | `PRICE_CHANGED` | live `accept.amount != intent.amount` — **AT-05 live defense**, pre-sign |
 | 402 | `PRICE_EXCEEDS_RESERVED` | live `accept.amount > intent.maxAmount` — Gate 2, pre-sign |
 | 402 | `PAYMENT_REJECTED` | seller non-200 to `X-PAYMENT`; `details.sellerReason` = challenge `error`. **POST-sign** (see release safety) |
-| 502 | `FACILITATOR_ERROR` | transport failure **after submit**, OR a 200 whose body did not parse; record → `RECONCILING` (non-terminal), `retriable:true` |
+| 502 | `FACILITATOR_ERROR` | transport failure **after submit**, OR a 200 without a usable, matching receipt (§2.2 step 9); record → `RECONCILING` (non-terminal), `retriable:true` |
 | 500 | `INTERNAL` | unexpected sidecar fault |
 
 The table lists codes in evaluation order (matching the step order above), so the row order is normative, not cosmetic.
@@ -216,7 +216,8 @@ codes to `RECONCILING`, so the distinction holds the moment a key exists.)
 | HTTP | `code` | Cause |
 |---|---|---|
 | 401 | `UNAUTHENTICATED` | bad bearer token |
-| 404 | `PAYMENT_NOT_FOUND` | no record for `paymentId` |
+| 404 | `PAYMENT_NOT_FOUND` | no record for `paymentId` **and** no `pay` for it running — nothing was signed, the hold may be released |
+| 409 | `PAYMENT_IN_PROGRESS` | a `pay` for this `paymentId` is still running (e.g. waiting on the 402 probe) — the hold stands; poll again |
 
 `status` is safe to poll. **Reality of the Gateway facilitator path:** the Gateway broadcast is
 wired but dormant without `CIRCLE_API_KEY`. With no key, `DELIVERED` is the committed-final success

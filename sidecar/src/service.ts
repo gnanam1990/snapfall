@@ -27,6 +27,7 @@ import {
   PolicyViolation,
   PaymentFailed,
   provenNotSent,
+  SendDeadlinePassed,
   type ApprovedIntent,
 } from './buyer.js';
 import { formatUsdc } from './x402.js';
@@ -395,7 +396,13 @@ async function handlePay(body: unknown): Promise<Reply> {
     store.upsert(rec);
 
     try {
-      const result = await signAndSubmit(accept, buyerIntent, signer, chainId, computeAuthNonce(intentHash));
+      // sendBy: the check above runs before signing, but signing itself can await a remote signer
+      // (the Circle wallet), so the approval is checked AGAIN after the signature exists and before
+      // X-PAYMENT goes out. A lapse there is SendDeadlinePassed, which provenNotSent counts as
+      // unsent: the signature never left this process.
+      const result = await signAndSubmit(accept, buyerIntent, signer, chainId, computeAuthNonce(intentHash), {
+        sendBy: Date.parse(intent.expiresAt),
+      });
       rec = {
         ...rec,
         state: 'DELIVERED',
@@ -412,8 +419,9 @@ async function handlePay(body: unknown): Promise<Reply> {
       // because the daemon reads FAILED as "nothing settled, release" (h3.Unresolved, h3.go) and
       // RECONCILING as "unknown, the hold stands".
       //
-      // FAILED is reserved for the one PROVEN non-settlement: the signature was never produced,
-      // so nothing left this process (buyer.provenNotSent). Everything else is RECONCILING. Once
+      // FAILED is reserved for the PROVEN non-settlements: the signature was never produced, or it
+      // was produced after the approval lapsed and discarded unsent, so nothing left this process
+      // (buyer.provenNotSent). Everything else is RECONCILING. Once
       // X-PAYMENT is sent the seller holds a bearer instrument, and no shape of its reply proves
       // otherwise: a rejection, a 200 with no receipt, a null body, a v2 PAYMENT-RESPONSE header,
       // a parse error, or a bug in our own handling of the reply. This used to be decided by
@@ -422,6 +430,11 @@ async function handlePay(body: unknown): Promise<Reply> {
       // budget behind a delivered authorization.
       const unsent = provenNotSent(e);
       store.upsert({ ...rec, state: unsent ? 'FAILED' : 'RECONCILING', reason: (e as Error).message, updatedAt: new Date().toISOString() });
+      if (e instanceof SendDeadlinePassed) {
+        // Same code as the pre-sign expiry checks, but past the write-ahead, so the envelope carries
+        // the paymentId of the durable FAILED record. Both say "release": nothing was sent.
+        return errorReply(410, 'APPROVAL_EXPIRED', e.message, paymentId);
+      }
       if (unsent || e instanceof PaymentFailed) return mapBuyerError(e, paymentId);
       // An unclassified throw after the send must still read as post-sign on the wire, not as the
       // ambiguous INTERNAL.

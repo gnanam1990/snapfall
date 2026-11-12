@@ -9,12 +9,14 @@
  * Two properties, both read by the daemon to decide whether a budget hold may be released:
  *
  *   1. Once X-PAYMENT has been sent, a seller 200 without a usable receipt (plain body, null body,
- *      a v2 PAYMENT-RESPONSE settle header) is RECONCILING, never FAILED. The daemon releases on
- *      FAILED; the seller already holds a bearer authorization it can still settle.
+ *      a v2 PAYMENT-RESPONSE settle header, an unresolved settlement, or a receipt that contradicts
+ *      the signed authorization) is RECONCILING, never FAILED and never DELIVERED. The daemon
+ *      releases on FAILED and books DELIVERED as spent; the seller holds a bearer authorization.
  *   2. A pay that has been accepted but not yet written ahead (the seller's 402 probe is still
  *      running) is PAYMENT_IN_PROGRESS on /v1/status, never PAYMENT_NOT_FOUND, which the daemon
  *      reads as "nothing was or will be signed". And the approval is re-checked after the probe,
- *      so a probe that outlives the approval signs nothing.
+ *      so a probe that outlives the approval signs nothing, and again after signing, so a signer
+ *      that outlives the approval sends nothing.
  *
  *   npm run test:service-post-sign
  */
@@ -27,7 +29,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, test } from 'node:test';
-import { generatePrivateKey } from 'viem/accounts';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import type { LocalAccount } from 'viem';
+import { probeChallenge, provenNotSent, SendDeadlinePassed, signAndSubmit, type ApprovedIntent } from './buyer.js';
 import { computeIntentHash, computePaymentId, signApproval, type ApprovalToken, type WireIntent } from './h3.js';
 
 const FIXTURE_PORT = Number(process.env.POST_SIGN_FIXTURE_PORT ?? 4093);
@@ -53,11 +57,42 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** How many X-PAYMENT headers each path received: the "did a signature leave" ground truth. */
 const paid = new Map<string, number>();
-/** Paths whose 402 probe is held open until the test calls the release function. */
-const stalls = new Map<string, Promise<void>>();
+/** Paths whose 402 probe is held open until the test releases it, and tells the test it arrived. */
+const stalls = new Map<string, { gate: Promise<void>; onArrive: () => void }>();
 
-function receiptFor(nonce: string) {
-  return { amount: PRICE, payer: '0xbuyer', payee: PAY_TO, nonce, settlement: 'NOT_BROADCAST' };
+/** Reject if `p` has not settled within `ms`, so a barrier that never fires fails the test by name. */
+function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms waiting for ${what}`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Hold `path`'s 402 probe open. `arrived` resolves when the sidecar's probe actually reaches the
+ * fixture -- a deterministic barrier: from then on the pay is provably accepted and awaiting the
+ * probe, whatever the machine's load. A fixed sleep only guessed at that.
+ */
+function stall(path: string): { arrived: Promise<void>; release: () => void } {
+  let release!: () => void;
+  let onArrive!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const arrived = new Promise<void>((r) => (onArrive = r));
+  stalls.set(path, { gate, onArrive });
+  return { arrived: within(arrived, 15_000, `the sidecar to probe ${path}`), release };
+}
+
+interface SignedAuth {
+  from: string;
+  to: string;
+  value: string;
+  nonce: string;
+}
+
+/** The Snapfall seller's receipt for exactly the authorization presented. */
+function receiptFor(auth: SignedAuth, overrides: Record<string, string> = {}) {
+  return { amount: auth.value, payer: auth.from, payee: auth.to, nonce: auth.nonce, settlement: 'NOT_BROADCAST', ...overrides };
 }
 
 function challenge(asset = ASSET) {
@@ -91,14 +126,17 @@ async function fixture(req: IncomingMessage, res: ServerResponse) {
   const xp = req.headers['x-payment'];
   if (typeof xp !== 'string') {
     if (path === '/hang') return; // never answers; the sidecar's probe bound must cut it off
-    const stall = stalls.get(path);
-    if (stall) await stall;
+    const held = stalls.get(path);
+    if (held) {
+      held.onArrive();
+      await held.gate;
+    }
     const c = challenge(path === '/unsignable' ? '0xnot-an-address' : ASSET);
     return json(res, 402, c, { 'payment-required': b64(c) });
   }
 
   paid.set(path, (paid.get(path) ?? 0) + 1);
-  const auth = (JSON.parse(Buffer.from(xp, 'base64').toString('utf8')) as { payload: { authorization: { nonce: string } } })
+  const auth = (JSON.parse(Buffer.from(xp, 'base64').toString('utf8')) as { payload: { authorization: SignedAuth } })
     .payload.authorization;
   switch (path) {
     case '/plain': // N3 (a): a resource body, no receipt anywhere
@@ -113,9 +151,25 @@ async function fixture(req: IncomingMessage, res: ServerResponse) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end('{not json');
     case '/v1hdr': // control: receipt only in the v1 X-PAYMENT-RESPONSE header
-      return json(res, 200, { data: { ok: true } }, { 'x-payment-response': b64(receiptFor(auth.nonce)) });
+      return json(res, 200, { data: { ok: true } }, { 'x-payment-response': b64(receiptFor(auth)) });
+    case '/txhash': // control: a broadcast receipt carrying a real-shaped transaction hash
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth, { settlement: `0x${'cd'.repeat(32)}` }) });
+    case '/pending': // a receipt whose settlement is unresolved: money may or may not move
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth, { settlement: 'PENDING' }) });
+    case '/made-up-settlement': // a settlement word nobody defined is not a resolution either
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth, { settlement: 'settled' }) });
+    case '/wrong-amount': // a receipt for a different amount than was signed
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth, { amount: '1' }) });
+    case '/wrong-payer': // a receipt naming somebody else as the payer
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth, { payer: `0x${'77'.repeat(20)}` }) });
+    case '/wrong-payee': // a receipt naming a payee other than the signed and approved one
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth, { payee: `0x${'66'.repeat(20)}` }) });
+    case '/conflict-hdr': // a correct body, contradicted by a header naming another nonce
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth) }, {
+        'x-payment-response': b64(receiptFor(auth, { nonce: `0x${'99'.repeat(32)}` })),
+      });
     default: // control (/receipt, /stall): the Snapfall seller shape
-      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth.nonce) });
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth) });
   }
 }
 
@@ -220,6 +274,12 @@ for (const [path, shape] of [
   ['/null', 'a 200 null body'],
   ['/v2hdr', 'a 200 whose settlement is only in a v2 PAYMENT-RESPONSE header'],
   ['/garbage', 'a 200 body that does not parse'],
+  ['/pending', 'a 200 receipt whose settlement is PENDING'],
+  ['/made-up-settlement', 'a 200 receipt whose settlement is an undefined word'],
+  ['/wrong-amount', 'a 200 receipt for a different amount than was signed'],
+  ['/wrong-payer', 'a 200 receipt naming a different payer'],
+  ['/wrong-payee', 'a 200 receipt naming a different payee'],
+  ['/conflict-hdr', 'a 200 whose receipt header contradicts the body on the nonce'],
 ] as const) {
   test(`${shape} after X-PAYMENT is RECONCILING, never FAILED`, async () => {
     const intent = makeIntent(path);
@@ -237,12 +297,14 @@ for (const [path, shape] of [
       `recorded ${st.json?.state}: the daemon releases the hold on FAILED while the seller holds a deliverable authorization`,
     );
     assert.equal(st.json?.terminal, false);
+    assert.equal(st.json?.receipt, null, 'an unusable receipt must not be recorded as the payment receipt');
   });
 }
 
 for (const [path, shape] of [
   ['/receipt', 'a Snapfall receipt in the body'],
   ['/v1hdr', 'a receipt in the v1 X-PAYMENT-RESPONSE header'],
+  ['/txhash', 'a receipt settled with a transaction hash'],
 ] as const) {
   test(`control: ${shape} is still DELIVERED`, async () => {
     const intent = makeIntent(path);
@@ -270,13 +332,12 @@ test('a signature that was never produced is the one post-write-ahead FAILED', a
 // ── 2. in-flight visibility and the expiry re-check ─────────────────────────────────────────
 
 test('a pay waiting on the seller probe is PAYMENT_IN_PROGRESS on status, never PAYMENT_NOT_FOUND', async () => {
-  let release!: () => void;
-  stalls.set('/stall', new Promise<void>((r) => (release = r)));
+  const held = stall('/stall');
   const intent = makeIntent('/stall');
   const pid = paymentIdOf(intent);
 
   const pending = pay(intent);
-  await sleep(300); // the sidecar has accepted it and is awaiting the probe
+  await held.arrived; // the sidecar has accepted it and its probe is now parked in the fixture
 
   for (let i = 0; i < 3; i++) {
     const st = await status(pid);
@@ -284,11 +345,10 @@ test('a pay waiting on the seller probe is PAYMENT_IN_PROGRESS on status, never 
     assert.equal(st.status, 409, JSON.stringify(st.json));
     assert.equal(st.json?.error?.code, 'PAYMENT_IN_PROGRESS');
     assert.equal(st.json?.error?.retriable, true);
-    await sleep(100);
   }
   assert.equal(paid.get('/stall') ?? 0, 0, 'nothing may be signed while the probe is outstanding');
 
-  release();
+  held.release();
   const r = await pending;
   assert.equal(r.status, 200, JSON.stringify(r.json));
   assert.equal(r.json?.state, 'DELIVERED');
@@ -297,18 +357,19 @@ test('a pay waiting on the seller probe is PAYMENT_IN_PROGRESS on status, never 
 });
 
 test('a probe that outlives the approval signs nothing, and the id is then truly not found', async () => {
-  let release!: () => void;
-  stalls.set('/stall-expire', new Promise<void>((r) => (release = r)));
-  const intent = makeIntent('/stall-expire', 1200); // approval lapses mid-probe
+  const held = stall('/stall-expire');
+  const intent = makeIntent('/stall-expire', 2000); // approval lapses mid-probe
   const pid = paymentIdOf(intent);
 
   const pending = pay(intent);
-  await sleep(300);
+  await held.arrived; // synchronisation: the probe is provably outstanding
   assert.equal((await status(pid)).json?.error?.code, 'PAYMENT_IN_PROGRESS');
-  await sleep(1300); // now past expiresAt, probe still held
+  // The expiry wait, separate from the barrier: a clock condition, not a guess about the sidecar.
+  await sleep(Math.max(0, Date.parse(intent.expiresAt) - Date.now()) + 100);
+  assert.ok(Date.now() > Date.parse(intent.expiresAt), 'the approval has not lapsed yet');
   assert.equal((await status(pid)).json?.error?.code, 'PAYMENT_IN_PROGRESS', 'the pay is still in flight past expiry');
 
-  release();
+  held.release();
   const r = await pending;
   assert.equal(r.status, 410, JSON.stringify(r.json));
   assert.equal(r.json?.error?.code, 'APPROVAL_EXPIRED');
@@ -319,6 +380,66 @@ test('a probe that outlives the approval signs nothing, and the id is then truly
   assert.equal(st.status, 404);
   assert.equal(st.json?.error?.code, 'PAYMENT_NOT_FOUND', 'with no record and nothing in flight, not-found is now the truth');
   stalls.delete('/stall-expire');
+});
+
+// ── 3. the approval is re-checked between signing and sending ───────────────────────────────
+//
+// The service checks expiry before signing, but signing can await a remote signer (Circle). These
+// drive buyer.signAndSubmit directly, in process, with a signer that only returns once the send
+// deadline has passed -- the one window the sidecar child cannot be made to stall in -- against the
+// same fixture seller, whose X-PAYMENT counter is the ground truth for "nothing was sent".
+
+/** A real key whose signTypedData returns only after `until` (epoch ms): a slow remote signer. */
+function slowSigner(until: number): LocalAccount {
+  const inner = privateKeyToAccount(generatePrivateKey());
+  return {
+    ...inner,
+    async signTypedData(args) {
+      await sleep(Math.max(0, until - Date.now()) + 20);
+      return inner.signTypedData(args);
+    },
+  } as LocalAccount;
+}
+
+function buyerIntentFor(path: string): ApprovedIntent {
+  const w = makeIntent(path);
+  return {
+    intentId: w.intentId, jobId: w.jobId, taskId: w.taskId, agentId: w.agentId, resource: w.resource,
+    maxAmount: BigInt(w.maxAmount), decision: 'AUTO_APPROVE', policyVersion: w.policyVersion,
+    merchant: w.merchant, amount: BigInt(w.amount), asset: w.asset, network: w.network,
+  };
+}
+
+test('an approval that lapses while the signer runs: signed, never sent, provably unsent', async () => {
+  const intent = buyerIntentFor('/slow-sign');
+  const accept = await probeChallenge(intent.resource, CHAIN_ID);
+  const sendBy = Date.now() + 150; // live when signing starts, lapsed when it returns
+
+  const err = await signAndSubmit(accept, intent, slowSigner(sendBy), CHAIN_ID, undefined, { sendBy }).then(
+    () => assert.fail('an authorization signed after the approval lapsed was submitted'),
+    (e: unknown) => e,
+  );
+  assert.ok(err instanceof SendDeadlinePassed, `want SendDeadlinePassed, got ${String(err)}`);
+  assert.equal(provenNotSent(err), true, 'an unsent authorization must be releasable (FAILED), not held');
+  assert.equal(paid.get('/slow-sign') ?? 0, 0, 'the X-PAYMENT left the process after the approval expired');
+  assert.doesNotMatch((err as Error).message, /0x[0-9a-f]{130}/i, 'the discarded signature leaked into the error');
+});
+
+test('an unparseable send deadline fails closed', async () => {
+  const intent = buyerIntentFor('/nan-deadline');
+  const accept = await probeChallenge(intent.resource, CHAIN_ID);
+  const account = privateKeyToAccount(generatePrivateKey());
+  await assert.rejects(signAndSubmit(accept, intent, account, CHAIN_ID, undefined, { sendBy: NaN }), SendDeadlinePassed);
+  assert.equal(paid.get('/nan-deadline') ?? 0, 0);
+});
+
+test('control: a deadline still in the future is sent and delivered', async () => {
+  const intent = buyerIntentFor('/receipt-direct');
+  const accept = await probeChallenge(intent.resource, CHAIN_ID);
+  const account = privateKeyToAccount(generatePrivateKey());
+  const r = await signAndSubmit(accept, intent, account, CHAIN_ID, undefined, { sendBy: Date.now() + 60_000 });
+  assert.equal(paid.get('/receipt-direct'), 1);
+  assert.equal(r.receipt.payer, account.address);
 });
 
 test('a seller that never answers the probe is cut off pre-sign by the probe bound', async () => {

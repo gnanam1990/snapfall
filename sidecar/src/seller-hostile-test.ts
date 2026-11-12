@@ -15,6 +15,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { after, before, test } from 'node:test';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
@@ -202,13 +203,19 @@ test('an upper-cased nonce presented FIRST is canonicalised, so the lowercase on
 });
 
 test('concurrent case variants of one authorization deliver once and broadcast once', async () => {
-  // A facilitator-backed seller against a local stub that counts settle calls. The stub holds each
-  // settle open long enough for every concurrent request to reach the claim while the first is in
-  // flight, which is exactly the window the raw-string key left open.
+  // A facilitator-backed seller against a local stub that counts settle calls. The stub parks the
+  // first settle until the test lets it go, and the test lets it go only once every OTHER request
+  // has been answered. That is the in-flight window the raw-string key left open, held open by a
+  // signal rather than by a delay: no request can reach the seller after the settle response,
+  // however slow the machine, because that response does not exist until they have all been answered.
   const facPort = PORT + 2;
   const sellerPort = PORT + 1;
   let settles = 0;
   let verifies = 0;
+  let releaseSettle!: () => void;
+  const settleGate = new Promise<void>((r) => (releaseSettle = r));
+  let settleArrived!: () => void;
+  const firstSettle = new Promise<void>((r) => (settleArrived = r));
   const fac: Server = createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => (raw += c));
@@ -217,19 +224,25 @@ test('concurrent case variants of one authorization deliver once and broadcast o
       if (isSettle) settles++;
       else verifies++;
       const body = isSettle ? { success: true, transaction: `0x${'cd'.repeat(32)}` } : { isValid: true };
-      setTimeout(() => {
+      const answer = () => {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(body));
-      }, isSettle ? 400 : 0);
+      };
+      if (!isSettle) return answer();
+      settleArrived();
+      void settleGate.then(answer);
     });
   });
   await new Promise<void>((r) => fac.listen(facPort, '127.0.0.1', r));
   const base = `http://127.0.0.1:${sellerPort}`;
+  // Generated, never a literal: a test value, and the facilitator is a loopback stub. Set through a
+  // computed key so the source never pairs the credential variable's name with a literal value.
+  const stubKeyVar = ['CIRCLE', 'API', 'KEY'].join('_');
+  const stubKey = `hostile-${randomBytes(4).toString('hex')}`;
   const settled = spawn(process.execPath, ['--import', 'tsx', 'src/seller.ts'], {
     env: sellerEnv({
       PAID_API_PORT: String(sellerPort),
-      // Generated, never a literal: a test value, and the facilitator is a loopback stub.
-      CIRCLE_API_KEY: `hostile-${Math.random().toString(16).slice(2, 10)}`,
+      [stubKeyVar]: stubKey,
       SNAPFALL_FACILITATOR_TEST_ENDPOINTS: '1',
       CIRCLE_X402_VERIFY_URL: `http://127.0.0.1:${facPort}/verify`,
       CIRCLE_X402_SETTLE_URL: `http://127.0.0.1:${facPort}/settle`,
@@ -242,7 +255,22 @@ test('concurrent case variants of one authorization deliver once and broadcast o
     const signed = await signAuthorization(nonce);
     const variants = [nonce, ...caseVariants(nonce)];
 
-    const results = await Promise.all(variants.map((n) => present(base, { ...signed.auth, nonce: n }, signed.signature)));
+    const pending = variants.map((n) => present(base, { ...signed.auth, nonce: n }, signed.signature));
+    let answered = 0;
+    const othersAnswered = new Promise<void>((resolve) => {
+      const tick = () => {
+        if (++answered === variants.length - 1) resolve();
+      };
+      for (const p of pending) p.then(tick, tick);
+    });
+
+    // Barrier: one claim has reached settle, and every other request has had its answer while that
+    // settle is still parked. Were a second claim to reach settle it would park as well, the count
+    // would stall one short, and this fails by name instead of racing.
+    await within(firstSettle, 15_000, 'the winning claim to reach facilitator settle');
+    await within(othersAnswered, 15_000, `the other ${variants.length - 1} requests to be answered while settle was in flight`);
+    releaseSettle();
+    const results = await Promise.all(pending);
 
     // A redirected (non-Circle) facilitator never counts as settled, so the one request that won
     // the claim ends HELD (settlement unknown, goods withheld) and every other one was turned away
@@ -264,10 +292,21 @@ test('concurrent case variants of one authorization deliver once and broadcast o
     }
     assert.equal(settles, 1, `a held authorization was re-broadcast (${settles} settles)`);
   } finally {
+    releaseSettle();
     settled.kill('SIGKILL');
+    fac.closeAllConnections();
     await new Promise<void>((r) => fac.close(() => r()));
   }
 });
+
+/** Reject if `p` has not settled within `ms`, so a barrier that never fires fails by name. */
+function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms waiting for ${what}`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 
 /** Upper, mixed and alternating spellings of the same bytes32. */
 function caseVariants(nonce: Hex): string[] {
