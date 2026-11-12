@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { userOpFees } from './passkeyWallet';
+import { clientKeyMatchesNetwork, passkeyConfig, userOpFees } from './passkeyWallet';
 
 // The bundler's medium level, as Circle answers it: decimal wei strings.
 const answer = {
@@ -38,4 +38,21 @@ test('a gas price that is not a decimal string is refused, even if it would stri
   for (const bad of answers) {
     assert.throws(() => userOpFees(bad as never), /usable gas price/);
   }
+});
+
+test('a client key is only used on its own network', () => {
+  assert.equal(clientKeyMatchesNetwork('TEST_CLIENT_KEY:abc:def', 'arc-testnet'), true);
+  assert.equal(clientKeyMatchesNetwork('TEST_CLIENT_KEY:abc:def', 'arc-mainnet'), false);
+  assert.equal(clientKeyMatchesNetwork('LIVE_CLIENT_KEY:abc:def', 'arc-mainnet'), true);
+  assert.equal(clientKeyMatchesNetwork('LIVE_CLIENT_KEY:abc:def', 'arc-testnet'), false);
+  assert.equal(clientKeyMatchesNetwork('abc', 'arc-mainnet'), false);
+  assert.equal(clientKeyMatchesNetwork('abc', 'arc-testnet'), false);
+});
+
+test('a mainnet build with only a testnet key offers no passkey wallet', () => {
+  assert.equal(passkeyConfig('arc-mainnet', 'TEST_CLIENT_KEY:abc:def'), null);
+  assert.equal(passkeyConfig('arc-testnet', 'LIVE_CLIENT_KEY:abc:def'), null);
+  assert.equal(passkeyConfig('arc-mainnet', ''), null);
+  assert.equal(passkeyConfig('arc-mainnet', 'LIVE_CLIENT_KEY:abc:def')?.clientKey, 'LIVE_CLIENT_KEY:abc:def');
+  assert.equal(passkeyConfig('arc-testnet', 'TEST_CLIENT_KEY:abc:def')?.clientKey, 'TEST_CLIENT_KEY:abc:def');
 });

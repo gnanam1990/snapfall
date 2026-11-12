@@ -20,6 +20,7 @@
 import type { Address, Hex } from 'viem';
 import type { WalletCall } from './customerWallet';
 import { ERC20_BALANCE_ABI, MESSAGE_TRANSMITTER_ABI, type CctpNetwork } from './cctp';
+import { networkName, type NetworkName } from './network';
 import { UserOperationFailedError } from './cctpBurnGuard';
 
 /** Circle's documented modular-wallet backend; the same for every app. */
@@ -82,10 +83,25 @@ export interface PasskeyConfig {
   clientUrl: string;
 }
 
-/** Null when the portal has no Circle client key: the self-custody path is then not offered. */
-export function passkeyConfig(): PasskeyConfig | null {
-  const clientKey = process.env.NEXT_PUBLIC_CIRCLE_CLIENT_KEY ?? '';
-  if (!clientKey) return null;
+/**
+ * Circle names a key's environment in its prefix (`TEST_CLIENT_KEY:…`, `LIVE_CLIENT_KEY:…`). A
+ * key for the other environment talks to the other network's bundler and paymaster, so a
+ * mainnet build never uses a testnet key, and a testnet build never uses a live one.
+ */
+export function clientKeyMatchesNetwork(clientKey: string, network: NetworkName): boolean {
+  const prefix = clientKey.split(':', 1)[0];
+  return network === 'arc-mainnet' ? prefix.startsWith('LIVE_') : prefix.startsWith('TEST_');
+}
+
+/**
+ * Null when the portal has no Circle client key for this build's network: the self-custody path
+ * is then not offered.
+ */
+export function passkeyConfig(
+  network: NetworkName = networkName(),
+  clientKey: string = process.env.NEXT_PUBLIC_CIRCLE_CLIENT_KEY ?? '',
+): PasskeyConfig | null {
+  if (!clientKey || !clientKeyMatchesNetwork(clientKey, network)) return null;
   return { clientKey, clientUrl: process.env.NEXT_PUBLIC_CIRCLE_CLIENT_URL || DEFAULT_CLIENT_URL };
 }
 
