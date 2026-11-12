@@ -343,8 +343,9 @@ var postSign = map[string]bool{
 //
 // PAYMENT_IN_PROGRESS is special-cased to false. Nothing about it says a signature
 // happened, but a payment may be in flight and the reservation still backs it; the
-// caller polls Status on its own precomputed paymentId, where a PAYMENT_NOT_FOUND means
-// "no durable record, safe to release" (that is exactly the in-flight-lock case).
+// caller polls Status on its own precomputed paymentId. While that pay is still running the
+// sidecar answers 409 PAYMENT_IN_PROGRESS (the hold stands); once it has finished, a
+// PAYMENT_NOT_FOUND means "no durable record, nothing was signed, safe to release".
 func (e *Error) PreSign() bool {
 	// INTERNAL never reaches here from this package: decodeEnvelope strips it to a plain error
 	// because it straddles the sidecar's write-ahead SIGNED upsert. Refuse it here too, so a

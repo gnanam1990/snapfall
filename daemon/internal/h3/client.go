@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -213,8 +214,10 @@ func (c *Client) Pay(ctx context.Context, in WireIntent, tok ApprovalToken) (Pay
 //
 // Pass the caller's OWN precomputed PaymentID(intentHash, nonce), never an id read out
 // of an error envelope: the in-flight-lock branch returns paymentId:null
-// (service.ts:302-306). A 404 whose Code is PAYMENT_NOT_FOUND means the sidecar holds no
-// durable record, so nothing was ever signed and the hold is safe to release. A 404
+// (service.ts:302-306). A 409 PAYMENT_IN_PROGRESS means a pay for this id is still running
+// in the sidecar, so the hold stands. A 404 whose Code is PAYMENT_NOT_FOUND means the sidecar
+// holds no durable record and no pay is running, so nothing was ever signed and the hold is
+// safe to release. A 404
 // whose Code is BAD_REQUEST is route-not-found (service.ts:478) and means nothing of the
 // kind, which is why classification is on Code and never on HTTP status.
 func (c *Client) Status(ctx context.Context, paymentID string) (StatusResult, error) {
@@ -230,6 +233,14 @@ func (c *Client) Status(ctx context.Context, paymentID string) (StatusResult, er
 			"whose state the sidecar did not report", paymentID)
 	}
 	return out, nil
+}
+
+// PaymentInProgress reports whether err is the sidecar's 409 PAYMENT_IN_PROGRESS: a pay
+// for this paymentId is still running, so its outcome is not known yet and any hold backing
+// it stands. It is classified on the Code, like every other answer, never on HTTP status.
+func PaymentInProgress(err error) bool {
+	var he *Error
+	return errors.As(err, &he) && he.Code == CodePaymentInProgress
 }
 
 // do performs one request and decodes a 200 body into out (nil to discard).

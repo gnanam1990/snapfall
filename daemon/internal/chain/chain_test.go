@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -27,6 +28,14 @@ type fakeRPC struct {
 	sent      []*types.Transaction
 	revertFor map[common.Address]bool
 	views     map[string]string // calldata-hex -> return-hex for eth_call
+	// unmined holds accepted transactions that have not mined yet: no receipt, and not
+	// counted in the "latest" nonce. Empty (the default) means every send mines at once.
+	unmined map[common.Hash]bool
+	// holdNext, when set, puts every transaction sent from now on into unmined.
+	holdNext bool
+	// receiptReads counts eth_getTransactionReceipt calls, so a test can tell what ran
+	// before the receipt wait began.
+	receiptReads int
 }
 
 func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +57,13 @@ func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
 	case "eth_chainId":
 		reply(f.chainID)
 	case "eth_getTransactionCount":
-		reply(fmt.Sprintf("0x%x", len(f.sent)))
+		var params []string
+		_ = json.Unmarshal(req.Params, &params)
+		n := len(f.sent)
+		if len(params) > 1 && params[1] == "latest" {
+			n -= len(f.unmined)
+		}
+		reply(fmt.Sprintf("0x%x", n))
 	case "eth_gasPrice":
 		reply("0x3b9aca00")
 	case "eth_estimateGas":
@@ -62,12 +77,19 @@ func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.sent = append(f.sent, tx)
+		if f.holdNext {
+			f.unmined[tx.Hash()] = true
+		}
 		reply(tx.Hash().Hex())
 	case "eth_getTransactionReceipt":
+		f.receiptReads++
 		var params []string
 		_ = json.Unmarshal(req.Params, &params)
 		for _, tx := range f.sent {
 			if tx.Hash().Hex() == params[0] {
+				if f.unmined[tx.Hash()] {
+					break
+				}
 				status := "0x1"
 				if tx.To() != nil && f.revertFor[*tx.To()] {
 					status = "0x0"
@@ -96,7 +118,8 @@ func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
 
 func newFake(t *testing.T) (*fakeRPC, *Client) {
 	t.Helper()
-	f := &fakeRPC{chainID: "0x4cef52", revertFor: map[common.Address]bool{}, views: map[string]string{}}
+	f := &fakeRPC{chainID: "0x4cef52", revertFor: map[common.Address]bool{}, views: map[string]string{},
+		unmined: map[common.Hash]bool{}}
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	t.Cleanup(srv.Close)
 	c, err := newFromKeyHex(testKey, srv.URL, 5_042_002, "TEST_KEY")
@@ -228,5 +251,152 @@ func TestOracle_ChainStateIsAuthoritative(t *testing.T) {
 	rate, err := o.AdvanceRateBps(context.Background())
 	if err != nil || rate != 6_000 {
 		t.Fatalf("advance rate = %d err=%v, want 6000", rate, err)
+	}
+}
+
+// DeliveryAnchored is true only for Delivered, the one status acceptDelivery accepts; the
+// settled terminal is not "delivered" for the purpose of submitting again.
+func TestOracle_DeliveryAnchoredOnlyWhenDelivered(t *testing.T) {
+	f, c := newFake(t)
+	jv := common.HexToAddress("0x00000000000000000000000000000000000000F1")
+	o := Oracle{Reader: c, JobVault: jv}
+	vaultID := "0x" + strings.Repeat("bb", 32)
+	id, _ := JobID32(vaultID)
+	key := "0x" + strings.ToLower(fmt.Sprintf("%x", CalldataJobStatus(id)))
+	for status, want := range map[string]bool{"02": false, "03": true, "04": false, "05": false} {
+		f.mu.Lock()
+		f.views[key] = "0x" + strings.Repeat("00", 31) + status
+		f.mu.Unlock()
+		got, err := o.DeliveryAnchored(context.Background(), vaultID)
+		if err != nil || got != want {
+			t.Fatalf("status %s: anchored=%v err=%v, want %v", status, got, err, want)
+		}
+	}
+	if _, err := o.DeliveryAnchored(context.Background(), "not-a-job-id"); err == nil {
+		t.Fatal("a malformed vault id must error, not read as undelivered")
+	}
+}
+
+// A broadcast is reported BEFORE the receipt wait: when the wait then fails, the caller
+// already holds the hash and nonce of a transaction that may still mine.
+func TestSubmitTracked_ReportsTheBroadcastBeforeTheReceiptWait(t *testing.T) {
+	f, c := newFake(t)
+	f.mu.Lock()
+	f.holdNext = true
+	f.mu.Unlock()
+	var got []Broadcast
+	readsAtHook := -1
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	_, err := c.SubmitTracked(ctx, common.HexToAddress("0xAA"), []byte{0x01}, func(b Broadcast) {
+		f.mu.Lock()
+		readsAtHook = f.receiptReads
+		f.mu.Unlock()
+		got = append(got, b)
+	})
+	if err == nil {
+		t.Fatal("a receipt wait that never saw a receipt returned no error")
+	}
+	if len(got) != 1 {
+		t.Fatalf("broadcast hook ran %d times, want 1", len(got))
+	}
+	if readsAtHook != 0 {
+		t.Fatalf("hook ran after %d receipt reads, want 0: it must run before the wait", readsAtHook)
+	}
+	f.mu.Lock()
+	sent := f.sent[0]
+	f.mu.Unlock()
+	if got[0].TxHash != sent.Hash().Hex() || got[0].Nonce != sent.Nonce() {
+		t.Fatalf("hook got %+v, want hash %s nonce %d", got[0], sent.Hash().Hex(), sent.Nonce())
+	}
+
+	// Submit (no hook) is unchanged and still works on the same client.
+	f.mu.Lock()
+	f.holdNext = false
+	f.mu.Unlock()
+	if _, err := c.Submit(context.Background(), common.HexToAddress("0xAB"), []byte{0x02}); err != nil {
+		t.Fatalf("plain submit: %v", err)
+	}
+}
+
+// Resolve reads one transaction's state without waiting: pending while it can still mine,
+// mined (with the receipt's status) once it has, dropped once its nonce went to another
+// transaction.
+func TestResolve_PendingMinedRevertedDropped(t *testing.T) {
+	f, c := newFake(t)
+	ctx := context.Background()
+	revertAddr := common.HexToAddress("0x00000000000000000000000000000000000000BB")
+	f.mu.Lock()
+	f.holdNext = true
+	f.revertFor[revertAddr] = true
+	f.mu.Unlock()
+
+	short := func() (context.Context, context.CancelFunc) { return context.WithTimeout(ctx, 600*time.Millisecond) }
+	var ok, rev Broadcast
+	c1, cancel1 := short()
+	_, _ = c.SubmitTracked(c1, common.HexToAddress("0xAA"), []byte{0x01}, func(b Broadcast) { ok = b })
+	cancel1()
+	c2, cancel2 := short()
+	_, _ = c.SubmitTracked(c2, revertAddr, []byte{0x02}, func(b Broadcast) { rev = b })
+	cancel2()
+
+	for _, b := range []Broadcast{ok, rev} {
+		if st, _, err := c.Resolve(ctx, b); err != nil || st != TxPending {
+			t.Fatalf("unmined %s: state=%v err=%v, want pending", b.TxHash, st, err)
+		}
+	}
+
+	f.mu.Lock()
+	f.unmined = map[common.Hash]bool{}
+	f.holdNext = false
+	f.mu.Unlock()
+	if st, rec, err := c.Resolve(ctx, ok); err != nil || st != TxMined || rec.Reverted || rec.TxHash != ok.TxHash {
+		t.Fatalf("mined: state=%v rec=%+v err=%v", st, rec, err)
+	}
+	if st, rec, err := c.Resolve(ctx, rev); err != nil || st != TxMined || !rec.Reverted {
+		t.Fatalf("mined revert: state=%v rec=%+v err=%v", st, rec, err)
+	}
+
+	// Dropped: the transaction leaves the mempool, and the next submission takes its nonce
+	// and mines. The first can never mine now.
+	f.mu.Lock()
+	f.holdNext = true
+	f.mu.Unlock()
+	var lost Broadcast
+	c3, cancel3 := short()
+	_, _ = c.SubmitTracked(c3, common.HexToAddress("0xAC"), []byte{0x03}, func(b Broadcast) { lost = b })
+	cancel3()
+	f.mu.Lock()
+	f.sent = f.sent[:len(f.sent)-1]
+	f.unmined = map[common.Hash]bool{}
+	f.holdNext = false
+	f.mu.Unlock()
+	if st, _, err := c.Resolve(ctx, lost); err != nil || st != TxPending {
+		t.Fatalf("gone from the mempool but nonce still open: state=%v err=%v, want pending", st, err)
+	}
+	if _, err := c.Submit(ctx, common.HexToAddress("0xAD"), []byte{0x04}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, err := c.Resolve(ctx, lost); err != nil || st != TxDropped {
+		t.Fatalf("nonce taken by another transaction: state=%v err=%v, want dropped", st, err)
+	}
+}
+
+// Resolve fails closed: a read failure is an error, never a state, and a key-less client
+// refuses outright.
+func TestResolve_FailsClosed(t *testing.T) {
+	f, c := newFake(t)
+	f.mu.Lock()
+	f.chainID = "0x1"
+	f.mu.Unlock()
+	if _, _, err := c.Resolve(context.Background(), Broadcast{TxHash: "0xab", Nonce: 0}); err == nil {
+		t.Fatal("resolve on the wrong chain returned no error")
+	}
+	ro, err := NewReadOnly("http://127.0.0.1:1", 5_042_002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ro.Resolve(context.Background(), Broadcast{TxHash: "0xab"}); err == nil {
+		t.Fatal("a read-only client resolved a broadcast it has no nonce for")
 	}
 }

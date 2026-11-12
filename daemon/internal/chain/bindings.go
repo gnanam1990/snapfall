@@ -179,8 +179,12 @@ func DecodeUint256(ret []byte) (*big.Int, error) {
 	return new(big.Int).SetBytes(ret), nil
 }
 
-// JobStatusAccepted is JobVault's enum value for the settled terminal state.
-const JobStatusAccepted uint8 = 4
+// JobVault's JobStatus enum values the daemon reads: Delivered is the only status in which
+// acceptDelivery succeeds, Accepted is the settled terminal state.
+const (
+	JobStatusDelivered uint8 = 3
+	JobStatusAccepted  uint8 = 4
+)
 
 // Oracle answers the crash-window question from CHAIN STATE — never from a heuristic:
 // SC-FP-003 permits exactly one advance per job, so openAdvanceOf says whether an
@@ -232,17 +236,31 @@ func (o Oracle) AdvanceLanded(ctx context.Context, vaultJobID string) (bool, err
 
 // SettlementLanded reports whether the job reached the Accepted terminal on chain.
 func (o Oracle) SettlementLanded(ctx context.Context, vaultJobID string) (bool, error) {
-	id, err := JobID32(vaultJobID)
-	if err != nil {
-		return false, err
-	}
-	ret, err := o.Reader.CallView(ctx, o.JobVault, CalldataJobStatus(id))
-	if err != nil {
-		return false, err
-	}
-	status, err := DecodeJobStatus(ret)
+	status, err := o.jobStatus(ctx, vaultJobID)
 	if err != nil {
 		return false, err
 	}
 	return status == JobStatusAccepted, nil
+}
+
+// DeliveryAnchored reports whether the job is Delivered on chain, the one status in which
+// acceptDelivery can succeed.
+func (o Oracle) DeliveryAnchored(ctx context.Context, vaultJobID string) (bool, error) {
+	status, err := o.jobStatus(ctx, vaultJobID)
+	if err != nil {
+		return false, err
+	}
+	return status == JobStatusDelivered, nil
+}
+
+func (o Oracle) jobStatus(ctx context.Context, vaultJobID string) (uint8, error) {
+	id, err := JobID32(vaultJobID)
+	if err != nil {
+		return 0, err
+	}
+	ret, err := o.Reader.CallView(ctx, o.JobVault, CalldataJobStatus(id))
+	if err != nil {
+		return 0, err
+	}
+	return DecodeJobStatus(ret)
 }

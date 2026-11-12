@@ -151,6 +151,42 @@ func (l lane) Submit(ctx context.Context, calldata []byte) (funding.ChainOutcome
 	return funding.ChainOutcome{Submitted: true, TxHash: r.TxHash, Block: r.Block, GasUsed: r.GasUsed, Reverted: r.Reverted}, nil
 }
 
+// customerSettleLane is the customer lane: a lane over a raw-key client that also reports each
+// acceptDelivery broadcast before its receipt wait and can resolve it later
+// (funding.TrackedSubmitter). A receipt wait that times out says nothing about whether the
+// transaction mines, so a retried Accept asks about the recorded transaction instead of
+// sending a second one.
+type customerSettleLane struct {
+	c  *chain.Client
+	to common.Address
+}
+
+var _ funding.TrackedSubmitter = customerSettleLane{}
+
+func outcomeOf(r chain.Receipt) funding.ChainOutcome {
+	return funding.ChainOutcome{Submitted: true, TxHash: r.TxHash, Block: r.Block, GasUsed: r.GasUsed, Reverted: r.Reverted}
+}
+
+func (l customerSettleLane) Submit(ctx context.Context, calldata []byte) (funding.ChainOutcome, error) {
+	return lane{l.c, l.to}.Submit(ctx, calldata)
+}
+
+func (l customerSettleLane) SubmitTracked(ctx context.Context, calldata []byte, onBroadcast func(funding.Broadcast)) (funding.ChainOutcome, error) {
+	r, err := l.c.SubmitTracked(ctx, l.to, calldata, onBroadcast)
+	if err != nil {
+		return funding.ChainOutcome{}, err
+	}
+	return outcomeOf(r), nil
+}
+
+func (l customerSettleLane) Resolve(ctx context.Context, b funding.Broadcast) (funding.TxState, funding.ChainOutcome, error) {
+	st, r, err := l.c.Resolve(ctx, b)
+	if err != nil || st != chain.TxMined {
+		return st, funding.ChainOutcome{}, err
+	}
+	return st, outcomeOf(r), nil
+}
+
 // chainBudget is V6 §1.C's alarm. Two independent 6.00 figures govern one job's spending:
 // the chain's maxOperatingBudget (seed-demo's -budget, enforced by JobVault) and the daemon's
 // policy.DemoPolicy().JobBudgetMicros (enforced by policy rule 1), and NOTHING reconciles
@@ -934,7 +970,7 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		if customer, err := chain.NewFromEnv("SNAPFALL_CUSTOMER_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
 			log.Warn("customer chain lane NOT wired, settlements stop at settlement.pending_chain", "reason", err)
 		} else {
-			settleLane = lane{customer, jvAddr}
+			settleLane = customerSettleLane{customer, jvAddr}
 			if reader == nil {
 				reader = customer
 			}
@@ -953,6 +989,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 			// A customer with their own wallet settles on chain directly; the Accept that
 			// follows must find that out instead of submitting a second acceptDelivery.
 			br.SetSettlementOracle(oracle.SettlementLanded)
+			// A RETRIED Accept (after a revert or a failed submission) resubmits only once
+			// the job is Delivered on chain, so repeated early Accepts spend no gas.
+			br.SetDeliveryOracle(oracle.DeliveryAnchored)
 			// Read the org's current advance rate at intent creation so the amount the
 			// owner approves matches what FloatPool draws (no hardcoded-50%-vs-55%
 			// divergence when the rate has climbed).
@@ -1223,6 +1262,8 @@ func wirePayer(ctx context.Context, log *slog.Logger, fund *funding.Agent, chain
 //	                                            releases the remainder in the same event.
 //	FAILED / EXPIRED                            nothing settled: release, NOT pre-sign.
 //	SIGNED / SUBMITTED / RECONCILING            the outcome is unknown: the hold STANDS.
+//	409 PAYMENT_IN_PROGRESS (the CODE)          a pay for this id is still running: the hold
+//	                                            STANDS.
 //	any transport or decode failure             the outcome is unknown: the hold STANDS.
 //	ANY OTHER state, including ""               the vocabulary changed under a live hold: the
 //	                                            hold STANDS and the owner is escalated.
@@ -1252,6 +1293,15 @@ func reconcileUnresolved(ctx context.Context, led *budget.Ledger, poller statusP
 	for _, h := range holds {
 		res, err := poller.Status(ctx, h.PaymentID)
 		if err != nil {
+			if h3.PaymentInProgress(err) {
+				// The sidecar is still running a pay for this id: nothing is known yet, and
+				// the reservation is what backs it. The hold stands, named by the code so the
+				// stall escalation says what the sidecar answered.
+				log.Info("a claimed budget hold's payment is still in progress at the sidecar: it stands",
+					"request", h.RequestID, "job", h.JobID, "payment_id", h.PaymentID)
+				open[h.RequestID] = h3.CodePaymentInProgress
+				continue
+			}
 			var he *h3.Error
 			if errors.As(err, &he) && he.Code == h3.CodePaymentNotFound {
 				// W2 and W5 are the same recovery: the sidecar's pre-sign checks persist

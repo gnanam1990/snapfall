@@ -90,6 +90,10 @@ func TestFunding_SoleEntryPointDemandsAGrant(t *testing.T) {
 		// contract refuses unless msg.sender is the job's customer and the job is
 		// Delivered, a misdirected call reverts; it cannot misappropriate).
 		"SettleOnChain": true,
+		// ResolveSettlement takes NO Grant, classified: it is a READ. It asks the settle
+		// lane what became of a transaction that lane already broadcast (receipt and mined
+		// nonce), and signs and sends nothing.
+		"ResolveSettlement": true,
 		// The H3 payment lane (classified at the V6 review):
 		// ExecutePayment DEMANDS the Grant like Execute and derives the wire intent, the
 		// approvalToken and the paymentId FROM the grant: no caller-supplied payee,

@@ -131,7 +131,80 @@ func (c *Client) SubmitWithGas(ctx context.Context, to common.Address, calldata 
 	return c.submit(ctx, to, calldata, gasLimit)
 }
 
+// Broadcast identifies one signed transaction the node has accepted: its hash and the
+// signer nonce it occupies. Both are public chain data, never key material.
+type Broadcast struct {
+	TxHash string
+	Nonce  uint64
+}
+
+// SubmitTracked is Submit with one extra step: onBroadcast runs as soon as the node has
+// accepted the transaction and BEFORE the receipt wait. A receipt wait can time out, its
+// RPC can fail, or the process can die while it runs, and in every one of those cases the
+// transaction is still out and may still mine. A caller that records the Broadcast from
+// the hook can ask the chain about that exact transaction later (Resolve) instead of
+// treating it as never sent and sending a second one.
+//
+// The hook runs under the signer mutex and cannot recall anything: by the time it runs
+// the transaction is already out. Nothing in Submit's contract changes otherwise.
+func (c *Client) SubmitTracked(ctx context.Context, to common.Address, calldata []byte, onBroadcast func(Broadcast)) (Receipt, error) {
+	return c.submitTracked(ctx, to, calldata, 0, onBroadcast)
+}
+
+// TxState is what the chain says, right now, about a transaction this signer broadcast.
+type TxState int
+
+const (
+	// TxPending: no receipt, and the signer's mined nonce has not passed the transaction's
+	// nonce. It may still mine; nothing about it is known yet.
+	TxPending TxState = iota
+	// TxMined: a receipt exists. Receipt.Reverted says how it ended.
+	TxMined
+	// TxDropped: no receipt, and the signer's mined nonce has moved past the transaction's
+	// nonce. Some other transaction took that nonce, so this one can never mine.
+	TxDropped
+)
+
+// Resolve reports a broadcast transaction's state without waiting for it. It reads the
+// signer's MINED nonce first and the receipt second: if the nonce has already passed b.Nonce
+// and the receipt read that follows still finds nothing, the slot went to another
+// transaction, so b can never mine (reading the other way round could mistake a
+// transaction that mined between the two reads for a dropped one). Any read failure is
+// returned as an error, never guessed as a state.
+func (c *Client) Resolve(ctx context.Context, b Broadcast) (TxState, Receipt, error) {
+	if c.key == nil {
+		return TxPending, Receipt{}, fmt.Errorf("refusing to resolve: this client is read-only (no signer nonce to compare)")
+	}
+	if strings.TrimSpace(b.TxHash) == "" {
+		return TxPending, Receipt{}, fmt.Errorf("resolve: transaction hash is empty")
+	}
+	if err := c.VerifyChainID(ctx); err != nil {
+		return TxPending, Receipt{}, err
+	}
+	var nonceHex string
+	if err := c.rpc(ctx, "eth_getTransactionCount", []any{c.addr.Hex(), "latest"}, &nonceHex); err != nil {
+		return TxPending, Receipt{}, fmt.Errorf("mined nonce: %w", err)
+	}
+	mined := new(big.Int).SetBytes(common.FromHex(nonceHex)).Uint64()
+	rec, found, err := c.receiptOnce(ctx, b.TxHash)
+	if err != nil {
+		return TxPending, Receipt{}, err
+	}
+	switch {
+	case found:
+		return TxMined, rec, nil
+	case mined > b.Nonce:
+		return TxDropped, Receipt{TxHash: b.TxHash}, nil
+	default:
+		return TxPending, Receipt{TxHash: b.TxHash}, nil
+	}
+}
+
 func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte, fixedGas uint64) (Receipt, error) {
+	return c.submitTracked(ctx, to, calldata, fixedGas, nil)
+}
+
+func (c *Client) submitTracked(ctx context.Context, to common.Address, calldata []byte, fixedGas uint64, onBroadcast func(Broadcast)) (Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -191,6 +264,9 @@ func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte,
 	if err := c.rpc(ctx, "eth_sendRawTransaction", []any{"0x" + hex.EncodeToString(rawTx)}, &txHash); err != nil {
 		return Receipt{}, fmt.Errorf("send: %w", err)
 	}
+	if onBroadcast != nil {
+		onBroadcast(Broadcast{TxHash: txHash, Nonce: nonce})
+	}
 
 	return c.AwaitReceipt(ctx, txHash)
 }
@@ -203,22 +279,12 @@ func (c *Client) AwaitReceipt(ctx context.Context, txHash string) (Receipt, erro
 	// Arc finalizes on inclusion; poll briefly for the receipt.
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		var rec struct {
-			Status      string `json:"status"`
-			BlockNumber string `json:"blockNumber"`
-			GasUsed     string `json:"gasUsed"`
-		}
-		found := false
-		if err := c.rpcMaybeNull(ctx, "eth_getTransactionReceipt", []any{txHash}, &rec, &found); err != nil {
-			return Receipt{}, fmt.Errorf("receipt: %w", err)
+		rec, found, err := c.receiptOnce(ctx, txHash)
+		if err != nil {
+			return Receipt{}, err
 		}
 		if found {
-			return Receipt{
-				TxHash:   txHash,
-				Block:    new(big.Int).SetBytes(common.FromHex(rec.BlockNumber)).Uint64(),
-				GasUsed:  new(big.Int).SetBytes(common.FromHex(rec.GasUsed)).Uint64(),
-				Reverted: new(big.Int).SetBytes(common.FromHex(rec.Status)).Sign() == 0,
-			}, nil
+			return rec, nil
 		}
 		if time.Now().After(deadline) {
 			return Receipt{}, fmt.Errorf("transaction %s submitted but receipt not found within 60s — the restart oracle resolves it (chain state is authoritative)", txHash)
@@ -229,6 +295,28 @@ func (c *Client) AwaitReceipt(ctx context.Context, txHash string) (Receipt, erro
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// receiptOnce reads txHash's receipt a single time; found=false means the node has none yet.
+func (c *Client) receiptOnce(ctx context.Context, txHash string) (Receipt, bool, error) {
+	var rec struct {
+		Status      string `json:"status"`
+		BlockNumber string `json:"blockNumber"`
+		GasUsed     string `json:"gasUsed"`
+	}
+	found := false
+	if err := c.rpcMaybeNull(ctx, "eth_getTransactionReceipt", []any{txHash}, &rec, &found); err != nil {
+		return Receipt{}, false, fmt.Errorf("receipt: %w", err)
+	}
+	if !found {
+		return Receipt{}, false, nil
+	}
+	return Receipt{
+		TxHash:   txHash,
+		Block:    new(big.Int).SetBytes(common.FromHex(rec.BlockNumber)).Uint64(),
+		GasUsed:  new(big.Int).SetBytes(common.FromHex(rec.GasUsed)).Uint64(),
+		Reverted: new(big.Int).SetBytes(common.FromHex(rec.Status)).Sign() == 0,
+	}, true, nil
 }
 
 // CallView executes a read-only eth_call.

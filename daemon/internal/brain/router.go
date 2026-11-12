@@ -71,6 +71,14 @@ type Brain struct {
 	// with their own wallet settles directly; this is how the Accept that follows learns
 	// the settlement already happened instead of submitting a second, doomed one.
 	settlementLanded func(ctx context.Context, vaultJobID string) (bool, error)
+	// deliveryAnchored reads whether a job is Delivered on chain, the only status in which
+	// JobVault.acceptDelivery can succeed. A RETRIED settlement consults it so a repeated
+	// Accept never spends gas on a submission the contract is certain to revert.
+	deliveryAnchored func(ctx context.Context, vaultJobID string) (bool, error)
+	// settling holds the jobs whose Accept settlement attempt is in flight. It is guarded
+	// by mu and is deliberately in memory only: it serializes attempts within this process,
+	// and after a restart nothing is in flight, so an empty map is the correct state.
+	settling map[string]bool
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).
@@ -130,6 +138,7 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 		jobs:                      make(map[string]*jobState),
 		tasks:                     make(map[string]*taskHandle),
 		milestoneObservationGates: make(map[string]*milestoneObservationGate),
+		settling:                  make(map[string]bool),
 	}
 
 	b.maxRevisions = 2
