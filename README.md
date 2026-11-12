@@ -14,10 +14,37 @@ on the explorer without trusting the operator.
 Arc Programmable Money Hackathon (Encode × Circle) · Agentic Economy + DeFi · CP3 submission
 Aug 9, 2026.
 
+**Live site:** [snapfall.lol](https://www.snapfall.lol). It reads the Arc **mainnet** contracts
+(read-only for now: see [On Arc mainnet](#on-arc-mainnet)).
+
+- [`docs/CIRCLE-INTEGRATIONS.md`](docs/CIRCLE-INTEGRATIONS.md) — the five Circle products, what each one is for, and the live testnet run of each, with transactions.
+- [`docs/MAINNET.md`](docs/MAINNET.md) — capital controls, the mainnet deployment, the emergency stop.
+- [`docs/addresses.md`](docs/addresses.md) — every deployment, read back from chain.
 - [`docs/architecture.md`](docs/architecture.md) — architecture diagram: the local/on-chain split, the settlement waterfall, and the Circle surfaces marked proven vs unproven.
 - [`docs/PRD.md`](docs/PRD.md) — the product/spec definition.
 - [`docs/CP2-SUBMISSION.md`](docs/CP2-SUBMISSION.md) — the CP2 progress submission.
 - [`docs/CIRCLE-FEEDBACK.md`](docs/CIRCLE-FEEDBACK.md) — Circle product feedback (Ignyte Stablecoins Commerce Stack Challenge).
+
+## On Arc mainnet
+
+The contracts, with the capital controls in [`docs/MAINNET.md`](docs/MAINNET.md), were deployed on
+**Arc mainnet (chain `5042`)** on 12 Nov 2026
+([`docs/addresses.md` §9](docs/addresses.md#9-arc-mainnet-12-nov-2026)):
+
+| Contract | Address |
+| --- | --- |
+| JobVault | [`0x67FeD7B5eaA966c4cc2738d1530f230B31B6f372`](https://explorer.arc.io/address/0x67FeD7B5eaA966c4cc2738d1530f230B31B6f372) |
+| FloatPool | [`0xD2FaB9CD08a73B476e8DC81Afb7b57564dEef08f`](https://explorer.arc.io/address/0xD2FaB9CD08a73B476e8DC81Afb7b57564dEef08f) |
+| AuditAnchor | [`0xe8886A39158C7CC504F31789513b926704CCaB4D`](https://explorer.arc.io/address/0xe8886A39158C7CC504F31789513b926704CCaB4D) |
+
+**Deliberately tiny:** every cap is 1.00 USDC (lifetime loss ceiling, per advance, per job), and
+deposits are allowlisted. Raising a cap and moving admin both wait out an on-chain delay. The
+admin handover to the owner's wallet is pending. [snapfall.lol/audit](https://www.snapfall.lol/audit)
+reads all of this live from the contracts.
+
+**Not operating yet:** no capital in the pool, no job, no advance. Paying from a passkey wallet
+is off on mainnet until Circle's mainnet (LIVE) keys and gas sponsorship are set up. The money
+path below has run on testnet, not mainnet.
 
 ## Live on Arc testnet
 
@@ -37,6 +64,16 @@ paid at **log index 15**. Pool first, operator second — and that ordering is t
 control flow, not a convention or an off-chain promise: `acceptDelivery` calls
 `repayAdvance` before it transfers the operator's net. A lender can confirm they are made
 whole before the operator takes a cent by reading the transaction, trusting no one.
+
+### The Circle stack, run live on testnet
+
+Each of these ran on Arc testnet (and Base Sepolia for CCTP) in Nov 2026, with the transactions in
+[`docs/CIRCLE-INTEGRATIONS.md`](docs/CIRCLE-INTEGRATIONS.md):
+
+- The operator's treasury and gas relayer are **Circle developer-controlled wallets**: no raw key. The running daemon advanced working capital through the Circle treasury.
+- **x402:** an agent's purchase was signed by the Circle treasury and settled by the Circle relayer.
+- **Customer passkey wallet** (Circle Modular Wallets + Gas Station): it funded escrow and accepted delivery from the customer's own device, with gas sponsored. Acceptance ran both from `/pay` and from the portal's "Accept & settle from my wallet".
+- **CCTP V2:** the customer paid from Base Sepolia (burn → attestation → mint + fund in one operation), and the operator paid out from Arc to Base Sepolia.
 
 ## The advance rate is credit, not a number
 
@@ -81,7 +118,7 @@ cd contracts && forge test
 # daemon (unit + integration; serve mode needs --deployment + signer keys, see deployments/README.md)
 cd daemon && go test ./... && go run ./cmd/snapfall --help
 
-# dashboard — reads the live testnet
+# dashboard — reads Arc testnet by default; SNAPFALL_NETWORK=arc-mainnet for a mainnet build
 cd dashboard && npm ci && npm run dev        # http://localhost:3000
 ```
 
@@ -104,8 +141,11 @@ differences worth knowing before a deploy.
 - **The USYC idle-capital sweep is a disclosed mock** (`MockUSYCStrategy`) — Circle's
   permissioned USYC requires allowlisting. The mock moves real ERC-20 assets and never claims
   to be the real product.
-- **The customer wallet is daemon-custodial for the demo**, stated openly — it stands in for a
-  real customer self-custodying and clicking Accept.
+- **Without a Circle client key the customer wallet is daemon-custodial**, stated openly. With
+  one, the customer self-custodies a passkey wallet and signs `fund` and `acceptDelivery` from their
+  own device. That ran live on testnet; on mainnet it is off until a LIVE client key exists.
+- **The daemon and sidecar are not hosted.** They have run on the operator's machine, not as a
+  public service, so the hosted site shows the chain, not the agent runtime.
 - **Scoping and quotes above the money path use a deterministic stub by default, not a live LLM**,
   so demo runs are reproducible; the chain is authoritative for every figure that moves money. A
   live scoper is opt-in: set `ANTHROPIC_API_KEY` (model via `SNAPFALL_SCOPER_MODEL`, default
