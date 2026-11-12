@@ -19,12 +19,15 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/funding"
 )
 
-// trackedStep is what one acceptDelivery submission does: whether it gets out (the
-// broadcast hook runs), and what the receipt wait then returns.
+// trackedStep is what one acceptDelivery submission does: whether it is signed (the
+// write-ahead hook runs, and the transaction reaches the node unless unsent is set), and
+// what the send or receipt wait then returns.
 type trackedStep struct {
 	broadcast bool
-	out       funding.ChainOutcome
-	err       error
+	// unsent: signed and recorded, but the node never took it (it refused the send).
+	unsent bool
+	out    funding.ChainOutcome
+	err    error
 }
 
 type trackedTx struct {
@@ -51,6 +54,11 @@ type trackedLane struct {
 	rebroadcastErr error
 	// sent are the broadcasts the lane reported to its hook, in order.
 	sent []funding.Broadcast
+	// replacements are the fee replacements the lane signed, in order; replaceErr refuses
+	// them before signing, replaceSendErr fails their send after the hook.
+	replacements   []funding.Broadcast
+	replaceErr     error
+	replaceSendErr error
 }
 
 var _ funding.TrackedSubmitter = (*trackedLane)(nil)
@@ -69,7 +77,7 @@ func (l *trackedLane) Submit(context.Context, []byte) (funding.ChainOutcome, err
 	return funding.ChainOutcome{}, errors.New("untracked submission")
 }
 
-func (l *trackedLane) SubmitTracked(_ context.Context, _ []byte, onBroadcast func(funding.Broadcast)) (funding.ChainOutcome, error) {
+func (l *trackedLane) SubmitTracked(_ context.Context, _ []byte, onSigned func(funding.Broadcast) error) (funding.ChainOutcome, error) {
 	l.mu.Lock()
 	i := l.submits
 	l.submits++
@@ -80,14 +88,22 @@ func (l *trackedLane) SubmitTracked(_ context.Context, _ []byte, onBroadcast fun
 	}
 	step := l.script[i]
 	hash := txHashN(i + 1)
-	bc := funding.Broadcast{TxHash: hash, Nonce: uint64(i), Signer: laneSigner, Raw: []byte{0xf8, byte(i + 1)}}
-	if step.broadcast {
-		l.txs[hash] = &trackedTx{state: funding.TxPending}
-		l.sent = append(l.sent, bc)
-	}
+	bc := funding.Broadcast{TxHash: hash, Nonce: uint64(i), Signer: laneSigner, Raw: []byte{0xf8, byte(i + 1)}, SentHead: l.head}
 	l.mu.Unlock()
 	if step.broadcast {
-		onBroadcast(bc)
+		// Write-ahead, as the real lane: the hook runs before anything is sent, and a failed
+		// record sends nothing.
+		if err := onSigned(bc); err != nil {
+			return funding.ChainOutcome{}, fmt.Errorf("not sent: %w", err)
+		}
+		l.mu.Lock()
+		st := funding.TxPending
+		if step.unsent {
+			st = funding.TxEvicted
+		}
+		l.txs[hash] = &trackedTx{state: st}
+		l.sent = append(l.sent, bc)
+		l.mu.Unlock()
 	}
 	out := step.out
 	if out.Submitted {
@@ -131,10 +147,40 @@ func (l *trackedLane) Rebroadcast(_ context.Context, b funding.Broadcast) error 
 	return nil
 }
 
+func (l *trackedLane) Replace(_ context.Context, _ []byte, prev funding.Broadcast, onSigned func(funding.Broadcast) error) (funding.Broadcast, error) {
+	l.mu.Lock()
+	if l.replaceErr != nil {
+		err := l.replaceErr
+		l.mu.Unlock()
+		return funding.Broadcast{}, err
+	}
+	k := len(l.replacements) + 1
+	bc := funding.Broadcast{TxHash: replHash(k), Nonce: prev.Nonce, Signer: laneSigner, Raw: []byte{0xf9, byte(k)}, SentHead: l.head}
+	sendErr := l.replaceSendErr
+	l.mu.Unlock()
+	if err := onSigned(bc); err != nil {
+		return funding.Broadcast{}, fmt.Errorf("replacement not sent: %w", err)
+	}
+	l.mu.Lock()
+	l.replacements = append(l.replacements, bc)
+	l.txs[bc.TxHash] = &trackedTx{state: funding.TxPending}
+	l.mu.Unlock()
+	return bc, sendErr
+}
+
+// replHash is the hash of the lane's k-th fee replacement.
+func replHash(k int) string { return fmt.Sprintf("0x%064x", 1000+k) }
+
 func (l *trackedLane) set(n int, st funding.TxState, reverted bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.txs[txHashN(n)] = &trackedTx{state: st, reverted: reverted}
+}
+
+func (l *trackedLane) setHash(h string, st funding.TxState, reverted bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.txs[h] = &trackedTx{state: st, reverted: reverted}
 }
 
 func (l *trackedLane) counts() (submits, resolves int) {
@@ -578,5 +624,224 @@ func TestAcceptBroadcast_RevertAfterCustomerSettledRecordsTheCustomer(t *testing
 	}
 	if subs, _ := lane.counts(); subs != 1 {
 		t.Fatalf("lane submissions = %d, want 1", subs)
+	}
+}
+
+// submittedPayloads are the job's settlement.submitted payloads, oldest first.
+func submittedPayloads(t *testing.T, b *Brain, jobID string) []map[string]any {
+	t.Helper()
+	rows, err := b.store.DB().Query(`SELECT payload_json FROM events WHERE kind='settlement.submitted' AND entity_id=? ORDER BY seq`, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var p map[string]any
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// The reviewer's wedge: a recorded acceptDelivery the node HOLDS but never mines (priced
+// under what the chain takes). Its nonce never moves, so it is never dropped, and a re-send
+// of the same bytes changes nothing. Once it has sat replaceAfterBlocks since it was signed,
+// it is re-signed at the SAME nonce with a higher fee, recorded write-ahead as a
+// settlement.submitted that `replaces` it. Replacements are bounded: past the maximum, one
+// settlement.stuck is recorded and nothing more is sent. Whichever transaction at the nonce
+// mines settles the job and every other one is recorded dropped; no new nonce is ever used.
+// The replacement chain survives a restart (it is read back from the log).
+func TestAcceptBroadcast_StalledPendingIsReplacedAtTheSameNonce(t *testing.T) {
+	b, lane, jobID := trackedRig(t, receiptTimeout)
+	b.mu.Lock()
+	b.replaceAfterBlocks, b.maxReplacements = 3, 2
+	b.mu.Unlock()
+	lane.mu.Lock()
+	lane.head = 10
+	lane.mu.Unlock()
+	ctx := context.Background()
+	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+		t.Fatalf("accept#1: state=%q err=%v", s, err)
+	}
+	accept := func() {
+		t.Helper()
+		if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+			t.Fatalf("accept while stalled: state=%q err=%v", s, err)
+		}
+	}
+	// Heads 11 and 12: younger than 3 blocks since sent_head 10, nothing is replaced.
+	accept()
+	accept()
+	if len(lane.replacements) != 0 {
+		t.Fatalf("replaced after %d blocks, want none before 3", 2)
+	}
+	accept() // head 13: replaced
+	lane.mu.Lock()
+	r := append([]funding.Broadcast(nil), lane.replacements...)
+	lane.mu.Unlock()
+	if len(r) != 1 || r[0].Nonce != 0 {
+		t.Fatalf("replacements %+v, want one at the original nonce 0", r)
+	}
+	ps := submittedPayloads(t, b, jobID)
+	if len(ps) != 2 || ps[1]["tx_hash"] != replHash(1) || ps[1]["replaces"] != txHashN(1) || ps[1]["nonce"] != float64(0) {
+		t.Fatalf("submitted records %v, want the replacement recorded with replaces=tx1 at nonce 0", ps)
+	}
+	wantStatus(t, b, jobID, SettlementPending)
+
+	// A restart keeps the chain: the replacement is still linked to tx1's nonce.
+	fund := funding.New()
+	b2 := New(slog.New(slog.NewTextHandler(io.Discard, nil)), b.store, b.memory, fund)
+	if err := b2.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	fund.SetChain(nil, lane)
+	b2.replaceAfterBlocks, b2.maxReplacements = 3, 2
+	b = b2
+
+	// Each pass now resolves both (the head moves by two); replacement 1 was signed at 13.
+	accept() // heads 14, 15
+	accept() // heads 16, 17: replaced again (the maximum)
+	accept()
+	accept()
+	accept()
+	if n := len(lane.replacements); n != 2 {
+		t.Fatalf("replacements = %d, want exactly the maximum of 2", n)
+	}
+	if n := countEvents(t, b.store, "settlement.stuck", jobID); n != 1 {
+		t.Fatalf("settlement.stuck = %d, want exactly one once the maximum was reached", n)
+	}
+	if subs, _ := lane.counts(); subs != 1 {
+		t.Fatalf("SubmitTracked calls = %d, want 1: a replacement is never a new nonce", subs)
+	}
+
+	// The first replacement mines: the job settles under its hash; tx1 and replacement 2
+	// can never mine now and are recorded dropped, naming what took the nonce.
+	lane.setHash(replHash(1), funding.TxMined, false)
+	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
+		t.Fatalf("after a replacement mined: state=%q err=%v, want accepted-settled", s, err)
+	}
+	if _, p := executedRecord(t, b, jobID); p["tx_hash"] != replHash(1) {
+		t.Fatalf("settled by %v, want replacement 1", p["tx_hash"])
+	}
+	rows, err := b.store.DB().Query(`SELECT payload_json FROM events WHERE kind='settlement.dropped' AND entity_id=? ORDER BY seq`, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dropped []string
+	for rows.Next() {
+		var raw string
+		_ = rows.Scan(&raw)
+		var p map[string]any
+		_ = json.Unmarshal([]byte(raw), &p)
+		if p["taken_by"] != replHash(1) {
+			t.Errorf("dropped %v does not name the transaction that took the nonce", p)
+		}
+		dropped = append(dropped, p["tx_hash"].(string))
+	}
+	rows.Close()
+	if len(dropped) != 2 || dropped[0] != txHashN(1) || dropped[1] != replHash(2) {
+		t.Fatalf("dropped %v, want tx1 and replacement 2", dropped)
+	}
+	if n := countEvents(t, b.store, "settlement.executed", jobID); n != 1 {
+		t.Fatalf("settlement.executed = %d, want 1", n)
+	}
+}
+
+// A replacement is gated like every settlement write: frozen, nothing is replaced; a
+// replacement whose write-ahead record fails is NOT sent; one whose send then fails is
+// recorded and resolved by hash like any other.
+func TestAcceptBroadcast_ReplacementIsFrozenGatedAndWriteAhead(t *testing.T) {
+	ctx := context.Background()
+	rig := func(t *testing.T) (*Brain, *trackedLane, string) {
+		b, lane, jobID := trackedRig(t, receiptTimeout)
+		b.replaceAfterBlocks, b.maxReplacements = 1, 3
+		lane.head = 10
+		if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
+			t.Fatal(err)
+		}
+		return b, lane, jobID
+	}
+	t.Run("frozen", func(t *testing.T) {
+		b, lane, jobID := rig(t)
+		reg, err := freeze.NewRegistry(ctx, b.store, time.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.SetFreeze(reg, "org_demo")
+		if _, err := reg.Engage(ctx, freeze.KindJob, jobID, "gnanam", "incident"); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			if _, err := b.ResolveOpenSettlements(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(lane.replacements) != 0 || countEvents(t, b.store, "settlement.submitted", jobID) != 1 {
+			t.Fatalf("a frozen job was replaced (%d)", len(lane.replacements))
+		}
+	})
+	t.Run("record fails", func(t *testing.T) {
+		b, lane, _ := rig(t)
+		lift := failSubmittedRecords(t, b)
+		for i := 0; i < 3; i++ {
+			if _, err := b.ResolveOpenSettlements(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		lift()
+		if len(lane.replacements) != 0 {
+			t.Fatalf("%d replacements reached the node although their record failed", len(lane.replacements))
+		}
+	})
+	t.Run("send fails after the record", func(t *testing.T) {
+		b, lane, jobID := rig(t)
+		lane.mu.Lock()
+		lane.replaceSendErr = errors.New("send: context deadline exceeded")
+		lane.mu.Unlock()
+		if _, err := b.ResolveOpenSettlements(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if n := countEvents(t, b.store, "settlement.submitted", jobID); n != 2 {
+			t.Fatalf("settlement.submitted = %d, want the replacement recorded", n)
+		}
+		lane.setHash(replHash(1), funding.TxMined, false)
+		if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
+			t.Fatalf("the unacknowledged replacement mined: state=%q err=%v", s, err)
+		}
+	})
+}
+
+// An evicted transaction whose re-send the node refuses (priced under the base fee, say)
+// is not left open forever either: it is replaced at its nonce.
+func TestAcceptBroadcast_EvictedAndRefusedIsReplaced(t *testing.T) {
+	b, lane, jobID := trackedRig(t, receiptTimeout)
+	b.replaceAfterBlocks = 2
+	lane.head = 10
+	ctx := context.Background()
+	if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+	lane.set(1, funding.TxEvicted, false)
+	lane.mu.Lock()
+	lane.rebroadcastErr = errors.New("rebroadcast: RPC error -32000: transaction underpriced")
+	lane.mu.Unlock()
+	for i := 0; i < 3 && len(lane.replacements) == 0; i++ {
+		if _, err := b.ResolveOpenSettlements(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(lane.replacements) != 1 || lane.replacements[0].Nonce != 0 {
+		t.Fatalf("replacements %+v, want one at nonce 0", lane.replacements)
+	}
+	lane.setHash(replHash(1), funding.TxMined, false)
+	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
+		t.Fatalf("state=%q err=%v, want accepted-settled", s, err)
 	}
 }

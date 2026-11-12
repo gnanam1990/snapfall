@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -19,17 +20,23 @@ import (
 // testKey is a THROWAWAY key for signing against the fake RPC — never a real wallet.
 const testKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
 
-// fakeRPC is a minimal JSON-RPC endpoint: serves chain id, nonces derived from the
-// count of ACCEPTED transactions, and receipts. Addresses in revertFor get status-0
-// receipts (mined-but-reverted).
+// fakeRPC is a minimal JSON-RPC endpoint: serves chain id, per-signer nonces, receipts and
+// transaction lookups. Addresses in revertFor get status-0 receipts (mined-but-reverted).
+//
+// It mines the way a chain does: CONTIGUOUSLY per signer. A transaction mines only once
+// every lower nonce from its signer has mined, so a later nonce never has a receipt while a
+// lower one is held, and the "latest" nonce never counts past a gap. One transaction per
+// (signer, nonce) is held: a send at a held nonce replaces it when its gas price is at least
+// 10% higher ("replacement transaction underpriced" otherwise), and a send at a mined nonce
+// is refused ("nonce too low").
 type fakeRPC struct {
 	mu        sync.Mutex
 	chainID   string
 	sent      []*types.Transaction
 	revertFor map[common.Address]bool
 	views     map[string]string // calldata-hex -> return-hex for eth_call
-	// unmined holds accepted transactions that have not mined yet: no receipt, and not
-	// counted in the "latest" nonce. Empty (the default) means every send mines at once.
+	// unmined holds accepted transactions that may not mine yet. Empty (the default) means
+	// every send is mineable at once (still subject to contiguity).
 	unmined map[common.Hash]bool
 	// holdNext, when set, puts every transaction sent from now on into unmined.
 	holdNext bool
@@ -45,23 +52,64 @@ type fakeRPC struct {
 	hiddenTx      map[common.Hash]bool
 	// rawSends counts every eth_sendRawTransaction, including rejected ones.
 	rawSends int
+	// ackLost, when set, makes the next eth_sendRawTransaction ACCEPT the transaction and
+	// then answer with a non-JSON 504, as a send whose response timed out at a proxy would.
+	ackLost bool
+	// gasPrice and baseFee are what eth_gasPrice and the latest block's baseFeePerGas
+	// answer ("" reads as 1 gwei).
+	gasPrice, baseFee string
 }
 
-// senderCount is how many sent transactions addr signed, minus those still unmined when
-// latest is set: the per-account nonce the real eth_getTransactionCount answers.
-func (f *fakeRPC) senderCount(addr common.Address, latest bool) int {
-	n := 0
+func senderOf(tx *types.Transaction) common.Address {
+	from, err := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+	if err != nil {
+		return common.Address{}
+	}
+	return from
+}
+
+// atNonce is the transaction the fake holds for addr at nonce, nil for none.
+func (f *fakeRPC) atNonce(addr common.Address, nonce uint64) *types.Transaction {
 	for _, tx := range f.sent {
-		from, err := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
-		if err != nil || from != addr {
-			continue
+		if tx.Nonce() == nonce && senderOf(tx) == addr {
+			return tx
 		}
-		if latest && f.unmined[tx.Hash()] {
-			continue
+	}
+	return nil
+}
+
+// minedCount is addr's "latest" nonce: the length of the run of mineable transactions from
+// nonce 0. A held or missing nonce stops the run, and nothing above it has mined.
+func (f *fakeRPC) minedCount(addr common.Address) uint64 {
+	n := uint64(0)
+	for {
+		tx := f.atNonce(addr, n)
+		if tx == nil || f.unmined[tx.Hash()] {
+			return n
 		}
 		n++
 	}
+}
+
+// pendingCount is addr's "pending" nonce: the mined count plus the contiguous run of held
+// transactions above it.
+func (f *fakeRPC) pendingCount(addr common.Address) uint64 {
+	n := f.minedCount(addr)
+	for f.atNonce(addr, n) != nil {
+		n++
+	}
 	return n
+}
+
+func (f *fakeRPC) mined(tx *types.Transaction) bool {
+	return tx.Nonce() < f.minedCount(senderOf(tx))
+}
+
+func gwei(hexv string) string {
+	if hexv == "" {
+		return "0x3b9aca00"
+	}
+	return hexv
 }
 
 func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +125,10 @@ func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
 	reply := func(v any) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": v})
 	}
+	rpcErr := func(msg string) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID,
+			"error": map[string]any{"code": -32000, "message": msg}})
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch req.Method {
@@ -85,7 +137,11 @@ func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
 	case "eth_getTransactionCount":
 		var params []string
 		_ = json.Unmarshal(req.Params, &params)
-		n := f.senderCount(common.HexToAddress(params[0]), len(params) > 1 && params[1] == "latest")
+		addr := common.HexToAddress(params[0])
+		n := f.pendingCount(addr)
+		if len(params) > 1 && params[1] == "latest" {
+			n = f.minedCount(addr)
+		}
 		reply(fmt.Sprintf("0x%x", n))
 	case "eth_blockNumber":
 		h := f.head
@@ -93,13 +149,19 @@ func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
 			h = 100
 		}
 		reply(fmt.Sprintf("0x%x", h))
+	case "eth_getBlockByNumber":
+		h := f.head
+		if h == 0 {
+			h = 100
+		}
+		reply(map[string]any{"number": fmt.Sprintf("0x%x", h), "baseFeePerGas": gwei(f.baseFee)})
 	case "eth_getTransactionByHash":
 		var params []string
 		_ = json.Unmarshal(req.Params, &params)
 		for _, tx := range f.sent {
 			if strings.EqualFold(tx.Hash().Hex(), params[0]) && !f.hiddenTx[tx.Hash()] {
 				var block any
-				if !f.unmined[tx.Hash()] {
+				if f.mined(tx) {
 					block = "0x64"
 				}
 				reply(map[string]any{"hash": tx.Hash().Hex(), "nonce": fmt.Sprintf("0x%x", tx.Nonce()), "blockNumber": block})
@@ -108,7 +170,7 @@ func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(nil)
 	case "eth_gasPrice":
-		reply("0x3b9aca00")
+		reply(gwei(f.gasPrice))
 	case "eth_estimateGas":
 		reply("0x30000")
 	case "eth_sendRawTransaction":
@@ -122,14 +184,39 @@ func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, prev := range f.sent {
 			if prev.Hash() == tx.Hash() {
-				_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID,
-					"error": map[string]any{"code": -32000, "message": "already known"}})
+				rpcErr("already known")
 				return
 			}
+		}
+		from := senderOf(tx)
+		if tx.Nonce() < f.minedCount(from) {
+			rpcErr("nonce too low")
+			return
+		}
+		if held := f.atNonce(from, tx.Nonce()); held != nil {
+			// Geth's rule: a replacement must raise the price by at least 10%.
+			floor := new(big.Int).Div(new(big.Int).Mul(held.GasPrice(), big.NewInt(110)), big.NewInt(100))
+			if tx.GasPrice().Cmp(floor) < 0 {
+				rpcErr("replacement transaction underpriced")
+				return
+			}
+			kept := f.sent[:0]
+			for _, s := range f.sent {
+				if s != held {
+					kept = append(kept, s)
+				}
+			}
+			f.sent = kept
+			delete(f.unmined, held.Hash())
 		}
 		f.sent = append(f.sent, tx)
 		if f.holdNext {
 			f.unmined[tx.Hash()] = true
+		}
+		if f.ackLost {
+			f.ackLost = false
+			http.Error(w, "upstream request timeout", http.StatusGatewayTimeout)
+			return
 		}
 		reply(tx.Hash().Hex())
 	case "eth_getTransactionReceipt":
@@ -138,7 +225,7 @@ func (f *fakeRPC) handler(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(req.Params, &params)
 		for _, tx := range f.sent {
 			if tx.Hash().Hex() == params[0] {
-				if f.unmined[tx.Hash()] || f.hiddenReceipt[tx.Hash()] {
+				if !f.mined(tx) || f.hiddenReceipt[tx.Hash()] {
 					break
 				}
 				status := "0x1"
@@ -328,45 +415,132 @@ func TestOracle_DeliveryAnchoredOnlyWhenDelivered(t *testing.T) {
 	}
 }
 
-// A broadcast is reported BEFORE the receipt wait: when the wait then fails, the caller
-// already holds the hash and nonce of a transaction that may still mine.
-func TestSubmitTracked_ReportsTheBroadcastBeforeTheReceiptWait(t *testing.T) {
+// The write-ahead: the hook runs once the transaction is SIGNED and before the send (no
+// eth_sendRawTransaction yet), and it carries exactly the transaction the node then holds.
+// When the receipt wait later fails, the caller already holds the hash and nonce of a
+// transaction that may still mine.
+func TestSubmitTracked_RecordsTheTransactionBeforeTheSend(t *testing.T) {
 	f, c := newFake(t)
 	f.mu.Lock()
 	f.holdNext = true
 	f.mu.Unlock()
 	var got []Broadcast
-	readsAtHook := -1
+	sendsAtHook, readsAtHook := -1, -1
 	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
 	defer cancel()
-	_, err := c.SubmitTracked(ctx, common.HexToAddress("0xAA"), []byte{0x01}, func(b Broadcast) {
+	_, err := c.SubmitTracked(ctx, common.HexToAddress("0xAA"), []byte{0x01}, func(b Broadcast) error {
 		f.mu.Lock()
-		readsAtHook = f.receiptReads
+		sendsAtHook, readsAtHook = f.rawSends, f.receiptReads
 		f.mu.Unlock()
 		got = append(got, b)
+		return nil
 	})
 	if err == nil {
 		t.Fatal("a receipt wait that never saw a receipt returned no error")
 	}
 	if len(got) != 1 {
-		t.Fatalf("broadcast hook ran %d times, want 1", len(got))
+		t.Fatalf("hook ran %d times, want 1", len(got))
 	}
-	if readsAtHook != 0 {
-		t.Fatalf("hook ran after %d receipt reads, want 0: it must run before the wait", readsAtHook)
+	if sendsAtHook != 0 || readsAtHook != 0 {
+		t.Fatalf("hook ran after %d sends and %d receipt reads, want 0 and 0: it must run before the send", sendsAtHook, readsAtHook)
 	}
 	f.mu.Lock()
 	sent := f.sent[0]
 	f.mu.Unlock()
-	if got[0].TxHash != sent.Hash().Hex() || got[0].Nonce != sent.Nonce() {
-		t.Fatalf("hook got %+v, want hash %s nonce %d", got[0], sent.Hash().Hex(), sent.Nonce())
+	if got[0].TxHash != sent.Hash().Hex() || got[0].Nonce != sent.Nonce() || got[0].SentHead != 100 {
+		t.Fatalf("hook got %+v, want hash %s nonce %d sent at head 100", got[0], sent.Hash().Hex(), sent.Nonce())
 	}
 
-	// Submit (no hook) is unchanged and still works on the same client.
+	// The held transaction mines; only then can the next nonce from this signer mine, so a
+	// plain Submit (no hook) on the same client works.
 	f.mu.Lock()
 	f.holdNext = false
+	f.unmined = map[common.Hash]bool{}
 	f.mu.Unlock()
 	if _, err := c.Submit(context.Background(), common.HexToAddress("0xAB"), []byte{0x02}); err != nil {
 		t.Fatalf("plain submit: %v", err)
+	}
+}
+
+// The reviewer's case: the node ACCEPTS eth_sendRawTransaction but the response is lost (a
+// proxy timeout). The send errors, yet the transaction is out. It was recorded before the
+// send, so Resolve finds it by hash: pending, then mined. It is never "not sent".
+func TestSubmitTracked_SendAcceptedButUnacknowledgedIsResolvableByHash(t *testing.T) {
+	f, c := newFake(t)
+	f.mu.Lock()
+	f.ackLost = true
+	f.holdNext = true
+	f.mu.Unlock()
+	var b Broadcast
+	_, err := c.SubmitTracked(context.Background(), common.HexToAddress("0xAA"), []byte{0x01}, func(x Broadcast) error {
+		b = x
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "may still have reached the node") {
+		t.Fatalf("lost send acknowledgement: err=%v, want a send error that says the tx may be out", err)
+	}
+	f.mu.Lock()
+	n := len(f.sent)
+	f.mu.Unlock()
+	if b.TxHash == "" || n != 1 {
+		t.Fatalf("recorded %+v, node holds %d: want the one recorded transaction out", b, n)
+	}
+	if r, err := c.Resolve(context.Background(), b); err != nil || r.State != TxPending {
+		t.Fatalf("resolve after a lost ack: %+v err=%v, want pending", r, err)
+	}
+	f.mu.Lock()
+	f.unmined = map[common.Hash]bool{}
+	f.mu.Unlock()
+	if r, err := c.Resolve(context.Background(), b); err != nil || r.State != TxMined {
+		t.Fatalf("resolve once mined: %+v err=%v, want mined", r, err)
+	}
+}
+
+// A write-ahead hook that fails sends nothing: no record, no transaction.
+func TestSubmitTracked_FailedRecordSendsNothing(t *testing.T) {
+	f, c := newFake(t)
+	_, err := c.SubmitTracked(context.Background(), common.HexToAddress("0xAA"), []byte{0x01}, func(Broadcast) error {
+		return fmt.Errorf("disk full")
+	})
+	if err == nil || !strings.Contains(err.Error(), "not sent") {
+		t.Fatalf("err=%v, want a not-sent error", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rawSends != 0 || len(f.sent) != 0 {
+		t.Fatalf("a transaction whose record failed reached the node (%d sends)", f.rawSends)
+	}
+}
+
+// The fake mines contiguously per signer: with nonce 0 held, nonce 1 has no receipt and the
+// mined nonce stays 0, so the earlier transaction is pending (known), never "dropped".
+func TestFake_MinesContiguouslyPerSigner(t *testing.T) {
+	f, c := newFake(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.holdNext = true
+	f.mu.Unlock()
+	var first, second Broadcast
+	heldSubmit(t, c, common.HexToAddress("0xAA"), []byte{0x01}, &first)
+	f.mu.Lock()
+	f.holdNext = false
+	f.mu.Unlock()
+	heldSubmit(t, c, common.HexToAddress("0xAB"), []byte{0x02}, &second)
+	if second.Nonce != first.Nonce+1 {
+		t.Fatalf("nonces %d then %d, want consecutive", first.Nonce, second.Nonce)
+	}
+	for _, b := range []Broadcast{first, second} {
+		if r, err := c.Resolve(ctx, b); err != nil || r.State != TxPending {
+			t.Fatalf("%d behind a held nonce: %+v err=%v, want pending", b.Nonce, r, err)
+		}
+	}
+	f.mu.Lock()
+	delete(f.unmined, common.HexToHash(first.TxHash))
+	f.mu.Unlock()
+	for _, b := range []Broadcast{first, second} {
+		if r, err := c.Resolve(ctx, b); err != nil || r.State != TxMined {
+			t.Fatalf("%d once the gap closed: %+v err=%v, want mined", b.Nonce, r, err)
+		}
 	}
 }
 
@@ -434,7 +608,7 @@ func heldSubmit(t *testing.T, c *Client, to common.Address, data []byte, into *B
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
 	defer cancel()
-	_, _ = c.SubmitTracked(ctx, to, data, func(b Broadcast) { *into = b })
+	_, _ = c.SubmitTracked(ctx, to, data, func(b Broadcast) error { *into = b; return nil })
 	if into.TxHash == "" {
 		t.Fatal("the held submission never broadcast")
 	}
@@ -449,7 +623,7 @@ func TestResolve_LaggingReceiptIsNeverDroppedWhileTheNodeKnowsTheTx(t *testing.T
 	f, c := newFake(t)
 	ctx := context.Background()
 	var b Broadcast
-	if _, err := c.SubmitTracked(ctx, common.HexToAddress("0xAA"), []byte{0x01}, func(x Broadcast) { b = x }); err != nil {
+	if _, err := c.SubmitTracked(ctx, common.HexToAddress("0xAA"), []byte{0x01}, func(x Broadcast) error { b = x; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -510,6 +684,164 @@ func TestResolve_ComparesTheRecordedSignersNonce(t *testing.T) {
 	}
 	if r, err := ro.Resolve(ctx, lost); err != nil || r.State != TxEvicted {
 		t.Fatalf("read-only resolve: %+v err=%v", r, err)
+	}
+}
+
+// A broadcast whose record names no signer: the signer is recovered from its signed bytes,
+// and with no bytes either an unseen transaction is ErrSignerUnknown, never dropped or
+// evicted, even on a client whose own (possibly rotated) key has mined past that nonce.
+func TestResolve_UnknownSignerIsNeverClassifiedUnseen(t *testing.T) {
+	f, c := newFake(t)
+	ctx := context.Background()
+	old, err := newFromKeyHex("0x"+strings.Repeat("11", 32), c.rpcURL, 5_042_002, "OLD_KEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.holdNext = true
+	f.mu.Unlock()
+	var lost Broadcast
+	heldSubmit(t, old, common.HexToAddress("0xAA"), []byte{0x01}, &lost)
+	f.mu.Lock()
+	f.sent = f.sent[:len(f.sent)-1]
+	f.unmined = map[common.Hash]bool{}
+	f.holdNext = false
+	f.mu.Unlock()
+	for i := 0; i < 2; i++ {
+		if _, err := c.Submit(ctx, common.HexToAddress("0xAB"), []byte{byte(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fromBytes := lost
+	fromBytes.Signer = common.Address{}
+	if r, err := c.Resolve(ctx, fromBytes); err != nil || r.State != TxEvicted {
+		t.Fatalf("signer recovered from the bytes: %+v err=%v, want evicted (the OLD signer's nonce is 0)", r, err)
+	}
+	bare := Broadcast{TxHash: lost.TxHash, Nonce: lost.Nonce}
+	if r, err := c.Resolve(ctx, bare); !errors.Is(err, ErrSignerUnknown) {
+		t.Fatalf("no signer, no bytes: %+v err=%v, want ErrSignerUnknown (this client's key has mined past nonce 0)", r, err)
+	}
+}
+
+// heldTx is the transaction the fake holds at hash h.
+func heldTx(f *fakeRPC, h string) *types.Transaction {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, tx := range f.sent {
+		if strings.EqualFold(tx.Hash().Hex(), h) {
+			return tx
+		}
+	}
+	return nil
+}
+
+// A transaction the node holds but never mines (underpriced) is replaced at the SAME nonce
+// with a higher price: the fresh base fee when it is the highest, else the original's price
+// bumped by a quarter. The record hook runs before the send. Once the replacement mines the
+// original can never mine (dropped), and only one transaction ever mined at that nonce.
+func TestReplace_SameNonceHigherFeeAndOnlyOneMines(t *testing.T) {
+	f, c := newFake(t)
+	ctx := context.Background()
+	to := common.HexToAddress("0xAA")
+	f.mu.Lock()
+	f.holdNext = true
+	f.mu.Unlock()
+	var stuck Broadcast
+	heldSubmit(t, c, to, []byte{0x01}, &stuck)
+
+	var recorded []Broadcast
+	sendsAtHook := -1
+	repl, err := c.Replace(ctx, to, []byte{0x01}, stuck, func(b Broadcast) error {
+		f.mu.Lock()
+		sendsAtHook = f.rawSends
+		f.mu.Unlock()
+		recorded = append(recorded, b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].TxHash != repl.TxHash || sendsAtHook != 1 {
+		t.Fatalf("hook recorded %+v at send #%d, want the replacement before its own send", recorded, sendsAtHook)
+	}
+	old, nw := new(types.Transaction), heldTx(f, repl.TxHash)
+	if err := old.UnmarshalBinary(stuck.Raw); err != nil || nw == nil {
+		t.Fatalf("decode: %v, held replacement %v", err, nw)
+	}
+	want := new(big.Int).Add(new(big.Int).Div(new(big.Int).Mul(old.GasPrice(), big.NewInt(5)), big.NewInt(4)), big.NewInt(1))
+	if repl.Nonce != stuck.Nonce || nw.Nonce() != stuck.Nonce || nw.GasPrice().Cmp(want) != 0 {
+		t.Fatalf("replacement nonce %d price %s, want nonce %d price %s", nw.Nonce(), nw.GasPrice(), stuck.Nonce, want)
+	}
+	if heldTx(f, stuck.TxHash) != nil {
+		t.Fatal("the node still holds the replaced transaction")
+	}
+	// The base fee rose above the bump: the next replacement pays the FRESH base fee.
+	f.mu.Lock()
+	f.baseFee = "0x174876e800" // 100 gwei
+	f.mu.Unlock()
+	repl2, err := c.Replace(ctx, to, []byte{0x01}, repl, nil)
+	if err != nil {
+		t.Fatalf("second replace: %v", err)
+	}
+	if tx := heldTx(f, repl2.TxHash); tx == nil || tx.GasPrice().Cmp(big.NewInt(100_000_000_000)) != 0 {
+		t.Fatalf("second replacement %v, want the fresh 100 gwei base fee", tx)
+	}
+
+	// It mines; every earlier transaction at that nonce is now dropped.
+	f.mu.Lock()
+	f.unmined = map[common.Hash]bool{}
+	f.holdNext = false
+	f.mu.Unlock()
+	if r, err := c.Resolve(ctx, repl2); err != nil || r.State != TxMined {
+		t.Fatalf("replacement: %+v err=%v, want mined", r, err)
+	}
+	for _, b := range []Broadcast{stuck, repl} {
+		if r, err := c.Resolve(ctx, b); err != nil || r.State != TxDropped {
+			t.Fatalf("replaced %s: %+v err=%v, want dropped", b.TxHash, r, err)
+		}
+	}
+	f.mu.Lock()
+	n := len(f.sent)
+	f.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("node holds %d transactions at that nonce, want exactly one", n)
+	}
+
+	// Nothing left to replace: the nonce is mined.
+	if _, err := c.Replace(ctx, to, []byte{0x01}, repl2, nil); !errors.Is(err, ErrNonceUsed) {
+		t.Fatalf("replace of a mined nonce: err=%v, want ErrNonceUsed", err)
+	}
+}
+
+// Replace refuses before signing anything: another key's broadcast, a failed record.
+func TestReplace_RefusesForeignSignerAndFailedRecord(t *testing.T) {
+	f, c := newFake(t)
+	ctx := context.Background()
+	other, err := newFromKeyHex("0x"+strings.Repeat("11", 32), c.rpcURL, 5_042_002, "OTHER_KEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.holdNext = true
+	f.mu.Unlock()
+	var foreign, mine Broadcast
+	heldSubmit(t, other, common.HexToAddress("0xAA"), []byte{0x01}, &foreign)
+	heldSubmit(t, c, common.HexToAddress("0xAA"), []byte{0x01}, &mine)
+	f.mu.Lock()
+	sends := f.rawSends
+	f.mu.Unlock()
+	if _, err := c.Replace(ctx, common.HexToAddress("0xAA"), []byte{0x01}, foreign, nil); !errors.Is(err, ErrSignerMismatch) {
+		t.Fatalf("foreign signer: err=%v, want ErrSignerMismatch", err)
+	}
+	if _, err := c.Replace(ctx, common.HexToAddress("0xAA"), []byte{0x01}, mine, func(Broadcast) error {
+		return fmt.Errorf("disk full")
+	}); err == nil || !strings.Contains(err.Error(), "not sent") {
+		t.Fatalf("failed record: err=%v, want not sent", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rawSends != sends {
+		t.Fatalf("a refused replacement reached the node (%d sends)", f.rawSends-sends)
 	}
 }
 

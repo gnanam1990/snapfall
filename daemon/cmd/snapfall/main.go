@@ -117,12 +117,14 @@ const (
 	// broadcast no record resolves yet. Each pass is one observation; a dropped or evicted
 	// verdict is acted on only when a later pass, at a higher chain head, agrees, so this
 	// cadence is also how long such a confirmation takes without a customer pressing Accept.
+	// It also paces fee replacement of a stalled broadcast (brain's replace-after age).
 	settlementResolveInterval = time.Minute
 )
 
 // resolveOpenSettlements runs one resolution pass over every open acceptDelivery broadcast
-// (brain.ResolveOpenSettlements: the same code a retried Accept uses; it records, it never
-// submits a new transaction) and logs what it did. Boot calls it once, and the
+// (brain.ResolveOpenSettlements: the same code a retried Accept uses; it records, re-sends an
+// evicted transaction's same bytes, and fee-replaces a stalled one at its OWN nonce, but never
+// submits at a new nonce) and logs what it did. Boot calls it once, and the
 // settlement-resolver worker calls it on settlementResolveInterval.
 func resolveOpenSettlements(ctx context.Context, br *brain.Brain, log *slog.Logger, when string) {
 	n, err := br.ResolveOpenSettlements(ctx)
@@ -171,9 +173,9 @@ func (l lane) Submit(ctx context.Context, calldata []byte) (funding.ChainOutcome
 	return funding.ChainOutcome{Submitted: true, TxHash: r.TxHash, Block: r.Block, GasUsed: r.GasUsed, Reverted: r.Reverted}, nil
 }
 
-// customerSettleLane is the customer lane: a lane over a raw-key client that also reports each
-// acceptDelivery broadcast before its receipt wait and can resolve it later
-// (funding.TrackedSubmitter). A receipt wait that times out says nothing about whether the
+// customerSettleLane is the customer lane: a lane over a raw-key client that also records each
+// acceptDelivery before it is sent and can resolve, re-send or replace it later
+// (funding.TrackedSubmitter). A send or receipt wait that fails says nothing about whether the
 // transaction mines, so a retried Accept asks about the recorded transaction instead of
 // sending a second one.
 type customerSettleLane struct {
@@ -191,8 +193,8 @@ func (l customerSettleLane) Submit(ctx context.Context, calldata []byte) (fundin
 	return lane{l.c, l.to}.Submit(ctx, calldata)
 }
 
-func (l customerSettleLane) SubmitTracked(ctx context.Context, calldata []byte, onBroadcast func(funding.Broadcast)) (funding.ChainOutcome, error) {
-	r, err := l.c.SubmitTracked(ctx, l.to, calldata, onBroadcast)
+func (l customerSettleLane) SubmitTracked(ctx context.Context, calldata []byte, onSigned func(funding.Broadcast) error) (funding.ChainOutcome, error) {
+	r, err := l.c.SubmitTracked(ctx, l.to, calldata, onSigned)
 	if err != nil {
 		return funding.ChainOutcome{}, err
 	}
@@ -201,6 +203,10 @@ func (l customerSettleLane) SubmitTracked(ctx context.Context, calldata []byte, 
 
 func (l customerSettleLane) Resolve(ctx context.Context, b funding.Broadcast) (funding.Resolution, error) {
 	r, err := l.c.Resolve(ctx, b)
+	if errors.Is(err, chain.ErrSignerUnknown) {
+		// No account to compare a nonce against: unresolvable, never "dropped".
+		return funding.Resolution{State: funding.TxPending}, fmt.Errorf("%w: %w", funding.ErrSettlementUnresolvable, err)
+	}
 	if err != nil {
 		return funding.Resolution{State: funding.TxPending}, err
 	}
@@ -213,6 +219,10 @@ func (l customerSettleLane) Resolve(ctx context.Context, b funding.Broadcast) (f
 
 func (l customerSettleLane) Rebroadcast(ctx context.Context, b funding.Broadcast) error {
 	return l.c.Rebroadcast(ctx, b)
+}
+
+func (l customerSettleLane) Replace(ctx context.Context, calldata []byte, prev funding.Broadcast, onSigned func(funding.Broadcast) error) (funding.Broadcast, error) {
+	return l.c.Replace(ctx, l.to, calldata, prev, onSigned)
 }
 
 // chainBudget is V6 §1.C's alarm. Two independent 6.00 figures govern one job's spending:

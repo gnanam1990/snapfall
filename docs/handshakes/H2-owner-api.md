@@ -253,15 +253,26 @@ FROZEN`, `503 NOT_WIRED` (any customer seam, `settlement` included, unwired).
 
 **Settlement recovery, as recorded (daemon event log, per job):**
 
-- `settlement.submitted` is written once the lane's `acceptDelivery` is out and before
-  its receipt wait: `tx_hash`, `nonce`, `signer_address` (the signing account), and
-  `raw_tx` (the signed bytes as sent). While it has no outcome the job is `pending` and
-  nothing new is submitted.
+- `settlement.submitted` is written **write-ahead**: once the lane's `acceptDelivery` is
+  signed and before it is sent. The lane signs locally, so the record holds `tx_hash`,
+  `nonce`, `signer_address` (the signing account), `raw_tx` (the signed bytes) and
+  `sent_head` (the chain head it was signed at) before any node sees the transaction. If
+  the record cannot be written, nothing is sent and the Accept fails with nothing out.
+  Once it is written, a send error (a timed-out `eth_sendRawTransaction` the node accepted,
+  or an error from one backend of a load-balanced RPC) is never read as "not sent": the
+  job is `pending` and the record is resolved by hash. Only a submission refused before
+  signing (gas estimation reverts) is retried as never sent.
 - Open broadcasts are resolved at boot, every minute by the `settlement-resolver`
-  worker, and on every Accept. All three run the same code, which records outcomes and
-  never submits a new transaction. A receipt gives `settlement.executed` or
-  `settlement.reverted`. The mined nonce compared is always `signer_address`'s, so
-  rotating the key across a restart cannot redirect it.
+  worker, and on every Accept. All three run the same code. It records outcomes and never
+  submits at a new nonce. It may re-send an evicted transaction's same bytes, or
+  fee-replace a stalled one at its own nonce (both below). A receipt gives
+  `settlement.executed` or `settlement.reverted`. The mined nonce compared is always the
+  signer's: `signer_address`, or the account `raw_tx` recovers to. A record with neither is
+  unresolvable and is never called dropped. Rotating the key across a restart cannot
+  redirect it.
+- Every transaction at one nonce is resolved together: the original, plus each fee
+  replacement linked to it by `replaces`. A receipt for any one decides the nonce. Every
+  other transaction at that nonce is recorded `settlement.dropped` with `taken_by`.
 - A transaction with no receipt that the node does not know (`eth_getTransactionByHash`
   null) is one observation, recorded as `settlement.unseen` with `verdict` and chain
   `head`. It acts only when a later observation with the same verdict is taken at a
@@ -269,22 +280,25 @@ FROZEN`, `503 NOT_WIRED` (any customer seam, `settlement` included, unwired).
   backend makes a mined transaction look exactly like this.
   - verdict `dropped` (signer nonce past it): confirmed → `settlement.dropped`, and the
     job becomes `retry`.
-  - verdict `evicted` (signer nonce still open): confirmed → the recorded `raw_tx` is
-    re-sent unchanged (`settlement.rebroadcast`). It has the same nonce and the same hash,
-    so it cannot settle twice. Nothing is re-sent while the job is frozen.
-- **Manual recovery** applies to a `settlement.submitted` written before `raw_tx` was
-  stored. An evicted transaction of that kind cannot be re-sent, so it stays `pending`
-  until its nonce is used. The operator recovers it by sending any transaction from the
-  customer lane's signer at that nonce, e.g. a zero-value self-transfer. The broadcast
-  then confirms as dropped and the next Accept resubmits. JobVault refuses a second
-  `acceptDelivery` for a settled job, so this cannot double-settle.
-- If the `settlement.submitted` write fails and the receipt wait fails too, the Accept
-  fails with an error naming the transaction, and the daemon logs it at ERROR. The next
-  attempt in that process writes the record first and resubmits nothing until it has.
-  After a restart, the on-chain read (`settled on chain?`) is what stands between that
-  transaction and a resubmission, so an unreadable chain fails every Accept closed. If the
-  chain can be read and the job settled, the Accept records it as settled. It never
-  submits again.
+  - verdict `evicted` (signer nonce still open): confirmed → the newest transaction's
+    recorded `raw_tx` is re-sent unchanged (`settlement.rebroadcast`). It has the same nonce
+    and the same hash, so it cannot settle twice. Nothing is re-sent while the job is frozen.
+- **Fee replacement.** A transaction the node holds but does not mine (priced under what
+  the chain takes) never sees its nonce move. The same applies to an evicted one whose
+  re-send the node refuses or that has no `raw_tx`. Either one would stay `pending` forever.
+  After it has sat 240 blocks (about two minutes of Arc's 500 ms blocks) since its
+  `sent_head`, `acceptDelivery` is re-signed at the **same nonce** with a higher fee. The
+  fee is the highest of a fresh `eth_gasPrice`, the latest block's fresh base fee (never
+  cached), and the previous price plus a quarter. The replacement is recorded write-ahead
+  as a new `settlement.submitted` carrying `replaces`. At most one transaction per nonce
+  mines, so replacing cannot settle twice. A nonce gets at most 3 replacements. Past that,
+  a single `settlement.stuck` is recorded and logged at ERROR, and nothing more is replaced.
+  Nothing is replaced while the job is frozen.
+- **Manual recovery** applies to a `settlement.stuck` job, or to a record the lane cannot
+  sign for (another key signed it). The operator sends any transaction from that record's
+  signer at its nonce, for example a zero-value self-transfer at a fee the chain takes. The
+  broadcasts then confirm as dropped and the next Accept resubmits. JobVault refuses a
+  second `acceptDelivery` for a settled job, so this cannot double-settle.
 
 ## 5. What ships when
 

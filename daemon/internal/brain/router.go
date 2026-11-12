@@ -79,12 +79,17 @@ type Brain struct {
 	// by mu and is deliberately in memory only: it serializes attempts within this process,
 	// and after a restart nothing is in flight, so an empty map is the correct state.
 	settling map[string]bool
-	// unrecorded holds an acceptDelivery that went out while its settlement.submitted record
-	// could not be written (and its receipt was not read either). Guarded by mu. The next
-	// attempt for that job writes the record FIRST and resubmits nothing until it has; it is
-	// in memory only because the record it stands in for is exactly what could not be
-	// persisted. After a restart the chain read is what remains (observe before submit).
-	unrecorded map[string]funding.Broadcast
+	// replaceAfterBlocks and maxReplacements bound the fee replacement of a recorded
+	// acceptDelivery the chain does not mine (resolveBroadcasts): how many blocks it sits
+	// before it is re-priced at its nonce, and how many replacements a nonce gets before a
+	// settlement.stuck is recorded. Guarded by mu.
+	replaceAfterBlocks uint64
+	maxReplacements    int
+	// stallSince is the chain head at which this process first saw a recorded broadcast
+	// with no sent_head stall (lower-cased tx hash -> head), the age a record without one
+	// is measured from. In memory only: after a restart the age restarts, which delays a
+	// replacement and never causes one. Guarded by mu.
+	stallSince map[string]uint64
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).
@@ -145,7 +150,9 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 		tasks:                     make(map[string]*taskHandle),
 		milestoneObservationGates: make(map[string]*milestoneObservationGate),
 		settling:                  make(map[string]bool),
-		unrecorded:                make(map[string]funding.Broadcast),
+		replaceAfterBlocks:        defaultSettlementReplaceAfterBlocks,
+		maxReplacements:           defaultSettlementMaxReplacements,
+		stallSince:                make(map[string]uint64),
 	}
 
 	b.maxRevisions = 2

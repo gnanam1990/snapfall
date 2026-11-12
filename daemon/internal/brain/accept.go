@@ -174,16 +174,20 @@ const (
 	settlementSettled  = "settlement.executed"      // final
 	settlementPending  = "settlement.pending_chain" // the honest no-lane stop; retried once the chain can take it
 	settlementReverted = "settlement.reverted"      // mined and failed; retryable
-	// settlementSubmitted is written the moment the lane's acceptDelivery is out, BEFORE
-	// its receipt wait. Until a settlement.executed, .reverted or .dropped with the same
-	// tx_hash follows, that transaction may still mine, and nothing is resubmitted. It names
-	// the transaction (tx_hash, nonce), the signing address (signer_address) and the signed
-	// bytes as sent (raw_tx), so the broadcast can be resolved against the right account and
-	// re-sent unchanged.
+	// settlementSubmitted is written WRITE-AHEAD: once the lane's acceptDelivery is signed
+	// and BEFORE it is sent, so no transaction can reach a node without one. If it cannot be
+	// written, nothing is sent. Until a settlement.executed, .reverted or .dropped with the
+	// same tx_hash follows, that transaction may be out and may still mine, and nothing new
+	// is submitted. It names the transaction (tx_hash, nonce), the signing address
+	// (signer_address), the signed bytes (raw_tx) and the chain head it was signed at
+	// (sent_head), so the broadcast can be resolved against the right account, re-sent
+	// unchanged, and aged. A fee replacement carries `replaces`: the tx_hash it replaces at
+	// the same nonce.
 	settlementSubmitted = "settlement.submitted"
 	// settlementDropped: a recorded broadcast that never mined and never can, because the
-	// signer's nonce has moved past it. Nothing settled; retryable. Recorded only after two
-	// settlement.unseen observations agree with the chain head advanced between them.
+	// signer's nonce has moved past it. Nothing settled by it. Recorded after two
+	// settlement.unseen observations agree with the chain head advanced between them, or at
+	// once (with `taken_by`) when another transaction at the same nonce has a receipt.
 	settlementDropped = "settlement.dropped"
 	// settlementUnseen is one observation of a recorded broadcast with no receipt that the
 	// node does not know: verdict "dropped" (the signer's nonce is past it) or "evicted"
@@ -193,6 +197,18 @@ const (
 	// settlementRebroadcast: the recorded signed bytes of an evicted broadcast were sent
 	// again, unchanged (same nonce, same hash). The broadcast stays open.
 	settlementRebroadcast = "settlement.rebroadcast"
+	// settlementStuck: a broadcast still unmined after the maximum number of fee
+	// replacements at its nonce. Written once per transaction; nothing more is replaced
+	// automatically, and the owner has to act. The broadcast stays open and is still resolved.
+	settlementStuck = "settlement.stuck"
+)
+
+// Fee replacement of a recorded acceptDelivery the node holds but does not mine. Arc's
+// blocks are ~500ms, so the default waits about two minutes (two settlement-resolver
+// passes) per step.
+const (
+	defaultSettlementReplaceAfterBlocks = 240
+	defaultSettlementMaxReplacements    = 3
 )
 
 // Verdicts a settlement.unseen observation carries.
@@ -230,6 +246,12 @@ type openBroadcast struct {
 	funding.Broadcast
 	// seen is the newest settlement.unseen observation since the last rebroadcast; nil for none.
 	seen *unseenSighting
+	// root is the tx_hash (lower-cased) of the first submission in this broadcast's
+	// replacement chain: its own, unless it `replaces` another. Every transaction with one
+	// root occupies one nonce, so at most one of them can mine.
+	root string
+	// stuck: a settlement.stuck is already recorded for this transaction.
+	stuck bool
 }
 
 type unseenSighting struct {
@@ -246,23 +268,45 @@ type settlementRecord struct {
 	unresolved []openBroadcast
 	// ours is every transaction hash (lower-cased) the daemon's lane broadcast for the job.
 	ours map[string]bool
+	// chainLen is how many submissions each replacement chain (by root) has recorded,
+	// resolved or not: the original plus every replacement.
+	chainLen map[string]int
+}
+
+// nonceGroups splits the unresolved broadcasts by replacement chain, oldest chain first and,
+// within a chain, oldest (lowest fee) first.
+func (r settlementRecord) nonceGroups() [][]openBroadcast {
+	var order []string
+	groups := map[string][]openBroadcast{}
+	for _, ob := range r.unresolved {
+		if _, ok := groups[ob.root]; !ok {
+			order = append(order, ob.root)
+		}
+		groups[ob.root] = append(groups[ob.root], ob)
+	}
+	out := make([][]openBroadcast, 0, len(order))
+	for _, k := range order {
+		out = append(out, groups[k])
+	}
+	return out
 }
 
 // readSettlementRecord reads the accepted job's settlement history. A read error, or a
 // submission record that does not say which transaction it was, is returned and never
 // guessed past: the caller must not submit on an unknown record.
 func (b *Brain) readSettlementRecord(ctx context.Context, jobID string) (settlementRecord, error) {
-	rec := settlementRecord{ours: map[string]bool{}}
+	rec := settlementRecord{ours: map[string]bool{}, chainLen: map[string]int{}}
 	rows, err := b.store.DB().QueryContext(ctx,
-		`SELECT kind, payload_json FROM events WHERE entity_id=? AND kind IN (?, ?, ?, ?, ?, ?, ?) ORDER BY seq`,
+		`SELECT kind, payload_json FROM events WHERE entity_id=? AND kind IN (?, ?, ?, ?, ?, ?, ?, ?) ORDER BY seq`,
 		jobID, settlementSettled, settlementPending, settlementReverted, settlementSubmitted, settlementDropped,
-		settlementUnseen, settlementRebroadcast)
+		settlementUnseen, settlementRebroadcast, settlementStuck)
 	if err != nil {
 		return settlementRecord{}, err
 	}
 	defer rows.Close()
 	var order []string
 	open := map[string]*openBroadcast{}
+	rootOf := map[string]string{}
 	for rows.Next() {
 		var kind string
 		var raw sql.NullString
@@ -274,6 +318,8 @@ func (b *Brain) readSettlementRecord(ctx context.Context, jobID string) (settlem
 			Nonce         *uint64 `json:"nonce"`
 			SignerAddress string  `json:"signer_address"`
 			RawTx         string  `json:"raw_tx"`
+			SentHead      *uint64 `json:"sent_head"`
+			Replaces      string  `json:"replaces"`
 			Head          *uint64 `json:"head"`
 			Verdict       string  `json:"verdict"`
 		}
@@ -305,11 +351,26 @@ func (b *Brain) readSettlementRecord(ctx context.Context, jobID string) (settlem
 				}
 				bc.Raw = rawTx
 			}
+			if p.SentHead != nil {
+				bc.SentHead = *p.SentHead
+			}
+			root := hash
+			if prev := strings.ToLower(p.Replaces); prev != "" {
+				r, ok := rootOf[prev]
+				if !ok {
+					return settlementRecord{}, fmt.Errorf("a %s record replaces %s, which no earlier record names", kind, p.Replaces)
+				}
+				root = r
+			}
+			if _, again := rootOf[hash]; !again {
+				rec.chainLen[root]++
+			}
+			rootOf[hash] = root
 			rec.ours[hash] = true
 			if _, again := open[hash]; !again {
 				order = append(order, hash)
 			}
-			open[hash] = &openBroadcast{Broadcast: bc}
+			open[hash] = &openBroadcast{Broadcast: bc, root: root}
 		case settlementReverted, settlementDropped:
 			if hash != "" {
 				delete(open, hash)
@@ -324,6 +385,11 @@ func (b *Brain) readSettlementRecord(ctx context.Context, jobID string) (settlem
 			// A re-send starts the observations over: the bytes are out again.
 			if ob := open[hash]; ob != nil {
 				ob.seen = nil
+			}
+			continue
+		case settlementStuck:
+			if ob := open[hash]; ob != nil {
+				ob.stuck = true
 			}
 			continue
 		}
@@ -400,7 +466,6 @@ func (b *Brain) SettlementStatus(ctx context.Context, jobID string) (string, err
 	b.mu.Lock()
 	js, ok := b.jobs[jobID]
 	stage, inFlight := JobStage(""), b.settling[jobID]
-	_, unrecorded := b.unrecorded[jobID]
 	if ok {
 		stage = js.Stage
 	}
@@ -418,8 +483,8 @@ func (b *Brain) SettlementStatus(ctx context.Context, jobID string) (string, err
 	if rec.settled {
 		return SettlementSettled, nil
 	}
-	if inFlight || unrecorded {
-		// An attempt is running, or a broadcast is out that the next attempt records first.
+	if inFlight {
+		// An attempt is running.
 		return SettlementPending, nil
 	}
 	jm, err := b.memory.Get(jobID)
@@ -442,9 +507,9 @@ func (b *Brain) SettlementStatus(ctx context.Context, jobID string) (string, err
 
 // retryAcceptedSettlement is a repeated Accept on an accepted job, holding the settling
 // marker. A settled record is final: the observation repair runs and the state label is
-// unchanged. A broadcast that went out unrecorded is recorded FIRST. A recorded broadcast
-// whose outcome is unknown is resolved next, and nothing is resubmitted while it may still
-// mine. A reverted, dropped, pending-chain or never-broadcast attempt is retried through the
+// unchanged. A recorded broadcast whose outcome is unknown is resolved first, and nothing new
+// is submitted while it may still mine (a fee replacement at its own nonce is not new: see
+// resolveBroadcasts). A reverted, dropped, pending-chain or never-broadcast attempt is retried through the
 // same settleOnChain path, which asks the chain first.
 //
 // A retry fails CLOSED on every read it depends on. An unreadable settlement record, a
@@ -454,9 +519,6 @@ func (b *Brain) SettlementStatus(ctx context.Context, jobID string) (string, err
 // operator anchors delivery costs no gas. A double settlement is impossible either way:
 // JobVault.acceptDelivery reverts for any status but Delivered.
 func (b *Brain) retryAcceptedSettlement(ctx context.Context, jobID string) (string, error) {
-	if err := b.persistUnrecordedBroadcast(ctx, jobID); err != nil {
-		return "", err
-	}
 	rec, err := b.readSettlementRecord(ctx, jobID)
 	if err != nil {
 		return "", fmt.Errorf("cannot read the settlement record before retrying Accept: %w", err)
@@ -503,9 +565,10 @@ func (b *Brain) retryAcceptedSettlement(ctx context.Context, jobID string) (stri
 
 // ResolveOpenSettlements resolves, once, every recorded acceptDelivery broadcast that no
 // later record resolves, across all accepted jobs, through the same resolveBroadcasts the
-// retry uses: it records settlement.executed, .reverted, .dropped, .unseen and .rebroadcast
-// exactly as an Accept would. It NEVER submits a new acceptDelivery (only an Accept does),
-// and skips a job whose attempt is in flight. The daemon runs it at boot and on a ticker,
+// retry uses: it records settlement.executed, .reverted, .dropped, .unseen, .rebroadcast and
+// .stuck exactly as an Accept would, and it re-sends or fee-replaces a stalled broadcast at
+// its OWN nonce exactly as an Accept would. It NEVER submits an acceptDelivery at a new nonce
+// (only an Accept does), and skips a job whose attempt is in flight. The daemon runs it at boot and on a ticker,
 // so a broadcast left open by a crash or a failed receipt wait is resolved, and a dropped or
 // evicted one confirmed, without waiting for the customer. Returns how many jobs it
 // resolved and every error it met (one job's error never stops the others).
@@ -543,9 +606,6 @@ func (b *Brain) resolveOpenSettlement(ctx context.Context, jobID string) (bool, 
 	b.mu.Unlock()
 	defer b.clearSettling(jobID)
 
-	if err := b.persistUnrecordedBroadcast(ctx, jobID); err != nil {
-		return false, err
-	}
 	rec, err := b.readSettlementRecord(ctx, jobID)
 	if err != nil {
 		return false, err
@@ -563,72 +623,108 @@ func (b *Brain) resolveOpenSettlement(ctx context.Context, jobID string) (bool, 
 	return true, nil
 }
 
-// resolveBroadcasts asks the lane what became of each recorded, unresolved acceptDelivery,
-// oldest first, and records the answer. done=true means the caller returns state as is:
-// the job settled, a broadcast may still mine, or a revert is being surfaced. done=false
-// means every broadcast is now known never to have settled the job, so a fresh submission
-// through the usual gates is safe.
+// resolveBroadcasts asks the lane what became of each recorded, unresolved acceptDelivery and
+// records the answer, one nonce at a time (a broadcast and its fee replacements share a
+// nonce, so at most one of them can mine), oldest first. done=true means the caller returns
+// state as is: the job settled, a broadcast may still mine, or a revert is being surfaced.
+// done=false means every broadcast is now known never to have settled the job, so a fresh
+// submission through the usual gates is safe.
+//
+// Per nonce: a receipt for ANY transaction decides it (executed or reverted), and every other
+// transaction at that nonce is recorded dropped, since it can never mine now. Otherwise, while
+// the node holds any of them, the nonce is pending; the newest is fee-replaced once it has sat
+// unmined long enough (replaceStalled). Otherwise every one is unseen, and confirmUnseen runs
+// for each: only the newest (highest fee) is ever re-sent, and the nonce is dropped only when
+// every one of them confirms dropped.
 func (b *Brain) resolveBroadcasts(ctx context.Context, jobID, vaultJobID string, rec settlementRecord) (string, bool, error) {
 	reverted := false
-	for _, bc := range rec.unresolved {
-		res := funding.Resolution{State: funding.TxPending}
-		err := funding.ErrSettlementUnresolvable
-		if b.funding != nil {
-			res, err = b.funding.ResolveSettlement(ctx, bc.Broadcast)
-		}
-		if errors.Is(err, funding.ErrSettlementUnresolvable) {
-			// No wired lane can read it (the daemon restarted without the customer key, say).
-			// The chain can still say whether the job settled, and the indexed JobSettled
-			// hash says whose transaction did it; without that hash, nothing is claimed.
-			if state, done, oerr := b.observeSettlement(ctx, jobID, vaultJobID, rec.ours, false); oerr != nil || done {
-				return state, true, oerr
+	for _, group := range rec.nonceGroups() {
+		results := make([]funding.Resolution, len(group))
+		mined, pending := -1, false
+		for i, bc := range group {
+			res := funding.Resolution{State: funding.TxPending}
+			err := funding.ErrSettlementUnresolvable
+			if b.funding != nil {
+				res, err = b.funding.ResolveSettlement(ctx, bc.Broadcast)
 			}
-			b.log.Warn("a recorded acceptDelivery cannot be resolved with no settlement lane wired; nothing is resubmitted",
-				"job", jobID, "tx", bc.TxHash)
-			return "accepted-pending-chain", true, nil
-		}
-		if err != nil {
-			return "", true, fmt.Errorf("cannot resolve the recorded acceptDelivery %s before retrying: %w", bc.TxHash, err)
-		}
-		out := res.Outcome
-		switch res.State {
-		case funding.TxMined:
-			if !out.Reverted {
-				if _, err := b.store.Append(ctx, store.Event{
-					Kind: settlementSettled, EntityID: jobID, Actor: "funding",
-					Payload: map[string]any{
-						"tx_hash": bc.TxHash, "block": out.Block, "gas_used": out.GasUsed, "signer": signerDaemonLane,
-						"note": "the recorded acceptDelivery mined successfully; its receipt was read on a later resolution",
-					},
-				}); err != nil {
-					return "", true, err
+			if errors.Is(err, funding.ErrSettlementUnresolvable) {
+				// No wired lane can read it (the daemon restarted without the customer key, or
+				// the record names no signer, say). The chain can still say whether the job
+				// settled, and the indexed JobSettled hash says whose transaction did it;
+				// without that hash, nothing is claimed.
+				if state, done, oerr := b.observeSettlement(ctx, jobID, vaultJobID, rec.ours, false); oerr != nil || done {
+					return state, true, oerr
 				}
-				b.log.Info("settlement executed on chain (resolved from the recorded broadcast)", "job", jobID, "tx", bc.TxHash)
-				b.recordMilestoneObservation(ctx, jobID)
-				return "accepted-settled", true, nil
+				b.log.Warn("a recorded acceptDelivery cannot be resolved by the wired lane; nothing is resubmitted",
+					"job", jobID, "tx", bc.TxHash, "err", err)
+				return "accepted-pending-chain", true, nil
 			}
-			if _, err := b.store.Append(ctx, store.Event{
-				Kind: settlementReverted, EntityID: jobID, Actor: "funding",
-				Payload: map[string]any{
-					"tx_hash": bc.TxHash, "block": out.Block, "gas_used": out.GasUsed,
-					"note": "acceptDelivery MINED AND REVERTED — not settled; owner attention required",
-				},
-			}); err != nil {
-				return "", true, err
+			if err != nil {
+				return "", true, fmt.Errorf("cannot resolve the recorded acceptDelivery %s before retrying: %w", bc.TxHash, err)
 			}
-			b.log.Warn("settlement reverted on chain (resolved from the recorded broadcast)", "job", jobID, "tx", bc.TxHash)
-			reverted = true
-		case funding.TxDropped, funding.TxEvicted:
-			dropped, err := b.confirmUnseen(ctx, jobID, bc, res)
+			results[i] = res
+			switch res.State {
+			case funding.TxMined:
+				if mined < 0 {
+					mined = i
+				}
+			case funding.TxPending:
+				pending = true
+			}
+		}
+		head := uint64(0)
+		for _, r := range results {
+			if r.Head > head {
+				head = r.Head
+			}
+		}
+		if mined >= 0 {
+			settled, err := b.recordMinedAtNonce(ctx, jobID, group, mined, results[mined].Outcome)
 			if err != nil {
 				return "", true, err
 			}
-			if !dropped {
-				// Unconfirmed, or evicted and re-sent: it may still mine, so nothing is resubmitted.
-				return "accepted-pending-chain", true, nil
+			if settled {
+				return "accepted-settled", true, nil
 			}
-		default:
-			// Still pending, or nothing is known yet: it may mine, so nothing is resubmitted.
+			reverted = true
+			continue
+		}
+		newest := len(group) - 1
+		if pending {
+			// The node holds it: it may mine, so nothing new is submitted, but a transaction
+			// that sits unmined too long is re-priced at the same nonce.
+			if err := b.replaceStalled(ctx, jobID, vaultJobID, group, rec.chainLen[group[0].root], head, "pending"); err != nil {
+				return "", true, err
+			}
+			return "accepted-pending-chain", true, nil
+		}
+		allDropped := true
+		for i, bc := range group {
+			if results[i].State == funding.TxEvicted && i != newest {
+				// An older, lower-fee transaction at this nonce: only the newest is re-sent.
+				allDropped = false
+				continue
+			}
+			out, err := b.confirmUnseen(ctx, jobID, bc, results[i])
+			if err != nil {
+				return "", true, err
+			}
+			switch out {
+			case unseenConfirmedDropped:
+			case unseenNotResent:
+				// Evicted, confirmed, and the same bytes cannot go out again (a re-send the node
+				// refuses, such as one priced under the base fee, or no bytes recorded): the
+				// only way forward at this nonce is a replacement.
+				allDropped = false
+				if err := b.replaceStalled(ctx, jobID, vaultJobID, group, rec.chainLen[bc.root], results[i].Head, "evicted, not re-sent"); err != nil {
+					return "", true, err
+				}
+			default:
+				allDropped = false
+			}
+		}
+		if !allDropped {
+			// Unconfirmed, or evicted and re-sent: it may still mine, so nothing is resubmitted.
 			return "accepted-pending-chain", true, nil
 		}
 	}
@@ -644,15 +740,152 @@ func (b *Brain) resolveBroadcasts(ctx context.Context, jobID, vaultJobID string,
 	return "", false, nil
 }
 
+// recordMinedAtNonce records the outcome of the one transaction at a nonce that has a
+// receipt (executed, or reverted), then records every other transaction at that nonce as
+// dropped: the receipt proves the nonce is taken, so none of them can ever mine. Returns
+// settled=true for a successful receipt.
+func (b *Brain) recordMinedAtNonce(ctx context.Context, jobID string, group []openBroadcast, mined int, out funding.ChainOutcome) (bool, error) {
+	bc := group[mined]
+	if !out.Reverted {
+		if _, err := b.store.Append(ctx, store.Event{
+			Kind: settlementSettled, EntityID: jobID, Actor: "funding",
+			Payload: map[string]any{
+				"tx_hash": bc.TxHash, "block": out.Block, "gas_used": out.GasUsed, "signer": signerDaemonLane,
+				"note": "the recorded acceptDelivery mined successfully; its receipt was read on a later resolution",
+			},
+		}); err != nil {
+			return false, err
+		}
+		b.log.Info("settlement executed on chain (resolved from the recorded broadcast)", "job", jobID, "tx", bc.TxHash)
+	} else {
+		if _, err := b.store.Append(ctx, store.Event{
+			Kind: settlementReverted, EntityID: jobID, Actor: "funding",
+			Payload: map[string]any{
+				"tx_hash": bc.TxHash, "block": out.Block, "gas_used": out.GasUsed,
+				"note": "acceptDelivery MINED AND REVERTED — not settled; owner attention required",
+			},
+		}); err != nil {
+			return false, err
+		}
+		b.log.Warn("settlement reverted on chain (resolved from the recorded broadcast)", "job", jobID, "tx", bc.TxHash)
+	}
+	for i, other := range group {
+		if i == mined {
+			continue
+		}
+		if _, err := b.store.Append(ctx, store.Event{
+			Kind: settlementDropped, EntityID: jobID, Actor: "funding",
+			Payload: map[string]any{
+				"tx_hash": other.TxHash, "nonce": other.Nonce, "taken_by": bc.TxHash,
+				"note": "another acceptDelivery at the same nonce mined, so this one never can",
+			},
+		}); err != nil {
+			return false, err
+		}
+	}
+	if !out.Reverted {
+		b.recordMilestoneObservation(ctx, jobID)
+	}
+	return !out.Reverted, nil
+}
+
+// replaceStalled fee-replaces the newest transaction at a nonce the chain is not mining:
+// still held by the node, or evicted and not re-sendable. It acts only once that transaction
+// has sat for replaceAfterBlocks since it was signed (its sent_head; for a record without
+// one, since this process first saw it stall). The replacement is acceptDelivery again, at
+// the SAME nonce with a higher fee, recorded write-ahead as a settlement.submitted that
+// `replaces` it; if the record cannot be written nothing is sent. At most one transaction
+// per nonce can mine, so no number of replacements can settle twice. Past maxReplacements a
+// settlement.stuck is recorded (once) and logged at ERROR, and nothing more is replaced.
+//
+// It never fails the caller for a replacement that did not happen: the broadcast stays open
+// and the next resolution looks again. It returns only a store error.
+func (b *Brain) replaceStalled(ctx context.Context, jobID, vaultJobID string, group []openBroadcast, chainLen int, head uint64, why string) error {
+	newest := group[len(group)-1]
+	key := strings.ToLower(newest.TxHash)
+	b.mu.Lock()
+	after, maxRepl := b.replaceAfterBlocks, b.maxReplacements
+	since := newest.SentHead
+	if since == 0 {
+		h, ok := b.stallSince[key]
+		if !ok {
+			h = head
+			b.stallSince[key] = h
+		}
+		since = h
+	}
+	b.mu.Unlock()
+	if head < since+after {
+		return nil
+	}
+	if chainLen-1 >= maxRepl {
+		if newest.stuck {
+			return nil
+		}
+		if _, err := b.store.Append(ctx, store.Event{
+			Kind: settlementStuck, EntityID: jobID, Actor: "funding",
+			Payload: map[string]any{
+				"tx_hash": newest.TxHash, "nonce": newest.Nonce, "head": head, "replacements": chainLen - 1,
+				"note": "acceptDelivery is still unmined after the maximum number of fee replacements at its nonce; " +
+					"owner attention required (see the H2 settlement recovery note)",
+			},
+		}); err != nil {
+			return err
+		}
+		b.log.Error("SETTLEMENT STUCK: acceptDelivery is unmined after the maximum number of fee replacements; owner attention required",
+			"job", jobID, "tx", newest.TxHash, "nonce", newest.Nonce, "replacements", chainLen-1, "why", why)
+		return nil
+	}
+	// The kill switch stops settlements, a replacement included.
+	if ferr := b.frozenErr(jobID, ""); ferr != nil {
+		b.log.Warn("a stalled acceptDelivery is not replaced while frozen", "job", jobID, "tx", newest.TxHash)
+		return nil
+	}
+	if b.funding == nil || vaultJobID == "" {
+		return nil
+	}
+	recorded := false
+	repl, err := b.funding.ReplaceSettlement(context.WithoutCancel(ctx), vaultJobID, newest.Broadcast, func(bc funding.Broadcast) error {
+		if err := b.recordSubmitted(ctx, jobID, bc, newest.TxHash); err != nil {
+			b.log.Error("a replacement acceptDelivery was signed but its record failed; it is NOT sent",
+				"job", jobID, "replaces", newest.TxHash, "err", err)
+			return err
+		}
+		recorded = true
+		return nil
+	})
+	switch {
+	case err == nil:
+		b.log.Warn("a stalled acceptDelivery was replaced at the same nonce with a higher fee",
+			"job", jobID, "replaces", newest.TxHash, "tx", repl.TxHash, "nonce", newest.Nonce, "why", why)
+	case recorded:
+		b.log.Warn("a replacement acceptDelivery is recorded but its send was not acknowledged; it is resolved by hash",
+			"job", jobID, "replaces", newest.TxHash, "tx", repl.TxHash, "err", err)
+	default:
+		b.log.Warn("a stalled acceptDelivery could not be replaced; it stays open", "job", jobID, "tx", newest.TxHash, "err", err)
+	}
+	return nil
+}
+
+// What confirmUnseen did with one observation of an unseen broadcast.
+type unseenOutcome int
+
+const (
+	unseenWaiting          unseenOutcome = iota // a first look, or the chain has not moved: nothing acted on
+	unseenConfirmedDropped                      // dropped, confirmed and recorded: it can never mine
+	unseenResent                                // evicted, confirmed, and its same bytes were sent again
+	unseenNotResent                             // evicted, confirmed, but not re-sent (frozen, no bytes, or refused)
+)
+
 // confirmUnseen handles one observation of a broadcast that has no receipt and that the node
 // does not know. A single such look is not believed: through a load-balanced RPC a mined
 // transaction can look exactly like this (the nonce backend ahead of the receipt backend).
 // The first look is recorded (settlement.unseen, with its verdict and chain head) so it
 // survives a restart; only a second look with the same verdict at a strictly higher head is
-// acted on. A confirmed "dropped" is recorded as settlement.dropped (returns true: the job
-// may be resubmitted). A confirmed "evicted" re-sends the recorded signed bytes unchanged,
-// which cannot settle twice (same nonce, same hash), and the broadcast stays open.
-func (b *Brain) confirmUnseen(ctx context.Context, jobID string, bc openBroadcast, res funding.Resolution) (bool, error) {
+// acted on. A confirmed "dropped" is recorded as settlement.dropped. A confirmed "evicted"
+// re-sends the recorded signed bytes unchanged, which cannot settle twice (same nonce, same
+// hash), and the broadcast stays open.
+func (b *Brain) confirmUnseen(ctx context.Context, jobID string, bc openBroadcast, res funding.Resolution) (unseenOutcome, error) {
 	verdict := unseenDropped
 	if res.State == funding.TxEvicted {
 		verdict = unseenEvicted
@@ -666,15 +899,15 @@ func (b *Brain) confirmUnseen(ctx context.Context, jobID string, bc openBroadcas
 					"confirmed only by a second observation at a higher chain head",
 			},
 		}); err != nil {
-			return false, err
+			return unseenWaiting, err
 		}
 		b.log.Warn("a recorded acceptDelivery is unseen by the node; waiting for a second observation",
 			"job", jobID, "tx", bc.TxHash, "verdict", verdict, "head", res.Head)
-		return false, nil
+		return unseenWaiting, nil
 	}
 	if res.Head <= bc.seen.head {
 		// The chain has not moved since the first look: this one adds nothing.
-		return false, nil
+		return unseenWaiting, nil
 	}
 	if verdict == unseenDropped {
 		if _, err := b.store.Append(ctx, store.Event{
@@ -685,26 +918,26 @@ func (b *Brain) confirmUnseen(ctx context.Context, jobID string, bc openBroadcas
 					"(observed twice, the chain head advancing between)",
 			},
 		}); err != nil {
-			return false, err
+			return unseenWaiting, err
 		}
 		b.log.Warn("a recorded acceptDelivery was dropped; the settlement may be resubmitted", "job", jobID, "tx", bc.TxHash)
-		return true, nil
+		return unseenConfirmedDropped, nil
 	}
 	// Evicted, confirmed. The kill switch stops settlements, a re-send included.
 	if ferr := b.frozenErr(jobID, ""); ferr != nil {
 		b.log.Warn("an evicted acceptDelivery is not re-sent while frozen", "job", jobID, "tx", bc.TxHash)
-		return false, nil
+		return unseenNotResent, nil
 	}
 	if len(bc.Raw) == 0 {
 		b.log.Error("an evicted acceptDelivery has no recorded signed bytes and cannot be re-sent; "+
-			"it stays open until its nonce is used (see the H2 settlement recovery note)",
+			"it is replaced at its nonce once stalled long enough (see the H2 settlement recovery note)",
 			"job", jobID, "tx", bc.TxHash, "nonce", bc.Nonce)
-		return false, nil
+		return unseenNotResent, nil
 	}
 	if err := b.funding.RebroadcastSettlement(ctx, bc.Broadcast); err != nil {
 		// Nothing new is out; the next resolution looks again.
 		b.log.Warn("re-sending an evicted acceptDelivery failed; it stays open", "job", jobID, "tx", bc.TxHash, "err", err)
-		return false, nil
+		return unseenNotResent, nil
 	}
 	if _, err := b.store.Append(ctx, store.Event{
 		Kind: settlementRebroadcast, EntityID: jobID, Actor: "funding",
@@ -713,10 +946,10 @@ func (b *Brain) confirmUnseen(ctx context.Context, jobID string, bc openBroadcas
 			"note": "the evicted acceptDelivery's recorded signed bytes were sent again, unchanged (same nonce, same hash)",
 		},
 	}); err != nil {
-		return false, err
+		return unseenWaiting, err
 	}
 	b.log.Warn("an evicted acceptDelivery was re-sent unchanged", "job", jobID, "tx", bc.TxHash, "nonce", bc.Nonce)
-	return false, nil
+	return unseenResent, nil
 }
 
 // SetDeliveryOracle wires the on-chain read a retried settlement consults before
@@ -740,11 +973,13 @@ func (b *Brain) recordMilestoneObservation(ctx context.Context, jobID string) {
 	}
 }
 
-// recordSubmitted writes the settlement.submitted record for a broadcast.
-func (b *Brain) recordSubmitted(ctx context.Context, jobID string, bc funding.Broadcast) error {
+// recordSubmitted writes the write-ahead settlement.submitted record for a signed, not yet
+// sent, acceptDelivery. replaces names the transaction a fee replacement takes over from at
+// the same nonce ("" for a first submission).
+func (b *Brain) recordSubmitted(ctx context.Context, jobID string, bc funding.Broadcast, replaces string) error {
 	payload := map[string]any{
 		"tx_hash": bc.TxHash, "nonce": bc.Nonce, "signer": signerDaemonLane,
-		"note": "acceptDelivery broadcast; its receipt has not been read yet",
+		"note": "acceptDelivery signed and recorded before it is sent; it may be out and may still mine until a later record resolves it",
 	}
 	if bc.Signer != (common.Address{}) {
 		payload["signer_address"] = bc.Signer.Hex()
@@ -752,33 +987,17 @@ func (b *Brain) recordSubmitted(ctx context.Context, jobID string, bc funding.Br
 	if len(bc.Raw) > 0 {
 		payload["raw_tx"] = "0x" + hex.EncodeToString(bc.Raw)
 	}
+	if bc.SentHead > 0 {
+		payload["sent_head"] = bc.SentHead
+	}
+	if replaces != "" {
+		payload["replaces"] = replaces
+		payload["note"] = "a fee replacement of a stalled acceptDelivery at the same nonce, signed and recorded before it is sent"
+	}
 	_, err := b.store.Append(context.WithoutCancel(ctx), store.Event{
 		Kind: settlementSubmitted, EntityID: jobID, Actor: "funding", Payload: payload,
 	})
 	return err
-}
-
-// persistUnrecordedBroadcast writes the settlement.submitted record of a broadcast that went
-// out unrecorded in this process. Until it is written nothing else happens for the job: an
-// error here fails the attempt closed.
-func (b *Brain) persistUnrecordedBroadcast(ctx context.Context, jobID string) error {
-	b.mu.Lock()
-	bc, ok := b.unrecorded[jobID]
-	b.mu.Unlock()
-	if !ok {
-		return nil
-	}
-	if err := b.recordSubmitted(ctx, jobID, bc); err != nil {
-		b.log.Error("acceptDelivery is OUT and its broadcast is STILL unrecorded; nothing is resubmitted until it is",
-			"job", jobID, "tx", bc.TxHash, "nonce", bc.Nonce, "err", err)
-		return fmt.Errorf("acceptDelivery %s (nonce %d) is out but still unrecorded; nothing is resubmitted until it is: %w",
-			bc.TxHash, bc.Nonce, err)
-	}
-	b.mu.Lock()
-	delete(b.unrecorded, jobID)
-	b.mu.Unlock()
-	b.log.Info("recorded an acceptDelivery broadcast that went out unrecorded", "job", jobID, "tx", bc.TxHash)
-	return nil
 }
 
 // settleOnChain is the chain half of an authenticated, claimed Accept: submit
@@ -787,14 +1006,15 @@ func (b *Brain) persistUnrecordedBroadcast(ctx context.Context, jobID string) er
 // outcome distinctly. No lane or no chain identity = the honest pending stop; a
 // REVERT is mined-and-failed — surfaced to the owner, never recorded as settled.
 //
-// The broadcast itself is recorded (settlement.submitted) as soon as it is out and before
-// the receipt wait, so a wait that fails leaves a record the next Accept resolves instead
-// of a gap it would read as "never sent". If that record cannot be written AND the receipt
-// wait fails, the transaction is out with no durable trace: the write is tried once more,
-// and if it still fails the Accept fails with an explicit error naming the transaction, the
-// broadcast is held in memory so the next attempt records it before anything else, and the
-// log says so loudly. rec is the job's prior history (zero on the first attempt): it names
-// the lane's own earlier transactions and suppresses a second, identical pending record.
+// The transaction is recorded WRITE-AHEAD (settlement.submitted) once it is signed and
+// before it is sent: the lane signs locally, so its hash, nonce, signer and bytes are known
+// before any node sees them. If that record cannot be written, nothing is sent and the
+// Accept fails with nothing out. Once it is written, any failure after it (the send RPC
+// timing out after the node accepted the bytes, an error from one backend of a
+// load-balanced endpoint while another took them, the receipt wait failing) leaves an open
+// record the next resolution asks about BY HASH; a send error is never read as "not sent".
+// rec is the job's prior history (zero on the first attempt): it names the lane's own
+// earlier transactions and suppresses a second, identical pending record.
 func (b *Brain) settleOnChain(ctx context.Context, jobID string, rec settlementRecord) (string, error) {
 	pending := func(note string) (string, error) {
 		if rec.latest == settlementPending {
@@ -823,39 +1043,24 @@ func (b *Brain) settleOnChain(ctx context.Context, jobID string, rec settlementR
 	if jm.VaultJobID == "" {
 		return pending("delivery accepted; no on-chain job identity yet (vault_job_id unset) — settlement pending")
 	}
-	var sent *funding.Broadcast
-	recorded := false
-	onBroadcast := func(bc funding.Broadcast) {
-		sent = &bc
-		if err := b.recordSubmitted(ctx, jobID, bc); err != nil {
-			b.log.Error("acceptDelivery is out but its broadcast record failed", "job", jobID, "tx", bc.TxHash, "err", err)
-			return
+	var recorded *funding.Broadcast
+	onSigned := func(bc funding.Broadcast) error {
+		if err := b.recordSubmitted(ctx, jobID, bc, ""); err != nil {
+			b.log.Error("acceptDelivery was signed but its record could not be written; it is NOT sent",
+				"job", jobID, "tx", bc.TxHash, "err", err)
+			return err
 		}
-		recorded = true
+		recorded = &bc
+		return nil
 	}
-	out, err := b.funding.SettleOnChain(context.WithoutCancel(ctx), jm.VaultJobID, onBroadcast)
+	out, err := b.funding.SettleOnChain(context.WithoutCancel(ctx), jm.VaultJobID, onSigned)
 	if err != nil {
-		if sent != nil && !recorded {
-			if rerr := b.recordSubmitted(ctx, jobID, *sent); rerr != nil {
-				b.mu.Lock()
-				b.unrecorded[jobID] = *sent
-				b.mu.Unlock()
-				b.log.Error("SETTLEMENT TRANSACTION IS OUT AND UNRECORDED: acceptDelivery was broadcast, its record "+
-					"could not be written and its receipt was not read; the next attempt records it before anything else, "+
-					"and after a restart only the chain read stands between this transaction and a resubmission",
-					"job", jobID, "tx", sent.TxHash, "nonce", sent.Nonce, "signer", sent.Signer.Hex(),
-					"receipt_err", err, "record_err", rerr)
-				return "", fmt.Errorf("acceptDelivery %s (nonce %d) was broadcast but is unrecorded (%v) and its receipt was not read (%v); "+
-					"the settlement may still land: nothing is resubmitted until the broadcast is recorded and resolved",
-					sent.TxHash, sent.Nonce, rerr, err)
-			}
-			recorded = true
-		}
-		if recorded {
-			// The transaction is out and recorded; whether it mines is the chain's to say,
-			// and the next Accept asks about this exact transaction before anything else.
-			b.log.Warn("acceptDelivery broadcast but its receipt was not read; the next Accept resolves it",
-				"job", jobID, "tx", sent.TxHash, "err", err)
+		if recorded != nil {
+			// Recorded before it was sent. Whether it reached a node and whether it mines is
+			// the chain's to say, and the next resolution asks about this exact transaction
+			// before anything else; nothing new is submitted meanwhile.
+			b.log.Warn("acceptDelivery is recorded but its send or receipt was not confirmed; it is resolved by hash",
+				"job", jobID, "tx", recorded.TxHash, "nonce", recorded.Nonce, "err", err)
 			return "accepted-pending-chain", nil
 		}
 		return "", fmt.Errorf("acceptDelivery submission: %w", err)

@@ -100,6 +100,13 @@ func TestFunding_SoleEntryPointDemandsAGrant(t *testing.T) {
 		// so it can only put the same transaction back in the mempool: same nonce, same
 		// hash, no new authorization, and it cannot settle twice.
 		"RebroadcastSettlement": true,
+		// ReplaceSettlement takes NO Grant, classified: like SettleOnChain it takes only a
+		// vault job id and derives the acceptDelivery calldata itself, and it re-signs that
+		// SAME call at the nonce of a transaction the settle lane already broadcast for an
+		// authorized Accept (a fee bump of a stalled one). At most one transaction per nonce
+		// can mine, so it cannot settle twice, and the contract's SC-JV-005 checks still
+		// bind it. Brain calls it only for a recorded, unresolved broadcast.
+		"ReplaceSettlement": true,
 		// SettleLaneWired is a READ: whether a settle lane is installed. Moves nothing.
 		"SettleLaneWired": true,
 		// The H3 payment lane (classified at the V6 review):

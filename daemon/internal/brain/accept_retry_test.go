@@ -57,8 +57,11 @@ func retryRig(t *testing.T, outs []funding.ChainOutcome, errs []error) (*Brain, 
 	return b, lane, jobID
 }
 
-// A failed settlement attempt must not consume the Accept claim: after a mined revert or a
-// submission error, the next Accept submits again and settles.
+// A failed settlement attempt must not consume the Accept claim: after a mined revert, or a
+// submission that failed before anything was signed (gas estimation refused the call, so no
+// transaction exists), the next Accept submits again and settles. An error AFTER signing is
+// a different case and is never retried this way (see
+// TestAcceptRetry_SendTimeoutAfterSigningIsResolvedByHash).
 func TestAcceptRetry_FailedAttemptIsRetried(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -68,7 +71,7 @@ func TestAcceptRetry_FailedAttemptIsRetried(t *testing.T) {
 		reverted   int
 	}{
 		{"mined revert", revertedOut, nil, "accepted-settlement-reverted", 1},
-		{"submission error", funding.ChainOutcome{}, errors.New("rpc timeout"), "", 0},
+		{"refused before signing", funding.ChainOutcome{}, errors.New("gas estimate (the call likely reverts): execution reverted"), "", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,6 +112,67 @@ func TestAcceptRetry_FailedAttemptIsRetried(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The reviewer's case: eth_sendRawTransaction times out (or answers with an error) AFTER the
+// transaction was signed. The lane signs locally, so the transaction was recorded before the
+// send, and a send error is never proof it was not sent: the node may hold it. The Accept
+// reports pending, and every later Accept resolves that exact transaction by hash and submits
+// nothing new while it may mine. A second transaction is never sent.
+//
+// Even when the node DID refuse it (the "nonce too low" case: its nonce was taken), the
+// record is resolved by hash too, and only a confirmed drop lets a new submission through.
+func TestAcceptRetry_SendTimeoutAfterSigningIsResolvedByHash(t *testing.T) {
+	ctx := context.Background()
+	t.Run("node accepted, response lost", func(t *testing.T) {
+		sendTimeout := trackedStep{broadcast: true, err: errors.New("send (the transaction may still have reached the node; resolve it by hash): context deadline exceeded")}
+		b, lane, jobID := trackedRig(t, sendTimeout)
+		if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+			t.Fatalf("accept with a lost send ack: state=%q err=%v, want accepted-pending-chain", s, err)
+		}
+		if n := countEvents(t, b.store, "settlement.submitted", jobID); n != 1 {
+			t.Fatalf("settlement.submitted = %d, want the write-ahead record", n)
+		}
+		wantStatus(t, b, jobID, SettlementPending)
+		for i := 0; i < 3; i++ {
+			if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+				t.Fatalf("retry while it may mine: state=%q err=%v", s, err)
+			}
+		}
+		if subs, resolves := lane.counts(); subs != 1 || resolves < 3 {
+			t.Fatalf("submits=%d resolves=%d, want 1 submission and the record resolved on every retry", subs, resolves)
+		}
+		lane.set(1, funding.TxMined, false)
+		if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
+			t.Fatalf("after it mined: state=%q err=%v, want accepted-settled", s, err)
+		}
+		if _, p := executedRecord(t, b, jobID); p["tx_hash"] != txHashN(1) {
+			t.Fatalf("settled by %v, want the first (and only) transaction", p["tx_hash"])
+		}
+		if subs, _ := lane.counts(); subs != 1 {
+			t.Fatalf("submits=%d, want 1: no duplicate acceptDelivery", subs)
+		}
+	})
+	t.Run("node refused it", func(t *testing.T) {
+		refused := trackedStep{broadcast: true, unsent: true, err: errors.New("send: RPC error -32000: nonce too low")}
+		b, lane, jobID := trackedRig(t, refused, trackedSettled)
+		if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+			t.Fatalf("accept with a refused send: state=%q err=%v, want accepted-pending-chain", s, err)
+		}
+		lane.set(1, funding.TxDropped, false)
+		if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+			t.Fatalf("first dropped look: state=%q err=%v", s, err)
+		}
+		if subs, _ := lane.counts(); subs != 1 {
+			t.Fatalf("submits=%d after one look, want 1", subs)
+		}
+		if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
+			t.Fatalf("confirmed dropped: state=%q err=%v, want a resubmission that settles", s, err)
+		}
+		if subs, _ := lane.counts(); subs != 2 || countEvents(t, b.store, "settlement.dropped", jobID) != 1 {
+			t.Fatalf("submits=%d dropped=%d, want 2 and 1", subs, countEvents(t, b.store, "settlement.dropped", jobID))
+		}
+	})
 }
 
 // An already-settled job stays idempotent, whether it settled through the lane or the

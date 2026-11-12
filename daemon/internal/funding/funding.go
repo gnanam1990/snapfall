@@ -134,18 +134,22 @@ type Resolution struct {
 	Head    uint64
 }
 
-// TrackedSubmitter is a lane that also reports each broadcast BEFORE its receipt wait and
-// can later say what became of it. The settlement lane needs both: a receipt wait that
-// fails says nothing about whether the transaction mines, so the caller records the
-// broadcast and asks about that exact transaction on the next attempt rather than sending
-// another one. Rebroadcast re-sends a recorded broadcast's signed bytes unchanged (same
-// nonce, same hash), which is how an evicted transaction is recovered without a second one.
+// TrackedSubmitter is a lane that also records each transaction BEFORE it is sent (the
+// write-ahead hook runs once it is signed, and an error from it sends nothing) and can later
+// say what became of it. The settlement lane needs both: a send or receipt wait that fails
+// says nothing about whether the transaction mines, so the caller records it first and asks
+// about that exact transaction on the next attempt rather than sending another one.
+// Rebroadcast re-sends a recorded broadcast's signed bytes unchanged (same nonce, same hash),
+// which is how an evicted transaction is recovered without a second one. Replace re-signs
+// the same call at a recorded broadcast's nonce with a higher fee, for one the node holds but
+// never mines; at most one transaction per nonce mines, so it cannot settle twice either.
 // A plain Submitter still works everywhere; it just cannot be resolved.
 type TrackedSubmitter interface {
 	Submitter
-	SubmitTracked(ctx context.Context, calldata []byte, onBroadcast func(Broadcast)) (ChainOutcome, error)
+	SubmitTracked(ctx context.Context, calldata []byte, onSigned func(Broadcast) error) (ChainOutcome, error)
 	Resolve(ctx context.Context, b Broadcast) (Resolution, error)
 	Rebroadcast(ctx context.Context, b Broadcast) error
+	Replace(ctx context.Context, calldata []byte, prev Broadcast, onSigned func(Broadcast) error) (Broadcast, error)
 }
 
 // ErrSettlementUnresolvable means no wired settle lane can answer for a broadcast: none is
@@ -194,9 +198,10 @@ func (a *Agent) ExecuteAdvance(ctx context.Context, g approval.Grant) (ChainOutc
 // job's customer and status is Delivered, a misdirected call reverts, it cannot
 // misappropriate). Called from Brain's AcceptDelivery only.
 //
-// onBroadcast (may be nil) runs once the transaction is out and before its receipt wait,
-// when the lane is a TrackedSubmitter; a plain lane never calls it.
-func (a *Agent) SettleOnChain(ctx context.Context, vaultJobID string, onBroadcast func(Broadcast)) (ChainOutcome, error) {
+// onSigned (may be nil) is the write-ahead hook: it runs once the transaction is signed and
+// BEFORE it is sent, when the lane is a TrackedSubmitter, and an error from it sends nothing.
+// A plain lane never calls it.
+func (a *Agent) SettleOnChain(ctx context.Context, vaultJobID string, onSigned func(Broadcast) error) (ChainOutcome, error) {
 	a.mu.Lock()
 	lane := a.settleLane
 	a.mu.Unlock()
@@ -207,8 +212,8 @@ func (a *Agent) SettleOnChain(ctx context.Context, vaultJobID string, onBroadcas
 	if err != nil {
 		return ChainOutcome{}, fmt.Errorf("settlement chain ref: %w", err)
 	}
-	if tl, ok := lane.(TrackedSubmitter); ok && onBroadcast != nil {
-		return tl.SubmitTracked(ctx, chain.CalldataAcceptDelivery(id), onBroadcast)
+	if tl, ok := lane.(TrackedSubmitter); ok && onSigned != nil {
+		return tl.SubmitTracked(ctx, chain.CalldataAcceptDelivery(id), onSigned)
 	}
 	return lane.Submit(ctx, chain.CalldataAcceptDelivery(id))
 }
@@ -233,6 +238,22 @@ func (a *Agent) RebroadcastSettlement(ctx context.Context, b Broadcast) error {
 		return ErrSettlementUnresolvable
 	}
 	return tl.Rebroadcast(ctx, b)
+}
+
+// ReplaceSettlement re-signs acceptDelivery for vaultJobID at prev's nonce with a higher fee,
+// deriving the calldata itself as SettleOnChain does. onSigned is the write-ahead hook (an
+// error from it sends nothing). It does not wait for a receipt. ErrSettlementUnresolvable
+// when no wired lane can sign it.
+func (a *Agent) ReplaceSettlement(ctx context.Context, vaultJobID string, prev Broadcast, onSigned func(Broadcast) error) (Broadcast, error) {
+	tl, ok := a.trackedSettleLane()
+	if !ok {
+		return Broadcast{}, ErrSettlementUnresolvable
+	}
+	id, err := chain.JobID32(vaultJobID)
+	if err != nil {
+		return Broadcast{}, fmt.Errorf("settlement chain ref: %w", err)
+	}
+	return tl.Replace(ctx, chain.CalldataAcceptDelivery(id), prev, onSigned)
 }
 
 // SettleLaneWired reports whether a customer settle lane is wired at all. Without one an

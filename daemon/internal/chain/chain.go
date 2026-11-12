@@ -131,30 +131,49 @@ func (c *Client) SubmitWithGas(ctx context.Context, to common.Address, calldata 
 	return c.submit(ctx, to, calldata, gasLimit)
 }
 
-// Broadcast identifies one signed transaction the node has accepted: its hash, the signer
-// nonce it occupies, the address that signed it, and the signed bytes exactly as sent. All
-// of it is public chain data the moment it is broadcast, never key material.
+// Broadcast identifies one signed acceptDelivery-style transaction: its hash, the signer
+// nonce it occupies, the address that signed it, the signed bytes exactly as sent, and the
+// chain head read just before it was signed. All of it is public chain data the moment it
+// is broadcast, never key material.
 //
-// Signer and Raw are zero in records written before they were stored. Resolve then falls
-// back to this client's own address, and Rebroadcast refuses (nothing to re-send).
+// Signer, Raw and SentHead are zero in records written before they were stored. Resolve
+// then derives the signer from Raw, and with neither it refuses to classify an unseen
+// transaction (ErrSignerUnknown); Rebroadcast refuses (nothing to re-send).
 type Broadcast struct {
-	TxHash string
-	Nonce  uint64
-	Signer common.Address
-	Raw    []byte
+	TxHash   string
+	Nonce    uint64
+	Signer   common.Address
+	Raw      []byte
+	SentHead uint64
 }
 
-// SubmitTracked is Submit with one extra step: onBroadcast runs as soon as the node has
-// accepted the transaction and BEFORE the receipt wait. A receipt wait can time out, its
-// RPC can fail, or the process can die while it runs, and in every one of those cases the
-// transaction is still out and may still mine. A caller that records the Broadcast from
-// the hook can ask the chain about that exact transaction later (Resolve) instead of
-// treating it as never sent and sending a second one.
+// ErrSignerUnknown: a broadcast names no signer and carries no signed bytes to recover one
+// from, so no mined nonce can be compared and the transaction cannot be called dropped or
+// evicted. The caller treats it as unresolvable, never as "never sent".
+var ErrSignerUnknown = errors.New("the broadcast names no signer and has no signed bytes to recover one from")
+
+// ErrSignerMismatch: a broadcast was signed by another key than this client's. This client
+// cannot sign a replacement at that account's nonce.
+var ErrSignerMismatch = errors.New("the broadcast was signed by another key than this client's")
+
+// ErrNonceUsed: the broadcast's nonce is already mined, so there is nothing to replace.
+var ErrNonceUsed = errors.New("the broadcast's nonce is already used on chain")
+
+// SubmitTracked is Submit with a write-ahead step: onSigned runs once the transaction is
+// SIGNED and BEFORE eth_sendRawTransaction. The hash, nonce, signer and raw bytes are all
+// known locally at that point, so a caller that records them from the hook holds a record
+// of every transaction that can possibly reach the node. If onSigned returns an error,
+// nothing is sent and the error is returned.
 //
-// The hook runs under the signer mutex and cannot recall anything: by the time it runs
-// the transaction is already out. Nothing in Submit's contract changes otherwise.
-func (c *Client) SubmitTracked(ctx context.Context, to common.Address, calldata []byte, onBroadcast func(Broadcast)) (Receipt, error) {
-	return c.submitTracked(ctx, to, calldata, 0, onBroadcast)
+// Every failure after the hook (the send RPC timing out after the node accepted the bytes,
+// a load-balanced endpoint answering with an error from one backend after another took
+// it, the receipt wait timing out, the process dying) leaves a transaction that may be out
+// and may still mine. The caller resolves it by hash later (Resolve); it never reads a send
+// error as "not sent".
+//
+// The hook runs under the signer mutex. Nothing in Submit's contract changes otherwise.
+func (c *Client) SubmitTracked(ctx context.Context, to common.Address, calldata []byte, onSigned func(Broadcast) error) (Receipt, error) {
+	return c.submitTracked(ctx, to, calldata, 0, onSigned)
 }
 
 // TxState is what ONE look at the chain says about a transaction this signer broadcast.
@@ -192,23 +211,18 @@ type Resolution struct {
 
 // Resolve reports a broadcast transaction's state without waiting for it. Reads, in order:
 // the chain head, the SIGNER's mined nonce (b.Signer, the address recorded with the
-// broadcast, so a key rotated across a restart does not compare the wrong account), the
-// receipt, then eth_getTransactionByHash. A receipt is TxMined. A transaction the node
-// knows is TxPending. Only a transaction with no receipt AND unknown to the node is
-// TxDropped (mined nonce past it) or TxEvicted (mined nonce not past it), and both are
-// single observations the caller must confirm. Any read failure is returned as an error,
-// never guessed as a state.
+// broadcast, or the one recovered from its signed bytes, so a key rotated across a restart
+// never compares the wrong account), the receipt, then eth_getTransactionByHash. A receipt
+// is TxMined. A transaction the node knows is TxPending. Only a transaction with no receipt
+// AND unknown to the node is TxDropped (mined nonce past it) or TxEvicted (mined nonce not
+// past it), and both are single observations the caller must confirm. With no signer to
+// compare, such a transaction is ErrSignerUnknown, never a state. Any read failure is
+// returned as an error, never guessed as a state.
 func (c *Client) Resolve(ctx context.Context, b Broadcast) (Resolution, error) {
 	if strings.TrimSpace(b.TxHash) == "" {
 		return Resolution{}, fmt.Errorf("resolve: transaction hash is empty")
 	}
-	signer := b.Signer
-	if signer == (common.Address{}) {
-		if c.key == nil {
-			return Resolution{}, fmt.Errorf("refusing to resolve: the broadcast names no signer and this client is read-only (no signer nonce to compare)")
-		}
-		signer = c.addr
-	}
+	signer, signerKnown := b.signer(c.chainID)
 	if err := c.VerifyChainID(ctx); err != nil {
 		return Resolution{}, err
 	}
@@ -216,11 +230,14 @@ func (c *Client) Resolve(ctx context.Context, b Broadcast) (Resolution, error) {
 	if err != nil {
 		return Resolution{}, fmt.Errorf("chain head: %w", err)
 	}
-	var nonceHex string
-	if err := c.rpc(ctx, "eth_getTransactionCount", []any{signer.Hex(), "latest"}, &nonceHex); err != nil {
-		return Resolution{}, fmt.Errorf("mined nonce: %w", err)
+	// The nonce is read BEFORE the receipt: read after a null receipt, it could count this
+	// very transaction mining in between and call it dropped.
+	var mined uint64
+	if signerKnown {
+		if mined, err = c.minedNonce(ctx, signer); err != nil {
+			return Resolution{}, err
+		}
 	}
-	mined := new(big.Int).SetBytes(common.FromHex(nonceHex)).Uint64()
 	rec, found, err := c.receiptOnce(ctx, b.TxHash)
 	if err != nil {
 		return Resolution{}, err
@@ -236,12 +253,171 @@ func (c *Client) Resolve(ctx context.Context, b Broadcast) (Resolution, error) {
 	switch {
 	case known:
 		res.State = TxPending
+	case !signerKnown:
+		return Resolution{}, fmt.Errorf("resolve %s: %w", b.TxHash, ErrSignerUnknown)
 	case mined > b.Nonce:
 		res.State = TxDropped
 	default:
 		res.State = TxEvicted
 	}
 	return res, nil
+}
+
+// signer is the account that signed the broadcast: the recorded one, else the one its
+// signed bytes recover to. ok=false when neither is available.
+func (b Broadcast) signer(chainID *big.Int) (common.Address, bool) {
+	if b.Signer != (common.Address{}) {
+		return b.Signer, true
+	}
+	if len(b.Raw) == 0 {
+		return common.Address{}, false
+	}
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(b.Raw); err != nil || !strings.EqualFold(tx.Hash().Hex(), b.TxHash) {
+		return common.Address{}, false
+	}
+	from, err := types.Sender(types.LatestSignerForChainID(chainID), tx)
+	if err != nil {
+		return common.Address{}, false
+	}
+	return from, true
+}
+
+// minedNonce is addr's count of MINED transactions (eth_getTransactionCount at "latest").
+func (c *Client) minedNonce(ctx context.Context, addr common.Address) (uint64, error) {
+	var nonceHex string
+	if err := c.rpc(ctx, "eth_getTransactionCount", []any{addr.Hex(), "latest"}, &nonceHex); err != nil {
+		return 0, fmt.Errorf("mined nonce: %w", err)
+	}
+	return new(big.Int).SetBytes(common.FromHex(nonceHex)).Uint64(), nil
+}
+
+// Replace re-signs a call at prev's nonce with a strictly higher gas price, for a broadcast
+// that the node holds but does not mine (priced under what the chain takes). At most one
+// transaction per nonce can mine, so the original and every replacement together settle at
+// most once. It is a fresh signature, so it needs this client's key, and refuses when prev
+// was signed by another one (ErrSignerMismatch) or when prev's nonce is already mined
+// (ErrNonceUsed: nothing to replace, the caller resolves what took it).
+//
+// Fees follow Arc's rule: the base fee is read from chain right now, never cached. The new
+// gas price is the highest of the node's fresh eth_gasPrice, the latest block's fresh base
+// fee, and prev's own price bumped by a quarter (nodes refuse a replacement under a ~10%
+// bump). The gas limit is estimated fresh: a call that would now revert is refused before
+// anything is signed.
+//
+// onSigned is the same write-ahead hook as SubmitTracked's: it runs after signing and
+// before the send, and an error from it sends nothing. Replace does NOT wait for a receipt;
+// the returned Broadcast is resolved later like any other. A send error after the hook
+// returns that Broadcast with the error, and the caller resolves it by hash.
+func (c *Client) Replace(ctx context.Context, to common.Address, calldata []byte, prev Broadcast, onSigned func(Broadcast) error) (Broadcast, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.key == nil {
+		return Broadcast{}, fmt.Errorf("refusing to replace: this client is read-only (no signing key)")
+	}
+	if signer, ok := prev.signer(c.chainID); !ok || signer != c.addr {
+		return Broadcast{}, fmt.Errorf("replace %s: %w", prev.TxHash, ErrSignerMismatch)
+	}
+	if err := c.VerifyChainID(ctx); err != nil {
+		return Broadcast{}, fmt.Errorf("refusing to sign: %w", err)
+	}
+	head, err := c.headHeight(ctx)
+	if err != nil {
+		return Broadcast{}, fmt.Errorf("chain head: %w", err)
+	}
+	mined, err := c.minedNonce(ctx, c.addr)
+	if err != nil {
+		return Broadcast{}, err
+	}
+	if mined > prev.Nonce {
+		return Broadcast{}, fmt.Errorf("replace %s: %w (mined nonce %d)", prev.TxHash, ErrNonceUsed, mined)
+	}
+	price, err := c.replacementGasPrice(ctx, prev)
+	if err != nil {
+		return Broadcast{}, err
+	}
+	gas, err := c.estimateGas(ctx, to, calldata)
+	if err != nil {
+		return Broadcast{}, err
+	}
+	signed, err := types.SignTx(types.NewTx(&types.LegacyTx{
+		Nonce: prev.Nonce, To: &to, Value: big.NewInt(0), Gas: gas, GasPrice: price, Data: calldata,
+	}), types.NewEIP155Signer(c.chainID), c.key)
+	if err != nil {
+		return Broadcast{}, fmt.Errorf("signing: %w", err)
+	}
+	rawTx, err := signed.MarshalBinary()
+	if err != nil {
+		return Broadcast{}, err
+	}
+	bc := Broadcast{TxHash: signed.Hash().Hex(), Nonce: prev.Nonce, Signer: c.addr, Raw: rawTx, SentHead: head}
+	if onSigned != nil {
+		if err := onSigned(bc); err != nil {
+			return Broadcast{}, fmt.Errorf("replacement not sent: %w", err)
+		}
+	}
+	if err := c.sendRaw(ctx, rawTx, bc.TxHash); err != nil {
+		return bc, err
+	}
+	return bc, nil
+}
+
+// replacementGasPrice is max(fresh eth_gasPrice, fresh latest base fee, prev's price * 5/4 + 1).
+func (c *Client) replacementGasPrice(ctx context.Context, prev Broadcast) (*big.Int, error) {
+	var gasPriceHex string
+	if err := c.rpc(ctx, "eth_gasPrice", []any{}, &gasPriceHex); err != nil {
+		return nil, fmt.Errorf("gas price: %w", err)
+	}
+	price := new(big.Int).SetBytes(common.FromHex(gasPriceHex))
+	var block struct {
+		BaseFee string `json:"baseFeePerGas"`
+	}
+	if err := c.rpc(ctx, "eth_getBlockByNumber", []any{"latest", false}, &block); err != nil {
+		return nil, fmt.Errorf("base fee: %w", err)
+	}
+	if block.BaseFee != "" {
+		if base := new(big.Int).SetBytes(common.FromHex(block.BaseFee)); base.Cmp(price) > 0 {
+			price = base
+		}
+	}
+	if len(prev.Raw) > 0 {
+		tx := new(types.Transaction)
+		if err := tx.UnmarshalBinary(prev.Raw); err == nil && tx.GasPrice() != nil {
+			bumped := new(big.Int).Div(new(big.Int).Mul(tx.GasPrice(), big.NewInt(5)), big.NewInt(4))
+			bumped.Add(bumped, big.NewInt(1))
+			if bumped.Cmp(price) > 0 {
+				price = bumped
+			}
+		}
+	}
+	return price, nil
+}
+
+// estimateGas estimates a call from this signer and adds 20% headroom (unused gas is refunded).
+func (c *Client) estimateGas(ctx context.Context, to common.Address, calldata []byte) (uint64, error) {
+	call := map[string]any{"from": c.addr.Hex(), "to": to.Hex(), "data": "0x" + hex.EncodeToString(calldata)}
+	var gasHex string
+	if err := c.rpc(ctx, "eth_estimateGas", []any{call}, &gasHex); err != nil {
+		// Estimation failing usually means the call would revert; surface it as a
+		// submission failure (nothing was signed, nothing mined).
+		return 0, fmt.Errorf("gas estimate (the call likely reverts): %w", err)
+	}
+	gas := new(big.Int).SetBytes(common.FromHex(gasHex)).Uint64()
+	return gas + gas/5, nil
+}
+
+// sendRaw sends signed bytes. An error here does NOT mean the node lacks the transaction:
+// the request can time out after the node accepted it, and a load-balanced endpoint can
+// answer from a backend that did not take it while another did.
+func (c *Client) sendRaw(ctx context.Context, rawTx []byte, wantHash string) error {
+	var got string
+	if err := c.rpc(ctx, "eth_sendRawTransaction", []any{"0x" + hex.EncodeToString(rawTx)}, &got); err != nil {
+		return fmt.Errorf("send (the transaction may still have reached the node; resolve it by hash): %w", err)
+	}
+	if !strings.EqualFold(got, wantHash) {
+		return fmt.Errorf("send: the node reported hash %s for transaction %s", got, wantHash)
+	}
+	return nil
 }
 
 // Rebroadcast sends a broadcast's recorded signed bytes again, unchanged: the same nonce,
@@ -310,7 +486,7 @@ func (c *Client) submit(ctx context.Context, to common.Address, calldata []byte,
 	return c.submitTracked(ctx, to, calldata, fixedGas, nil)
 }
 
-func (c *Client) submitTracked(ctx context.Context, to common.Address, calldata []byte, fixedGas uint64, onBroadcast func(Broadcast)) (Receipt, error) {
+func (c *Client) submitTracked(ctx context.Context, to common.Address, calldata []byte, fixedGas uint64, onSigned func(Broadcast) error) (Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -329,6 +505,17 @@ func (c *Client) submitTracked(ctx context.Context, to common.Address, calldata 
 		return Receipt{}, err
 	}
 
+	// A tracked submission records the head it was signed at, so the caller can tell how
+	// long the transaction has sat unmined.
+	var head uint64
+	if onSigned != nil {
+		h, err := c.headHeight(ctx)
+		if err != nil {
+			return Receipt{}, fmt.Errorf("chain head: %w", err)
+		}
+		head = h
+	}
+
 	var nonceHex string
 	if err := c.rpc(ctx, "eth_getTransactionCount", []any{c.addr.Hex(), "pending"}, &nonceHex); err != nil {
 		return Receipt{}, fmt.Errorf("nonce: %w", err)
@@ -343,15 +530,11 @@ func (c *Client) submitTracked(ctx context.Context, to common.Address, calldata 
 
 	gas := fixedGas
 	if gas == 0 {
-		call := map[string]any{"from": c.addr.Hex(), "to": to.Hex(), "data": "0x" + hex.EncodeToString(calldata)}
-		var gasHex string
-		if err := c.rpc(ctx, "eth_estimateGas", []any{call}, &gasHex); err != nil {
-			// Estimation failing usually means the call would revert; surface it as a
-			// submission failure (nothing was signed, nothing mined).
-			return Receipt{}, fmt.Errorf("gas estimate (the call likely reverts): %w", err)
+		g, err := c.estimateGas(ctx, to, calldata)
+		if err != nil {
+			return Receipt{}, err
 		}
-		gas = new(big.Int).SetBytes(common.FromHex(gasHex)).Uint64()
-		gas += gas / 5 // 20% headroom; unused gas is refunded
+		gas = g
 	}
 
 	tx := types.NewTx(&types.LegacyTx{
@@ -366,12 +549,15 @@ func (c *Client) submitTracked(ctx context.Context, to common.Address, calldata 
 	if err != nil {
 		return Receipt{}, err
 	}
-	var txHash string
-	if err := c.rpc(ctx, "eth_sendRawTransaction", []any{"0x" + hex.EncodeToString(rawTx)}, &txHash); err != nil {
-		return Receipt{}, fmt.Errorf("send: %w", err)
+	txHash := signed.Hash().Hex()
+	if onSigned != nil {
+		// Write-ahead: the record exists before the bytes can reach any node.
+		if err := onSigned(Broadcast{TxHash: txHash, Nonce: nonce, Signer: c.addr, Raw: rawTx, SentHead: head}); err != nil {
+			return Receipt{}, fmt.Errorf("not sent: %w", err)
+		}
 	}
-	if onBroadcast != nil {
-		onBroadcast(Broadcast{TxHash: txHash, Nonce: nonce, Signer: c.addr, Raw: rawTx})
+	if err := c.sendRaw(ctx, rawTx, txHash); err != nil {
+		return Receipt{}, err
 	}
 
 	return c.AwaitReceipt(ctx, txHash)

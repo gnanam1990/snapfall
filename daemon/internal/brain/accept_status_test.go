@@ -210,38 +210,32 @@ func failSubmittedRecords(t *testing.T, b *Brain) func() {
 	}
 }
 
-// The broadcast is out, its record cannot be written, and the receipt wait fails: the Accept
-// FAILS with an error naming the transaction, the status says pending, and the next Accept
-// records the broadcast FIRST and resolves it instead of resubmitting. While the record
-// still cannot be written, nothing at all is submitted.
-func TestAcceptBroadcast_UnrecordedBroadcastFailsExplicitlyAndIsRecordedFirst(t *testing.T) {
+// The write-ahead record cannot be written: NOTHING is sent (the hook refuses before the
+// send), the Accept fails, and no transaction exists that the daemon does not know about. So
+// once the store recovers the next Accept simply submits, and that one settles.
+func TestAcceptBroadcast_FailedWriteAheadRecordSendsNothing(t *testing.T) {
 	b, lane, jobID := trackedRig(t, receiptTimeout, trackedSettled)
 	ctx := context.Background()
 	lift := failSubmittedRecords(t, b)
-	_, err := b.AcceptDelivery(ctx, jobID)
-	if err == nil || !strings.Contains(err.Error(), txHashN(1)) || !strings.Contains(err.Error(), "unrecorded") {
-		t.Fatalf("accept err=%v, want an explicit error naming %s as out and unrecorded", err, txHashN(1))
+	if s, err := b.AcceptDelivery(ctx, jobID); err == nil || !strings.Contains(err.Error(), "not sent") {
+		t.Fatalf("accept: state=%q err=%v, want a not-sent error", s, err)
 	}
-	wantStatus(t, b, jobID, SettlementPending)
-	if _, err := b.AcceptDelivery(ctx, jobID); err == nil {
-		t.Fatal("a retry while the broadcast still cannot be recorded returned no error")
+	lane.mu.Lock()
+	out := len(lane.sent)
+	lane.mu.Unlock()
+	if out != 0 {
+		t.Fatalf("%d transactions reached the node although their record failed, want 0", out)
 	}
-	if subs, _ := lane.counts(); subs != 1 {
-		t.Fatalf("submissions = %d while a broadcast is out unrecorded, want 1", subs)
-	}
+	wantStatus(t, b, jobID, SettlementRetry)
 
 	lift()
-	lane.set(1, funding.TxMined, false)
 	if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-settled" {
-		t.Fatalf("after the store recovered: state=%q err=%v, want accepted-settled via tx1", s, err)
+		t.Fatalf("after the store recovered: state=%q err=%v, want accepted-settled", s, err)
 	}
 	if n := countEvents(t, b.store, "settlement.submitted", jobID); n != 1 {
-		t.Fatalf("settlement.submitted = %d, want the late record", n)
+		t.Fatalf("settlement.submitted = %d, want only the one that was sent", n)
 	}
-	if _, p := executedRecord(t, b, jobID); p["tx_hash"] != txHashN(1) {
-		t.Fatalf("settled by %v, want tx1", p["tx_hash"])
-	}
-	if subs, _ := lane.counts(); subs != 1 {
-		t.Fatalf("submissions = %d, want 1", subs)
+	if _, p := executedRecord(t, b, jobID); p["tx_hash"] != txHashN(2) {
+		t.Fatalf("settled by %v, want tx2 (tx1 was never sent)", p["tx_hash"])
 	}
 }
