@@ -62,3 +62,12 @@ The x402 agent-purchase path (`Funding → x402 buyer → paid seller → facili
 **real handshake with an unproven settlement**: the 402 → sign → 200 loop runs and the EIP-3009
 authorization is real, but the broadcast that would settle it on Arc has never run. It is drawn
 dashed from the seller onward for exactly that reason.
+
+**Update, Nov 2026 (the diagram predates it):**
+
+- **The x402 settlement has now run live on Arc testnet**, through the self-facilitator path rather than Gateway. The Circle treasury wallet signed the EIP-3009 authorization, and the Circle relayer wallet broadcast `transferWithAuthorization` (`0x63731fac…5264201`).
+- **Gateway is still unexercised.** The orange edge stays true for Gateway itself.
+- **The single signer can now be a Circle developer-controlled wallet** instead of a raw key, and the customer can self-custody a passkey wallet.
+- **The contracts are also deployed on Arc mainnet** with capital controls, but nothing operates there yet.
+
+Each of these is in [`CIRCLE-INTEGRATIONS.md`](CIRCLE-INTEGRATIONS.md) and [`addresses.md`](addresses.md) §8–9.
