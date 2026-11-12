@@ -61,3 +61,17 @@ test('accepting is acceptDelivery(jobId) on JobVault', () => {
   assert.equal(call!.to.toLowerCase(), VAULT);
   assert.equal(call!.data, `${toFunctionSelector('acceptDelivery(bytes32)')}${'ab'.repeat(32)}`);
 });
+
+test('the wallet says "accepted and settled" only when the chain shows the job Accepted', () => {
+  // The portal shows this panel for an accepted job the daemon has not recorded as settled; its
+  // sentence is the chain's word, so no other status, and no read failure, may carry the claim.
+  for (const status of ['Created', 'Funded', 'InProgress', 'Delivered', 'Refunded', 'Cancelled', null, 'Unknown']) {
+    const a = walletAction(job({ status }), WALLET);
+    assert.ok(a.kind !== 'nothing' || !/settled/i.test(a.reason), `status ${status}: ${JSON.stringify(a)}`);
+  }
+  for (const over of [{ exists: false }, { customer: null }] as Partial<JobView>[]) {
+    const a = walletAction(job({ status: 'Accepted', ...over }), WALLET);
+    assert.ok(a.kind !== 'nothing' || !/settled/i.test(a.reason), JSON.stringify(over));
+  }
+  assert.deepEqual(walletAction(job({ status: 'Accepted' }), WALLET), { kind: 'nothing', reason: 'This job is accepted and settled.' });
+});

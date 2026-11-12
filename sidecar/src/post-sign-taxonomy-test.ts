@@ -24,6 +24,7 @@ import {
   POST_SIGN_CODES,
   SendDeadlinePassed,
   SigningFailed,
+  isCanonicalAtomic,
   isPostSign,
   parseProbeTimeoutMs,
   provenNotSent,
@@ -227,4 +228,18 @@ test('a fractional, non-positive, oversized or garbled value falls back to the d
   }
   // Confirm the premise against the running Node: both kinds really are unusable as given.
   assert.throws(() => AbortSignal.timeout(0.5), { code: 'ERR_OUT_OF_RANGE' });
+});
+
+// ── the price that may be signed ─────────────────────────────────────────────────────────────
+//
+// probeChallenge refuses a challenge whose amount fails this, as CHALLENGE_UNAVAILABLE (pre-sign),
+// because the receipt is later held to the same canonical form and to the signed string exactly.
+
+test('only a canonical base-10 atomic amount may be signed', () => {
+  for (const ok of ['0', '1', '25000', '1000000', '340282366920938463463374607431768211455']) {
+    assert.equal(isCanonicalAtomic(ok), true, ok);
+  }
+  for (const bad of ['', '01000', '00', ' 1000', '1000 ', '+1000', '-1000', '0x3e8', '1e3', '1000.0', '1_000', 1000, null, undefined]) {
+    assert.equal(isCanonicalAtomic(bad), false, JSON.stringify(bad));
+  }
 });

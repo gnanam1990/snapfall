@@ -95,14 +95,27 @@ function receiptFor(auth: SignedAuth, overrides: Record<string, string> = {}) {
   return { amount: auth.value, payer: auth.from, payee: auth.to, nonce: auth.nonce, settlement: 'NOT_BROADCAST', ...overrides };
 }
 
-function challenge(asset = ASSET) {
+/**
+ * Probe paths whose challenge prices PRICE in a non-canonical spelling. Each one is the same
+ * number to BigInt, so it passes every comparison against the approved intent; only the canonical
+ * check stands between it and a signature whose receipt could never be accepted.
+ */
+const NON_CANONICAL_AMOUNTS: Record<string, unknown> = {
+  '/amount-leading-zero': `0${PRICE}`,
+  '/amount-space': ` ${PRICE}`,
+  '/amount-plus': `+${PRICE}`,
+  '/amount-hex': `0x${BigInt(PRICE).toString(16)}`,
+  '/amount-number': Number(PRICE),
+};
+
+function challenge(asset = ASSET, amount: unknown = PRICE) {
   return {
     x402Version: 2,
     accepts: [
       {
         scheme: 'exact',
         network: NETWORK,
-        amount: PRICE,
+        amount,
         asset,
         payTo: PAY_TO,
         maxTimeoutSeconds: 300,
@@ -131,7 +144,7 @@ async function fixture(req: IncomingMessage, res: ServerResponse) {
       held.onArrive();
       await held.gate;
     }
-    const c = challenge(path === '/unsignable' ? '0xnot-an-address' : ASSET);
+    const c = challenge(path === '/unsignable' ? '0xnot-an-address' : ASSET, NON_CANONICAL_AMOUNTS[path] ?? PRICE);
     return json(res, 402, c, { 'payment-required': b64(c) });
   }
 
@@ -451,4 +464,39 @@ test('a seller that never answers the probe is cut off pre-sign by the probe bou
   assert.ok(took < PROBE_TIMEOUT_MS + 2000, `the probe ran ${took}ms, past its ${PROBE_TIMEOUT_MS}ms bound`);
   assert.equal(paid.get('/hang') ?? 0, 0);
   assert.equal((await status(paymentIdOf(intent))).json?.error?.code, 'PAYMENT_NOT_FOUND');
+});
+
+// ── a non-canonical challenge amount is refused before anything is signed ─────────────────────
+
+test('a challenge priced "0" + the approved amount is refused pre-sign, never signed into RECONCILING', async () => {
+  // "025000" is 25000 to every BigInt comparison against the approved intent, so it used to be
+  // signed as written. The receipt is then held to the canonical form and to the signed string,
+  // so no receipt for it could ever be accepted: a signed bearer authorization stuck RECONCILING.
+  const path = '/amount-leading-zero';
+  const intent = makeIntent(path);
+  const r = await pay(intent);
+  assert.equal(r.json?.error?.code, 'CHALLENGE_UNAVAILABLE', `pay answered ${r.status} ${JSON.stringify(r.json)}`);
+  assert.equal(r.status, 502);
+  assert.equal(paid.get(path) ?? 0, 0, 'an authorization reached the seller');
+  assert.equal(
+    (await status(paymentIdOf(intent))).json?.error?.code,
+    'PAYMENT_NOT_FOUND',
+    'a refused challenge must leave no record: nothing was signed, so the daemon may release',
+  );
+
+  const q = await api('POST', '/v1/quote', { resource: `${FIXTURE}${path}`, chainId: CHAIN_ID });
+  assert.equal(q.json?.error?.code, 'CHALLENGE_UNAVAILABLE', `quote answered ${q.status} ${JSON.stringify(q.json)}`);
+});
+
+test('every non-canonical spelling of the price is refused by the probe, before any key is used', async () => {
+  for (const [path, amount] of Object.entries(NON_CANONICAL_AMOUNTS)) {
+    await assert.rejects(
+      probeChallenge(`${FIXTURE}${path}`, CHAIN_ID),
+      (e: Error & { code?: string }) => e.code === 'CHALLENGE_UNAVAILABLE',
+      `amount ${JSON.stringify(amount)} was accepted`,
+    );
+    assert.equal(paid.get(path) ?? 0, 0);
+  }
+  // Control: the canonical price is not refused by this check.
+  assert.equal((await probeChallenge(`${FIXTURE}/receipt-probe`, CHAIN_ID)).amount, PRICE);
 });

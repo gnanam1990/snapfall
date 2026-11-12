@@ -366,6 +366,18 @@ export default function FloatPage() {
     [refresh],
   );
   const streamStatus = useEventStream('/api/events/stream', onStreamMessage);
+  // The pool stats and open advances above are daemon data streamed under the owner session.
+  // Losing the session drops them, as the overview and job detail do, so the signed-out view
+  // cannot show them and the next session starts clean. The chain read (snapshot) is public
+  // and stays.
+  const signedOut = streamStatus === 'signed-out';
+  useEffect(() => {
+    if (!signedOut) return;
+    setH2Pool(null);
+    setH2Advances(null);
+  }, [signedOut]);
+  const ownerPool = signedOut ? null : h2Pool;
+  const ownerAdvances = signedOut ? null : h2Advances;
 
   useEffect(() => {
     void refresh();
@@ -419,8 +431,8 @@ export default function FloatPage() {
   // non-null 0 masked the honest "Awaiting…" placeholder — an unknown rendered as a
   // measured 0.00. Unknown must read as unknown. (review: chain-authoritative fee path)
   const feesAccrued = snapshot.feesAccruedUsdc ?? null;
-  const displayedAdvances = snapshot.openAdvances ?? h2Advances;
-  const displayedRate = snapshot.orgRateBps ?? h2Pool?.orgRateBps ?? null;
+  const displayedAdvances = snapshot.openAdvances ?? ownerAdvances;
+  const displayedRate = snapshot.orgRateBps ?? ownerPool?.orgRateBps ?? null;
 
   return (
     <div className="float-page">

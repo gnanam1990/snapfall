@@ -303,7 +303,27 @@ export async function probeChallenge(resource: string, chainId: number): Promise
         `we can only pay on eip155:${chainId}`,
     );
   }
+  // The amount is signed exactly as the seller wrote it (signAuthorization's `value`), and the
+  // receipt is later held to that string exactly and to the canonical form (receiptProblem). A
+  // challenge priced "025000", " 25000", "+25000" or "0x61a8" passes every BigInt comparison
+  // against the approved intent, so it would be signed, and its receipt could then never be
+  // accepted: every such payment would land RECONCILING with the money possibly moved. Refused
+  // here instead, before any key is touched, the same way the daemon refuses such a quote
+  // (daemon/internal/h3/client.go, CHALLENGE_UNAVAILABLE).
+  if (!isCanonicalAtomic(accept.amount)) {
+    throw new PaymentFailed(
+      'CHALLENGE_UNAVAILABLE',
+      `${resource} priced its payment at ${JSON.stringify(accept.amount)}, which is not a canonical atomic USDC integer`,
+    );
+  }
   return accept;
+}
+
+/** A canonical atomic USDC amount: base-10 digits, no sign, no whitespace, no leading zero except "0". */
+const CANONICAL_ATOMIC_RE = /^(0|[1-9][0-9]*)$/;
+
+export function isCanonicalAtomic(amount: unknown): amount is string {
+  return typeof amount === 'string' && CANONICAL_ATOMIC_RE.test(amount);
 }
 
 /**
@@ -581,7 +601,7 @@ export function receiptProblem(
   if (!isConfirmedSettlement(settlement) && settlement.toUpperCase() !== NOT_BROADCAST) {
     return `settlement ${JSON.stringify(receipt.settlement)} is not resolved (neither a transaction hash nor ${NOT_BROADCAST})`;
   }
-  if (!/^(0|[1-9][0-9]*)$/.test(receipt.amount)) {
+  if (!isCanonicalAtomic(receipt.amount)) {
     return `amount ${JSON.stringify(receipt.amount)} is not a canonical atomic USDC string`;
   }
   if (receipt.amount !== auth.value) {
