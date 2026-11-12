@@ -295,6 +295,52 @@ treasury held no pool shares, so "the business opens on someone else's capital" 
 here in a way it was not for the operator-seeded job-004. Two settlements — one hand-driven on
 operator liquidity, one automated on independent LP liquidity — is a stronger record than one.
 
+## 8. A second deployment with the mainnet capital controls (12 Nov 2026)
+
+The contracts above predate the capital controls in `docs/MAINNET.md`. The current source
+(`main` at `7fad758`) was deployed separately on Arc Testnet with `script/Deploy.s.sol`,
+from the same deployer `0x99B7…792D`. **No service points at it yet.** The dashboard, daemon
+and sidecar still use the deployment above, so every proof on this page is unaffected.
+
+| Contract | Address | Created in block |
+| --- | --- | --- |
+| AuditAnchor | `0x29861d3969B27ad56d80bBf40EEE1ccce98c9288` | 71,996,904 |
+| JobVault | `0xE4Ebf1bfFC11B72BE489209BC17AcFA8EEBaaB1F` | 71,996,909 |
+| FloatPool | `0x1022265Ca692fc2D9a80cF823E5AE7371BA13D95` | 71,996,915 |
+
+The deploy broadcast was 7 transactions, all with status 1: the three creations, then
+`wireFloatPool` and `wireJobVault` (blocks 71,996,918 and 71,996,922), `setCaps` (71,996,926)
+and `setMaxJobPayment` (71,996,930).
+
+Read back from chain afterwards:
+
+- **Wiring, both directions:** `JobVault.floatPool()` returns the FloatPool and `FloatPool.jobVault()` returns the JobVault.
+- **Caps:** `maxTotalExposure` 50.00 USDC, `maxAdvance` 10.00 USDC, `maxJobPayment` 25.00 USDC.
+- **State:** `totalWrittenOff` 0, neither contract paused, `depositAllowlistEnabled` true.
+- **Admin:** both contracts have the deployer as `admin`, and `ADMIN_TRANSFER_DELAY` is 172,800 s (48 h).
+- **Fail closed (`eth_call`, nothing sent):** `createJob` for 30 USDC reverts `JobTooLarge`, and a `deposit` from an address not on the allowlist reverts `DepositorNotAllowed`.
+
+```bash
+export FP2=0x1022265Ca692fc2D9a80cF823E5AE7371BA13D95 JV2=0xE4Ebf1bfFC11B72BE489209BC17AcFA8EEBaaB1F
+cast call $FP2 "jobVault()(address)" --rpc-url $ARC
+cast call $JV2 "floatPool()(address)" --rpc-url $ARC
+cast call $FP2 "maxTotalExposure()(uint256)" --rpc-url $ARC
+cast call $FP2 "maxAdvance()(uint256)" --rpc-url $ARC
+cast call $JV2 "maxJobPayment()(uint256)" --rpc-url $ARC
+cast call $FP2 "depositAllowlistEnabled()(bool)" --rpc-url $ARC
+```
+
+**Not done yet:** this pool holds no LP capital, has no allowlisted depositor other than the
+deployer and no org rate, and has made no advance. Moving the services over means doing all of
+the following together:
+
+- seed the pool;
+- set a rate;
+- point `deployments/arc-testnet.json` at these addresses with `startBlock` 71,996,904;
+- redeploy the dashboard.
+
+That would also leave the live proofs above on a pool that is no longer the active one.
+
 ## Security review
 
 The settlement waterfall (§4) was reviewed against **every reachable path** through

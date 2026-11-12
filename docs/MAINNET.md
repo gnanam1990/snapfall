@@ -25,6 +25,10 @@ The percentage caps remain and still bound the *shape* of the book. The new cont
 
 The testnet deployment recorded in `docs/addresses.md` predates all of this and is unaffected.
 Its source is tagged `testnet-deployment-frozen`.
+The current source, with these controls, was deployed once on Arc Testnet on 12 Nov 2026 as a
+separate set, and its caps, allowlist and fail-closed reverts were read back from chain
+([addresses §8](addresses.md#8-a-second-deployment-with-the-mainnet-capital-controls-12-nov-2026)).
+No service points at it yet.
 
 ## The controls
 
