@@ -86,9 +86,9 @@ const SETTLEMENT = {
  */
 const NOT_PROVEN = [
   {
-    claim: 'No agent purchase has settled through the x402 path.',
+    claim: 'No agent purchase has settled through the x402 path on Arc mainnet.',
     detail:
-      'The facilitator client exists and is tested against a local seller, but it has never run against Circle, so no agent-initiated payment has been broadcast.',
+      'On Arc testnet one has: on 4 Nov 2026 a 0.04 USDC purchase was signed by the Circle treasury wallet and settled by the Circle relayer wallet (transaction 0x63731fac…5264201). Nothing has been bought on mainnet.',
   },
   {
     claim: 'No end-to-end run has been logged.',
