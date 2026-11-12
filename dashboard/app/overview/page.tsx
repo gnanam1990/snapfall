@@ -25,6 +25,7 @@ import TeamActivityFeed from '@/components/TeamActivityFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
 import ActiveJobs from '@/components/ActiveJobs';
+import OwnerSignIn from '@/components/OwnerSignIn';
 
 /**
  * Pending approvals, as the first viewport's one coloured region and its primary action.
@@ -254,7 +255,12 @@ export default function OverviewPage() {
           </div>
         </div>
         {treasuryAndPool}
-        <div className="loading mt">Connecting to the daemon event stream…</div>
+        {status === 'signed-out' ? (
+          // A daemon is connected but this visitor has no owner session: the feed is owner data.
+          <OwnerSignIn className="mt" />
+        ) : (
+          <div className="loading mt">Connecting to the daemon event stream…</div>
+        )}
       </>
     );
   }
@@ -317,11 +323,15 @@ export default function OverviewPage() {
         <span className="page-header-aside">
           {status === 'live' ? (
             <span className="badge-live">{demo ? 'demo replay' : 'live'} · updates in &lt;2s</span>
+          ) : status === 'signed-out' ? (
+            <span className="badge-live badge-reconnecting">signed out</span>
           ) : (
             <span className="badge-live badge-reconnecting">reconnecting…</span>
           )}
         </span>
       </div>
+
+      {status === 'signed-out' ? <OwnerSignIn className="mb" /> : null}
 
       {rateHero}
 

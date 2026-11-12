@@ -30,6 +30,8 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { formatUsdcExact, timeUntil } from '@/lib/format';
+import { isOwnerLocked } from '@/lib/ownerSessionClient';
+import OwnerSignIn from '@/components/OwnerSignIn';
 
 type Approval = {
   requestId: string;
@@ -95,6 +97,8 @@ const FAILURE_TEXT: Record<string, string> = {
   NO_DAEMON: 'No daemon is connected, so the decision was not recorded.',
   UNREACHABLE: 'The owner API did not respond, so the decision was not recorded.',
   UNAUTHENTICATED: 'The owner API rejected this dashboard’s credentials.',
+  OWNER_SIGN_IN_REQUIRED: 'Your owner session has ended, so the decision was not recorded. Sign in and decide again.',
+  OWNER_ACCESS_NOT_CONFIGURED: 'Owner access is not configured on this dashboard, so the decision was not recorded.',
   UPSTREAM: 'The owner API failed to answer.',
   INTERNAL: 'The daemon failed while recording this decision.',
 };
@@ -130,6 +134,8 @@ function ApprovalsInner() {
   const [failures, setFailures] = useState<Record<string, { code: string; message: string }>>({});
   /** Drives the countdown. Held in state so the deadline ticks rather than freezing at load. */
   const [now, setNow] = useState(() => Date.now());
+  /** The approvals route answered "sign in first": the inbox is owner data. */
+  const [locked, setLocked] = useState(false);
 
   const focusRef = useRef<HTMLLIElement | null>(null);
   const focusedOnce = useRef(false);
@@ -138,6 +144,14 @@ function ApprovalsInner() {
     try {
       const res = await fetch('/api/approvals', { cache: 'no-store' });
       const body = await res.json();
+      if (isOwnerLocked(res.status, body)) {
+        setLocked(true);
+        setApprovals([]);
+        setSource(null);
+        setError(null);
+        return;
+      }
+      setLocked(false);
       setApprovals(body.approvals ?? []);
       setSource(typeof body.source === 'string' ? body.source : null);
       setError(errorText(body.error));
@@ -179,6 +193,7 @@ function ApprovalsInner() {
           }),
         });
         const body = await res.json().catch(() => ({}));
+        if (isOwnerLocked(res.status, body)) setLocked(true);
         if (res.ok) {
           // Kept outside the pending list, so the receipt survives the request leaving it.
           setSettled((s) => [
@@ -239,7 +254,9 @@ function ApprovalsInner() {
           </p>
         </div>
         <span className="page-header-aside">
-          {error ? (
+          {locked ? (
+            <span className="status-badge Cancelled">owner sign-in required</span>
+          ) : error ? (
             <span className="status-badge Failed">owner API error</span>
           ) : noDaemon ? (
             <span className="status-badge Cancelled">no daemon</span>
@@ -294,7 +311,9 @@ function ApprovalsInner() {
         </ul>
       ) : null}
 
-      {approvals === null ? (
+      {locked ? (
+        <OwnerSignIn onSignedIn={() => void load()} />
+      ) : approvals === null ? (
         <div className="card">
           <p className="stat-sub">Reading the inbox…</p>
         </div>

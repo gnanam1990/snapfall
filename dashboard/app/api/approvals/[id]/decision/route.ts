@@ -5,9 +5,11 @@
  * APPROVAL_EXPIRED, 409 ALREADY_DECIDED, 404, 400 — not a flattened success. The body
  * (kind, by, reason, intentHash) is forwarded unchanged; the daemon binds the decision
  * to the intentHash the owner was SHOWN.
+ *
+ * The owner guard runs first: a signed-in owner session, then a same-origin JSON request.
  */
 
-import { ownerApiBase, ownerAuthHeaders, forwardJSON } from '@/lib/ownerApi';
+import { ownerAuthHeaders, forwardJSON, requireOwnerRequest } from '@/lib/ownerApi';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -16,20 +18,15 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const base = ownerApiBase();
+  const gate = requireOwnerRequest(req);
+  if (!gate.ok) return gate.response;
   const { id } = await params;
-  if (!base) {
-    return Response.json(
-      { error: { code: 'NO_DAEMON', message: 'owner API not configured (SNAPFALL_OWNER_API_URL unset)' } },
-      { status: 503 },
-    );
-  }
 
   const payload = await req.text();
   try {
-    const upstream = await fetch(`${base}/approvals/${encodeURIComponent(id)}/decision`, {
+    const upstream = await fetch(`${gate.grant.base}/approvals/${encodeURIComponent(id)}/decision`, {
       method: 'POST',
-      headers: ownerAuthHeaders({ 'content-type': 'application/json' }),
+      headers: ownerAuthHeaders(gate.grant, { 'content-type': 'application/json' }),
       body: payload,
       cache: 'no-store',
     });

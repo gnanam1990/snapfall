@@ -11,10 +11,13 @@
  *      marked `daemonConnected: false` and close the response. The Overview renders a
  *      plain "no daemon connected" banner. A public visitor never sees fabricated activity.
  *
- * The real feed carries owner data and MUST enforce owner auth; the demo mode serves scripted
- * fixtures only and binds to the local dev app.
+ * The real feed carries owner data, so mode 1 runs the owner guard (lib/ownerApi
+ * requireOwnerRequest) before the owner token is attached: an unauthenticated visitor gets 401,
+ * which EventSource surfaces as an error and lib/useEventStream turns into a sign-in prompt.
+ * The demo mode serves scripted fixtures only and binds to the local dev app.
  */
 
+import { ownerApiBase, ownerAuthHeaders, requireOwnerRequest } from '@/lib/ownerApi';
 import type { OverviewSnapshot } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -44,17 +47,16 @@ const DISCONNECTED_SNAPSHOT: OverviewSnapshot = {
 };
 
 async function daemonStream(req: Request): Promise<Response | null> {
-  const base = process.env.SNAPFALL_OWNER_API_URL?.replace(/\/$/, '');
-  if (!base) return null;
+  if (!ownerApiBase()) return null;
+  const gate = requireOwnerRequest(req);
+  if (!gate.ok) return gate.response;
 
-  const headers = new Headers({ accept: 'text/event-stream' });
-  const token = process.env.SNAPFALL_OWNER_TOKEN;
-  if (token) headers.set('authorization', `Bearer ${token}`);
+  const headers = ownerAuthHeaders(gate.grant, { accept: 'text/event-stream' });
   const lastEventId = req.headers.get('last-event-id');
   if (lastEventId) headers.set('last-event-id', lastEventId);
 
   try {
-    const upstream = await fetch(`${base}/events/stream`, {
+    const upstream = await fetch(`${gate.grant.base}/events/stream`, {
       headers,
       cache: 'no-store',
       signal: req.signal,

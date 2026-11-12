@@ -195,6 +195,8 @@ const INTENTIONALLY_SILENT: Record<string, string> = {
   'settlement.executed': 'the tx landed, but the payload carries no legs; JobSettled divides the money',
   'purchase.delivered': 'its amount is amount_micros, unread by eventAmount; approval.requested(approved) already counts this purchase',
   'settlement.reverted': 'reverted on chain; the waterfall did not divide anything',
+  'settlement.submitted': 'broadcast, not landed; JobSettled divides the money if it mines',
+  'settlement.dropped': 'never mined (nonce moved past it); nothing settled',
   'task.withheld': 'a QA hold on delivery, not a movement of money',
   'freeze.engaged': 'a control-plane state, not a money beat',
   'freeze.lifted': 'a control-plane state, not a money beat',

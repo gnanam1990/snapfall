@@ -26,6 +26,7 @@
  */
 
 import { contractAddress, deploymentFor } from '@/lib/network';
+import { OwnerSessionPanel } from '@/components/OwnerSignIn';
 
 const deployment = deploymentFor();
 
@@ -60,9 +61,33 @@ const CONFIG = [
     secret: true,
   },
   {
+    name: 'SNAPFALL_DASHBOARD_OWNER_SECRET',
+    enables:
+      'What the owner types to sign in to this dashboard (at least 32 characters, different from the owner token). Required whenever a daemon is configured: without it every owner control refuses rather than acting for an unknown visitor.',
+    secret: true,
+  },
+  {
+    name: 'SNAPFALL_DASHBOARD_HOSTS',
+    enables:
+      'Optional comma-separated Host allowlist for owner and sign-in requests, e.g. the dashboard’s public hostname.',
+    secret: false,
+  },
+  {
+    name: 'SNAPFALL_DASHBOARD_ORIGIN',
+    enables:
+      'The exact public origin(s) owner actions must come from, e.g. https://dash.example.com. Set it behind a reverse proxy that rewrites Host, or every owner action, sign-in included, is refused.',
+    secret: false,
+  },
+  {
+    name: 'SNAPFALL_DASHBOARD_TRUST_PROXY',
+    enables:
+      'Set to 1 only when a proxy you control overwrites X-Forwarded-Host; the request host is then read from it. Unset, the header is ignored, since any client can send it.',
+    secret: false,
+  },
+  {
     name: 'SNAPFALL_TREASURY_ADDRESS',
     enables:
-      'The organisation whose advance rate is read from FloatPool. Unset is why Overview and Float show no advance rate — the eth_call is never issued, rather than issued and failing.',
+      'The organisation whose advance rate is read from FloatPool, and the operator the Audit page expects on the FloatPool operator allowlist. Unset is why Overview and Float show no advance rate — the eth_call is never issued, rather than issued and failing.',
     secret: false,
   },
   {
@@ -173,7 +198,7 @@ export default function SettingsPage() {
           Configuration
         </h2>
         <p className="settings-lede">
-          Presence only. No value is read into this page, because two of these are credentials.
+          Presence only. No value is read into this page, because several of these are credentials.
         </p>
         <ul className="settings-list">
           {rows.map((r) => (
@@ -189,6 +214,18 @@ export default function SettingsPage() {
             </li>
           ))}
         </ul>
+      </section>
+
+      <section className="card mt" aria-labelledby="settings-owner">
+        <h2 className="card-title" id="settings-owner">
+          Owner session
+        </h2>
+        <p className="settings-body">
+          Owner controls act with the daemon’s owner token, which stays on the server. A visitor
+          reaches them only after signing in with the dashboard owner secret; the session lasts
+          12 hours. Rotating the secret signs every browser out.
+        </p>
+        <OwnerSessionPanel />
       </section>
 
       <section className="card mt" aria-labelledby="settings-freeze">

@@ -10,34 +10,30 @@
  * The owner token stays server-side, exactly as the other owner proxies do — the browser never
  * holds it. What comes back is a per-job credential for a DIFFERENT principal (the customer), so
  * it is returned to the owner to hand over deliberately, and never attached to a customer request
- * by this route.
+ * by this route. The owner guard runs first: a signed-in owner session, then a same-origin JSON
+ * request, so neither another visitor nor a cross-site page can rotate a customer's link.
  */
 
-import { ownerApiBase, ownerAuthHeaders, forwardJSON } from '@/lib/ownerApi';
+import { ownerAuthHeaders, forwardJSON, requireOwnerRequest } from '@/lib/ownerApi';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function POST(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ jobId: string }> },
 ): Promise<Response> {
-  const base = ownerApiBase();
+  const gate = requireOwnerRequest(req);
+  if (!gate.ok) return gate.response;
   const { jobId } = await params;
-  if (!base) {
-    return Response.json(
-      { error: { code: 'NO_DAEMON', message: 'owner API not configured (SNAPFALL_OWNER_API_URL unset)' } },
-      { status: 503 },
-    );
-  }
 
   try {
     // The daemon's status and body pass through verbatim: a 503 NOT_WIRED (the MintAccept seam
     // is nil) and a 404 (no such job) are both things the owner needs to see as themselves,
     // not flattened into one failure.
-    const upstream = await fetch(`${base}/jobs/${encodeURIComponent(jobId)}/accept-link`, {
+    const upstream = await fetch(`${gate.grant.base}/jobs/${encodeURIComponent(jobId)}/accept-link`, {
       method: 'POST',
-      headers: ownerAuthHeaders({ 'content-type': 'application/json' }),
+      headers: ownerAuthHeaders(gate.grant, { 'content-type': 'application/json' }),
       cache: 'no-store',
     });
     return forwardJSON(upstream.status, await upstream.text());

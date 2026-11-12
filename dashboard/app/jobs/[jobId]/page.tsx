@@ -21,6 +21,8 @@ import type { ActivityMessage } from '@/lib/activity';
 import { humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdcExact, formatBps, relativeTime } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import { isOwnerLocked } from '@/lib/ownerSessionClient';
+import OwnerSignIn from '@/components/OwnerSignIn';
 import type { JobSnapshot } from '@/lib/jobChain';
 import { belongsToJob, expenseRows } from '@/lib/jobTimeline';
 import SettlementWaterfall from '@/components/SettlementWaterfall';
@@ -113,14 +115,24 @@ function AcceptLink({ jobId }: { jobId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [locked, setLocked] = useState(false);
 
   const mint = useCallback(async () => {
     setBusy(true);
     setError(null);
     setCopied(false);
     try {
-      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/accept-link`, { method: 'POST' });
+      // Same-origin JSON: the owner guard refuses any other shape for a mutation.
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/accept-link`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
       const body = (await res.json()) as { acceptToken?: string; error?: { message?: string } };
+      if (isOwnerLocked(res.status, body)) {
+        setLocked(true);
+        return;
+      }
       if (!res.ok || !body.acceptToken) {
         // Surface the daemon's own reason. A nil MintAccept seam answers 503 NOT_WIRED, which is
         // a different problem from "no such job", and flattening them wastes the operator's time.
@@ -157,6 +169,7 @@ function AcceptLink({ jobId }: { jobId: string }) {
         Shown once, and minting again rotates any link already issued for this job.
       </p>
       {error ? <p className="job-link-error">{error}</p> : null}
+      {locked ? <OwnerSignIn className="mt" onSignedIn={() => setLocked(false)} /> : null}
       {link ? (
         <p className="job-link mono">
           {link}
@@ -286,6 +299,8 @@ export default function JobDetailPage() {
         </div>
         {status === 'live' ? (
           <span className="badge-live">live · chain-read on every event</span>
+        ) : status === 'signed-out' ? (
+          <span className="badge-live badge-reconnecting">chain read · owner signed out</span>
         ) : (
           <span className="badge-live badge-reconnecting">reconnecting…</span>
         )}
