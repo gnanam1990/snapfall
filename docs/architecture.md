@@ -67,7 +67,8 @@ dashed from the seller onward for exactly that reason.
 
 - **The x402 settlement has now run live on Arc testnet**, through the self-facilitator path rather than Gateway. The Circle treasury wallet signed the EIP-3009 authorization, and the Circle relayer wallet broadcast `transferWithAuthorization` (`0x63731fac…5264201`).
 - **Gateway is still unexercised.** The orange edge stays true for Gateway itself.
-- **The single signer can now be a Circle developer-controlled wallet** instead of a raw key, and the customer can self-custody a passkey wallet.
+- **The operator's signer (the Funding agent) can now be a Circle developer-controlled wallet** instead of a raw key.
+- **The Funding agent is no longer the only signer.** With a Circle client key the customer self-custodies a passkey wallet and signs `fund` and `acceptDelivery` on their own device. The "single signer" wording above and in the diagram describes the daemon-custodial demo mode only.
 - **The contracts are also deployed on Arc mainnet** with capital controls, but nothing operates there yet.
 
 Each of these is in [`CIRCLE-INTEGRATIONS.md`](CIRCLE-INTEGRATIONS.md) and [`addresses.md`](addresses.md) §8–9.
