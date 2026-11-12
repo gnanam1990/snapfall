@@ -187,3 +187,13 @@ func TestAwait_RejectsNonzeroRecipientPadding(t *testing.T) {
 		t.Fatal("accepted nonzero recipient padding")
 	}
 }
+
+func TestAwait_RejectsMalformedRecipientHex(t *testing.T) {
+	for _, bad := range []string{recipient.Hex() + "zz", recipient.Hex() + "0", "0x" + strings.Repeat("00", 12) + strings.TrimPrefix(recipient.Hex(), "0x") + "zz"} {
+		body := message("complete", "6", bad)
+		_, err := newIris(t, &fakeIris{responses: []string{body}}).Await(context.Background(), 26, "0xburn", 6, recipient, time.Second)
+		if err == nil {
+			t.Fatalf("accepted malformed recipient %q", bad)
+		}
+	}
+}

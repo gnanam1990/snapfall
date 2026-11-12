@@ -33,6 +33,7 @@ import { formatUsdcExact } from '@/lib/format';
 import {
   burnStorageKey,
   clearMintedBurn,
+  isCurrentBurn,
   markBurnCompleted,
   parseSubmittedBurn,
   resumeSubmitted,
@@ -122,49 +123,70 @@ export function BridgeInPanel({
             recipient: session.address,
           });
           if (att.ready) {
-            const calls: WalletCall[] = [];
-            const alreadyMinted = await session.nonceUsed(env.messageTransmitter, att.nonce);
-            let plan = finishPlan({
-              alreadyMinted,
-              amount: att.amount,
-              feeExecuted: att.feeExecuted,
-              maxFee: att.maxFee,
-              arcBalance: await session.balanceOf(chain.usdc),
-              price: priceAtomic,
-            });
-            if (plan.mint) calls.push(receiveCall(env, att.message, att.attestation));
-            if (plan.pay === 'after-mint') {
-              // Circle reported no fee: mint alone, then decide on what actually landed.
-              setStatus('Receiving your USDC on Arc…');
-              await session.send(calls);
-              calls.length = 0;
-              plan = finishPlan({
-                alreadyMinted: true,
+            if (!navigator.locks) throw new Error('Safe transfer locking is unavailable.');
+            const key = storeKey(vaultJobId);
+            // Serialized with starts and other tabs' finishes: one tab mints and pays per burn.
+            const outcome = await navigator.locks.request(key, async () => {
+              const storage = window.localStorage;
+              // Another tab may have finished this burn while this one waited for Circle.
+              if (!isCurrentBurn(storage, key, p)) return { kind: 'stale' as const };
+              const calls: WalletCall[] = [];
+              const alreadyMinted = await session.nonceUsed(env.messageTransmitter, att.nonce);
+              let plan = finishPlan({
+                alreadyMinted,
                 amount: att.amount,
                 feeExecuted: att.feeExecuted,
                 maxFee: att.maxFee,
                 arcBalance: await session.balanceOf(chain.usdc),
                 price: priceAtomic,
               });
-            }
-            if (plan.pay === 'short') {
-              if (calls.length > 0) await session.send(calls);
-              // Minted but short: nothing is pending, and bringing the difference must stay possible.
-              bestEffort(() => clearMintedBurn(window.localStorage, storeKey(vaultJobId)));
-              setPending(null);
-              setStatus(null);
-              setError('Your USDC arrived on Arc, but it is less than the price, so nothing was paid. Add the difference and pay again.');
+              if (plan.mint) calls.push(receiveCall(env, att.message, att.attestation));
+              if (plan.pay === 'after-mint') {
+                // Circle reported no fee: mint alone, then decide on what actually landed.
+                setStatus('Receiving your USDC on Arc…');
+                await session.send(calls);
+                calls.length = 0;
+                plan = finishPlan({
+                  alreadyMinted: true,
+                  amount: att.amount,
+                  feeExecuted: att.feeExecuted,
+                  maxFee: att.maxFee,
+                  arcBalance: await session.balanceOf(chain.usdc),
+                  price: priceAtomic,
+                });
+              }
+              if (plan.pay === 'short') {
+                if (calls.length > 0) await session.send(calls);
+                // Minted but short: nothing is pending, and bringing the difference must stay possible.
+                return { kind: 'short' as const, cleared: clearMintedBurn(storage, key, p) };
+              }
+              calls.push(
+                ...fundCalls({ usdc: chain.usdc, jobVault: chain.jobVault, jobId: vaultJobId, amountAtomic: priceAtomic.toString() }),
+              );
+              setStatus('Paying into escrow…');
+              const tx = await session.send(calls);
+              bestEffort(() => markBurnCompleted(storage, key, p));
+              return { kind: 'funded' as const, tx };
+            });
+            setStatus(null);
+            if (outcome.kind === 'stale') {
+              setPending(loadPending(vaultJobId, env));
+              setError('This transfer was already finished in another tab or window. Reload this page.');
               return;
             }
-            calls.push(
-              ...fundCalls({ usdc: chain.usdc, jobVault: chain.jobVault, jobId: vaultJobId, amountAtomic: priceAtomic.toString() }),
-            );
-            setStatus('Paying into escrow…');
-            const tx = await session.send(calls);
-            bestEffort(() => markBurnCompleted(window.localStorage, storeKey(vaultJobId)));
+            if (outcome.kind === 'short') {
+              if (outcome.cleared) {
+                setPending(null);
+                setError('Your USDC arrived on Arc, but it is less than the price, so nothing was paid. Add the difference and pay again.');
+              } else {
+                setError(
+                  'Your USDC arrived on Arc, but it is less than the price, so nothing was paid. This browser could not clear the saved transfer, so another one is blocked here; allow site storage and reload.',
+                );
+              }
+              return;
+            }
             setPending(null);
-            setStatus(null);
-            await onFunded(tx);
+            await onFunded(outcome.tx);
             return;
           }
           setStatus(att.reason);
@@ -230,11 +252,13 @@ export function BridgeInPanel({
         setError((e as Error).message);
         setStatus(null);
         setBusy(false);
+        // A burn that failed on chain is cleared; another tab may have moved it on. Show what is saved now.
+        if (env) setPending(loadPending(vaultJobId, env));
       } finally {
         starting.current = false;
       }
     },
-    [src, source, vaultJobId, finish],
+    [env, src, source, vaultJobId, finish],
   );
 
   if (!env || !source) return null;

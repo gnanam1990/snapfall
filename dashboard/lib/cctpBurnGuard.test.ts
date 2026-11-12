@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Hex } from 'viem';
 import {
+  UserOperationFailedError,
   burnStorageKey,
   clearMintedBurn,
+  isCurrentBurn,
   markBurnCompleted,
   parseSubmittedBurn,
   resumeSubmitted,
@@ -163,12 +165,83 @@ test('a leftover signing record (tab closed at the passkey prompt) does not bloc
 
 test('completed and unrecognised records block; a minted-but-short burn is cleared', async () => {
   const s = memory();
-  markBurnCompleted(s, key);
+  const p = await submitBurnOnce(s, key, 6, wallet());
+  markBurnCompleted(s, key, p);
+  assert.deepEqual(JSON.parse(s.getItem(key)!), { status: 'completed' });
   await assert.rejects(submitBurnOnce(s, key, 6, wallet()), /prior transfer/);
   s.setItem(key, JSON.stringify({ status: 'submitting-or-unknown', domain: 6 }));
   await assert.rejects(submitBurnOnce(s, key, 6, wallet()), /prior transfer/);
-  clearMintedBurn(s, key);
+  s.setItem(key, 'null');
+  await assert.rejects(submitBurnOnce(s, key, 6, wallet()), /prior transfer/, 'a stored JSON null is not an absent key');
+  s.removeItem(key);
+  const q = await submitBurnOnce(s, key, 6, wallet());
+  assert.equal(clearMintedBurn(s, key, q), true);
   assert.deepEqual(await submitBurnOnce(s, key, 6, wallet()), { domain: 6, tx });
+});
+
+test('a stale finish neither clears nor completes a record that is no longer its burn', async () => {
+  const s = memory();
+  const p = await submitBurnOnce(s, key, 6, wallet());
+  markBurnCompleted(s, key, p);
+  assert.equal(isCurrentBurn(s, key, p), false);
+  assert.equal(clearMintedBurn(s, key, p), false, 'the completed marker survives a stale short finish');
+  assert.deepEqual(JSON.parse(s.getItem(key)!), { status: 'completed' });
+  const other = { domain: 6, tx: ('0x' + 'c'.repeat(64)) as Hex };
+  s.setItem(key, JSON.stringify(other));
+  markBurnCompleted(s, key, p);
+  assert.deepEqual(JSON.parse(s.getItem(key)!), other, 'another burn is not marked completed by this one');
+});
+
+test('a failed removal after a short mint is reported, not hidden', async () => {
+  const s = memory();
+  const p = await submitBurnOnce(s, key, 6, wallet());
+  const stuck = { ...s, get length() { return s.length; }, removeItem: () => {
+    throw new Error('denied');
+  } };
+  assert.equal(clearMintedBurn(stuck, key, p), false);
+  await assert.rejects(submitBurnOnce(s, key, 6, wallet()), /prior transfer/);
+});
+
+test('a user operation that was included but reverted clears the record: nothing moved', async () => {
+  const s = memory();
+  await assert.rejects(
+    submitBurnOnce(s, key, 6, async (before) => {
+      before(uop);
+      throw new UserOperationFailedError('the call failed');
+    }),
+    /failed on chain and no USDC moved; you can try again/,
+  );
+  assert.equal(s.getItem(key), null);
+
+  await assert.rejects(submitBurnOnce(s, key, 6, wallet({ failAfterBroadcast: true })));
+  const submitted = parseSubmittedBurn(s.getItem(key), [6])!;
+  await assert.rejects(
+    resumeSubmitted(s, key, submitted, async () => {
+      throw new UserOperationFailedError('the call failed');
+    }),
+    /failed on chain and no USDC moved; you can start again/,
+  );
+  assert.equal(s.getItem(key), null);
+  assert.deepEqual(await submitBurnOnce(s, key, 6, wallet()), { domain: 6, tx });
+});
+
+test('resume re-reads the record: another tab may have resolved or finished it', async () => {
+  const s = memory();
+  await assert.rejects(submitBurnOnce(s, key, 6, wallet({ failAfterBroadcast: true })));
+  const submitted = parseSubmittedBurn(s.getItem(key), [6])!;
+  let looked = 0;
+  const confirm = async () => {
+    looked++;
+    return tx;
+  };
+  s.setItem(key, JSON.stringify({ domain: 6, tx }));
+  assert.deepEqual(await resumeSubmitted(s, key, submitted, confirm), { domain: 6, tx });
+  s.setItem(key, JSON.stringify({ status: 'completed' }));
+  await assert.rejects(resumeSubmitted(s, key, submitted, confirm), /already paid/);
+  assert.deepEqual(JSON.parse(s.getItem(key)!), { status: 'completed' }, 'completed is never overwritten');
+  s.setItem(key, JSON.stringify({ status: 'submitted', domain: 6, userOpHash: '0x' + 'd'.repeat(64) }));
+  await assert.rejects(resumeSubmitted(s, key, submitted, confirm), /changed in another tab/);
+  assert.equal(looked, 0);
 });
 
 test('case-variant job URLs share one identity and legacy pending keys block a reburn', async () => {

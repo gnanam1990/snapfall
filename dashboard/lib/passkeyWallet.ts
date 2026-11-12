@@ -20,6 +20,7 @@
 import type { Address, Hex } from 'viem';
 import type { WalletCall } from './customerWallet';
 import { ERC20_BALANCE_ABI, MESSAGE_TRANSMITTER_ABI, type CctpNetwork } from './cctp';
+import { UserOperationFailedError } from './cctpBurnGuard';
 
 /** Circle's documented modular-wallet backend; the same for every app. */
 const DEFAULT_CLIENT_URL = 'https://modular-sdk.circle.com/v1/rpc/w3s/buidl';
@@ -168,7 +169,7 @@ export async function connectPasskey(
     async function confirm(hash: Hex): Promise<Hex> {
       const receipt = await bundler.waitForUserOperationReceipt({ hash });
       if (!receipt.success) {
-        throw new Error(
+        throw new UserOperationFailedError(
           `The transaction was included but the call failed (user operation ${hash}). Nothing changed on chain.`,
         );
       }
