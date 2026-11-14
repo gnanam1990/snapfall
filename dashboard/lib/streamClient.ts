@@ -85,6 +85,8 @@ const CLOSED = 2;
 
 /** Pause before a fresh connection replaces one the browser gave up on. */
 export const STREAM_RETRY_MS = 2000;
+/** How long a session read may take before it counts as unreadable ('unverified'). */
+export const SESSION_READ_TIMEOUT_MS = 5000;
 
 export interface StreamClientOptions {
   url: string;
@@ -130,6 +132,34 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
   /** The last daemon SSE id delivered: the resume point for a handover. */
   let lastEventId: string | null = null;
   let admit = createFrameDedup();
+  /** Whether a connection has passed the owner guard since the last session change. Until one has,
+   *  a drop must not read as 'reconnecting', which shows owner data again. */
+  let verified = false;
+
+  /** The session read, bounded: a read that does not answer counts as unreadable ('unverified'). */
+  const readSessionBounded = (): Promise<OwnerSessionStatus | null> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimer(() => {
+        if (settled) return;
+        settled = true;
+        resolve(null);
+      }, SESSION_READ_TIMEOUT_MS);
+      readSession().then(
+        (session) => {
+          if (settled) return;
+          settled = true;
+          clearTimer(timer);
+          resolve(session);
+        },
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimer(timer);
+          resolve(null);
+        },
+      );
+    });
 
   const closeDraining = () => {
     draining?.close();
@@ -157,7 +187,9 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
     const source = open(mode === 'handover' && lastEventId ? resumeUrl(url, lastEventId) : url);
     es = source;
     source.onopen = () => {
-      if (es === source) onStatus('live');
+      if (es !== source) return;
+      verified = true;
+      onStatus('live');
     };
     source.onmessage = (m) => {
       let msg: StreamMessage;
@@ -188,15 +220,17 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
         return;
       }
       if (es !== source) return; // superseded by a newer connection
-      onStatus('reconnecting');
+      // Only a session this client has seen pass the guard may ride out a drop with its data shown.
+      onStatus(verified ? 'reconnecting' : 'unverified');
       if (source.readyState !== CLOSED) return;
       source.close();
       // A handover the guard refused: the old connection must not go on delivering into a page
       // that is about to show the sign-in prompt.
       closeDraining();
-      void readSession().then((session) => {
+      void readSessionBounded().then((session) => {
         if (disposed || es !== source) return;
         const next = statusAfterClosed(session);
+        if (next !== 'reconnecting') verified = false;
         onStatus(next);
         if (next === 'signed-out') return; // resumed by sessionChanged()
         retry = setTimer(() => {
@@ -214,6 +248,7 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
       clearTimers();
       // Whatever was shown belonged to the session before this change; until a connection passes
       // the guard with the new one, nobody has shown this visitor is the owner.
+      verified = false;
       onStatus('unverified');
       connect('fresh');
     },

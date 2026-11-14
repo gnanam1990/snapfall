@@ -4,6 +4,7 @@ import test from 'node:test';
 import { OWNER_STREAM_HANDOVER_LEAD_MS, OWNER_WINDOW_EVENT, ownerWindowFrame } from './ownerStream';
 import type { OwnerSessionStatus } from './ownerSessionClient';
 import {
+  SESSION_READ_TIMEOUT_MS,
   STREAM_RETRY_MS,
   createFrameDedup,
   createStreamClient,
@@ -68,7 +69,7 @@ function harness(session: OwnerSessionStatus | null = { ownerApi: true, accessCo
   let timers: { fn: () => void; at: number; id: number }[] = [];
   let clock = 0;
   let nextId = 1;
-  const state = { session };
+  const state: { session: OwnerSessionStatus | null; read?: () => Promise<OwnerSessionStatus | null> } = { session };
   const client = createStreamClient({
     url: '/api/events/stream',
     onMessage: (m) => delivered.push(m),
@@ -78,7 +79,7 @@ function harness(session: OwnerSessionStatus | null = { ownerApi: true, accessCo
       sources.push(s);
       return s;
     },
-    readSession: async () => state.session,
+    readSession: () => (state.read ? state.read() : Promise.resolve(state.session)),
     setTimer: (fn, ms) => {
       const id = nextId++;
       timers.push({ fn, at: clock + ms, id });
@@ -296,3 +297,43 @@ test('dispose closes both connections of a handover and cancels its timers', () 
   assert.equal(b.closed, true);
   assert.equal(h.pending(), 0);
 });
+
+test('a sign-out in another tab never shows owner data again while the session read is pending', async () => {
+  const h = harness();
+  const [a] = h.sources;
+  a.open();
+  assert.equal(h.statuses.at(-1), 'live');
+  let answer: (s: OwnerSessionStatus | null) => void = () => {};
+  h.state.read = () => new Promise((r) => (answer = r));
+  h.client.sessionChanged(); // signed out elsewhere
+  const from = h.statuses.length - 1;
+  h.sources[1].fail(); // the guard refuses the fresh connection
+  await h.settle();
+  for (const s of h.statuses.slice(from)) assert.equal(ownerDataHidden(s), true, `status ${s} showed owner data`);
+  answer({ ownerApi: true, accessConfigured: true, signedIn: false });
+  await h.settle();
+  assert.equal(h.statuses.at(-1), 'signed-out');
+  for (const s of h.statuses.slice(from)) assert.equal(ownerDataHidden(s), true, `status ${s} showed owner data`);
+});
+
+test('a session read that never answers counts as unreadable and keeps owner data hidden', async () => {
+  const h = harness();
+  h.sources[0].open();
+  h.state.read = () => new Promise(() => {});
+  h.client.sessionChanged();
+  h.sources[1].fail();
+  await h.settle();
+  h.advance(SESSION_READ_TIMEOUT_MS);
+  await h.settle();
+  assert.equal(h.statuses.at(-1), 'unverified');
+  h.advance(STREAM_RETRY_MS);
+  assert.equal(h.sources.length, 3, 'it retries after the bounded read');
+});
+
+test('a fresh connection that drops before it ever opened is unverified, not reconnecting', () => {
+  const h = harness();
+  h.sources[0].drop(); // dropped before it ever opened
+  assert.notEqual(h.statuses.at(-1), 'reconnecting');
+  assert.equal(ownerDataHidden(h.statuses.at(-1)!), true);
+});
+
