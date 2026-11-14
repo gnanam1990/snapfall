@@ -18,17 +18,29 @@ export type { StreamStatus } from './streamClient';
  * Any session change, in this tab or another (lib/ownerSessionClient relays them), closes the open
  * source and reconnects through the owner guard. After a sign-out anywhere that reconnect is
  * refused, so the stream stops at once instead of running on with the old session.
+ *
+ * `onStatusNow` hears every status as the client reports it, before React renders it: for code
+ * that must act on a status change at once rather than after the next commit (lib/ownerActionGate).
  */
-export function useEventStream(url: string, onMessage: (msg: StreamMessage) => void): StreamStatus {
+export function useEventStream(
+  url: string,
+  onMessage: (msg: StreamMessage) => void,
+  onStatusNow?: (status: StreamStatus) => void,
+): StreamStatus {
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const handler = useRef(onMessage);
   handler.current = onMessage;
+  const statusHandler = useRef(onStatusNow);
+  statusHandler.current = onStatusNow;
 
   useEffect(() => {
     const client = createStreamClient({
       url,
       onMessage: (msg) => handler.current(msg),
-      onStatus: setStatus,
+      onStatus: (next) => {
+        statusHandler.current?.(next);
+        setStatus(next);
+      },
       open: (u) => new EventSource(u),
       readSession: readOwnerSession,
     });

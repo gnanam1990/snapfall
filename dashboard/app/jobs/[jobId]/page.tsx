@@ -13,7 +13,7 @@
  *   - the H2 event stream supplies the live timeline, filtered to this job.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import type { StreamMessage } from '@/lib/types';
@@ -21,7 +21,8 @@ import type { ActivityMessage } from '@/lib/activity';
 import { humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdcExact, formatBps, relativeTime } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
-import { ownerDataHidden } from '@/lib/streamClient';
+import { ownerActionsBlocked, ownerDataHidden } from '@/lib/streamClient';
+import { createOwnerActionGate, type OwnerActionGate } from '@/lib/ownerActionGate';
 import { isOwnerLocked } from '@/lib/ownerSessionClient';
 import OwnerSignIn from '@/components/OwnerSignIn';
 import type { JobSnapshot } from '@/lib/jobChain';
@@ -113,35 +114,51 @@ function ExpenseRows({ timeline, total }: { timeline: ActivityMessage[]; total: 
  *
  * The link is a per-job credential that opens the customer's acceptance route with no owner
  * session, so it is owner data like the timeline: it is forgotten the moment the page stops knowing
- * the visitor is the owner (`ownerHidden`: a sign-out here or in another tab, or a session that
- * could not be verified), not left on screen under the signed-out badge.
+ * the visitor may act as the owner (`blocked`: a sign-out here or in another tab, or a session
+ * change nothing has settled yet), not left on screen under the signed-out badge.
+ *
+ * While the stream is unavailable (`unavailable`: it has not connected for a while, so it cannot
+ * say who the visitor is) minting still works: the mint route's own owner guard decides, and a 401
+ * brings up the sign-in prompt. Stream data stays hidden either way.
  */
-function AcceptLink({ jobId, ownerHidden, signedOut }: { jobId: string; ownerHidden: boolean; signedOut: boolean }) {
+function AcceptLink({
+  jobId,
+  gate,
+  blocked,
+  signedOut,
+  unavailable,
+}: {
+  jobId: string;
+  gate: OwnerActionGate;
+  blocked: boolean;
+  signedOut: boolean;
+  unavailable: boolean;
+}) {
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [locked, setLocked] = useState(false);
 
-  // Each mint takes a generation; hiding owner data moves it on. A mint that answers after the
-  // visitor stopped being known as the owner must neither store the credential nor copy it.
-  const generation = useRef(0);
-  const ownerHiddenNow = useRef(ownerHidden);
-
-  useEffect(() => {
-    ownerHiddenNow.current = ownerHidden;
-    if (!ownerHidden) return;
-    generation.current += 1;
-    setLink(null);
-    setCopied(false);
-  }, [ownerHidden]);
+  // The gate, not this effect, is what stops a mint answering into a changed session: it hears the
+  // stream's status synchronously, before React renders it. This only tidies the state, before
+  // paint. Blocked: drop the link. Unblocked again (a session change settled, or the stream was
+  // declared unavailable, where the prompt is shown anyway): a 401 from before the change no longer
+  // describes this visitor, so the prompt it raised goes away.
+  useLayoutEffect(() => {
+    if (blocked) {
+      setLink(null);
+      setCopied(false);
+    } else {
+      setLocked(false);
+    }
+  }, [blocked]);
 
   const mint = useCallback(async () => {
-    // Minting rotates the job's current link, so it never starts while owner data is hidden: the
-    // new link could not be shown, and the old one would already be dead.
-    if (ownerHiddenNow.current) return;
-    const mine = ++generation.current;
-    const current = () => generation.current === mine && !ownerHiddenNow.current;
+    // Minting rotates the job's current link, so it never starts while owner actions are blocked:
+    // the new link could not be shown, and the old one would already be dead.
+    const current = gate.begin();
+    if (!current) return;
     setBusy(true);
     setError(null);
     setCopied(false);
@@ -152,7 +169,13 @@ function AcceptLink({ jobId, ownerHidden, signedOut }: { jobId: string; ownerHid
         headers: { 'content-type': 'application/json' },
         body: '{}',
       });
-      const body = (await res.json()) as { acceptToken?: string; error?: { message?: string } };
+      // A proxy in front of the dashboard can answer with an HTML error page: that is a failed mint
+      // with a status, not an unreachable API.
+      const body = (await res.json().catch(() => ({}))) as { acceptToken?: string; error?: { message?: string } };
+      // A 401 or an error from a mint that started under an earlier session says nothing about the
+      // visitor now: it must not raise the sign-in prompt, or an error, over a session that has
+      // since settled. Nothing was rotated, so it is dropped.
+      if (!res.ok && !current()) return;
       if (isOwnerLocked(res.status, body)) {
         setLocked(true);
         return;
@@ -164,9 +187,9 @@ function AcceptLink({ jobId, ownerHidden, signedOut }: { jobId: string; ownerHid
         return;
       }
       if (!current()) {
-        // Owner data was hidden while this mint was in flight. The daemon already rotated the
+        // The session changed while this mint was in flight. The daemon already rotated the
         // link, so say so rather than drop the result silently.
-        setError('owner data was hidden before the new link arrived; any earlier link no longer works, so mint again once signed in');
+        setError('the owner session changed before the new link arrived; any earlier link no longer works, so mint again once signed in');
         return;
       }
       const url = `${window.location.origin}/portal/${encodeURIComponent(jobId)}?token=${encodeURIComponent(body.acceptToken)}`;
@@ -186,13 +209,13 @@ function AcceptLink({ jobId, ownerHidden, signedOut }: { jobId: string; ownerHid
     } finally {
       setBusy(false);
     }
-  }, [jobId]);
+  }, [jobId, gate]);
 
   return (
     <div className="card mt">
       <div className="job-expense-head">
         <p className="card-title">Customer link</p>
-        <button type="button" className="activity-action" onClick={() => void mint()} disabled={busy || ownerHidden}>
+        <button type="button" className="activity-action" onClick={() => void mint()} disabled={busy || blocked}>
           {busy ? 'Minting…' : link ? 'Mint a new link' : 'Mint customer link'}
         </button>
       </div>
@@ -200,12 +223,19 @@ function AcceptLink({ jobId, ownerHidden, signedOut }: { jobId: string; ownerHid
         Shown once, and minting again rotates any link already issued for this job.
       </p>
       {error ? <p className="job-link-error">{error}</p> : null}
-      {/* Minting is off while owner data is hidden, so a signed-out owner signs in here rather
-          than through a mint's 401. */}
-      {locked || signedOut ? <OwnerSignIn className="mt" onSignedIn={() => setLocked(false)} /> : null}
+      {unavailable ? (
+        <p className="stat-sub">
+          The live event stream is unavailable, so this page cannot confirm the owner session and
+          keeps the timeline hidden. Minting still works: the mint route checks the session itself.
+        </p>
+      ) : null}
+      {/* Minting is off while signed out, so a signed-out owner signs in here rather than through
+          a mint's 401. While the stream is unavailable nothing else can say whether this visitor
+          is signed in, so the prompt is offered too. */}
+      {locked || signedOut || unavailable ? <OwnerSignIn className="mt" onSignedIn={() => setLocked(false)} /> : null}
       {/* Checked here too, so the render that first reports the change never paints the link
           before the effect above has cleared it. */}
-      {link && !ownerHidden ? (
+      {link && !blocked ? (
         <p className="job-link mono">
           {link}
           {copied ? <span className="job-link-copied">copied</span> : null}
@@ -263,13 +293,18 @@ export default function JobDetailPage() {
     },
     [jobId, load],
   );
-  const status = useEventStream('/api/events/stream', onMessage);
+  // Told every stream status synchronously, so a mint in flight is fenced the moment the session
+  // changes, not after React's next commit.
+  const [gate] = useState(() => createOwnerActionGate());
+  const status = useEventStream('/api/events/stream', onMessage, gate.observe);
   // The timeline is daemon events streamed under the owner session. When the session ends it is
   // dropped, not just hidden, so a later session's feed starts clean. While the session is
   // unverified (it just changed, or could not be checked) it is hidden until the stream is live
   // again. The chain read stays.
   const signedOut = status === 'signed-out';
+  const unavailable = status === 'unavailable';
   const ownerHidden = ownerDataHidden(status);
+  const actionsBlocked = ownerActionsBlocked(status);
   useEffect(() => {
     if (signedOut) setTimeline([]);
   }, [signedOut]);
@@ -348,6 +383,8 @@ export default function JobDetailPage() {
           <span className="badge-live badge-reconnecting">chain read · owner signed out</span>
         ) : status === 'unverified' ? (
           <span className="badge-live badge-reconnecting">chain read · checking owner session…</span>
+        ) : status === 'unavailable' ? (
+          <span className="badge-live badge-reconnecting">chain read · live stream unavailable</span>
         ) : (
           <span className="badge-live badge-reconnecting">reconnecting…</span>
         )}
@@ -528,7 +565,13 @@ export default function JobDetailPage() {
       {/* timeline */}
       <ExpenseRows timeline={ownerTimeline} total={job?.onchainExpensesUsdc ?? null} />
 
-      <AcceptLink jobId={jobId} ownerHidden={ownerHidden} signedOut={signedOut} />
+      <AcceptLink
+        jobId={jobId}
+        gate={gate}
+        blocked={actionsBlocked}
+        signedOut={signedOut}
+        unavailable={unavailable}
+      />
 
       <div className="card mt">
         <p className="card-title">Timeline</p>

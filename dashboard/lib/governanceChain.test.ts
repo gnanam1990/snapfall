@@ -51,6 +51,16 @@ interface OperatorFake {
   signals?: AbortSignal[];
 }
 
+/** Faults in the capital-control reads (pool getters only). */
+interface CapFake {
+  /** A pool getter that fails at once with a non-revert RPC error. */
+  fail?: keyof typeof S;
+  /** Pool getters that never answer and ignore the abort signal. */
+  stall?: Array<keyof typeof S>;
+  /** Abort signals the capital-control reads were given. */
+  signals?: AbortSignal[];
+}
+
 const never = () => new Promise<never>(() => {});
 
 const missing = () => new RPCError('Arc RPC eth_call failed: execution reverted', 200, 3, 'execution reverted');
@@ -58,7 +68,7 @@ const missing = () => new RPCError('Arc RPC eth_call failed: execution reverted'
 function fakeRPC(
   pool: Answers,
   vault: Answers = {},
-  opts: { chainId?: number; missing?: boolean; operators?: OperatorFake; head?: number } = {},
+  opts: { chainId?: number; missing?: boolean; operators?: OperatorFake; head?: number; caps?: CapFake } = {},
 ): RPCTransport {
   const byPool = new Map<string, string>(Object.entries(pool).map(([k, v]) => [S[k as keyof typeof S], v as string]));
   const byVault = new Map<string, string>(Object.entries(vault).map(([k, v]) => [S[k as keyof typeof S], v as string]));
@@ -113,6 +123,14 @@ function fakeRPC(
       if (data.startsWith(OS.allowedOperator)) return w((op.allowed ?? []).some((a) => a.toLowerCase() === who) ? 1 : 0);
       const queued = Object.entries(op.queued ?? {}).find(([a]) => a.toLowerCase() === who);
       return w(queued ? queued[1] : 0n);
+    }
+    const caps = opts.caps;
+    if (caps) {
+      if (options?.signal) caps.signals?.push(options.signal);
+      if (to === POOL && caps.fail && data === S[caps.fail]) {
+        throw new RPCError('Arc RPC eth_call HTTP 503: https://rpc.example/v2/fake-key', 503, undefined, 'unavailable');
+      }
+      if (to === POOL && (caps.stall ?? []).some((k) => data === S[k])) return never();
     }
     const answer = (to === POOL ? byPool : byVault).get(data);
     if (answer === undefined) throw new Error(`unexpected read ${to} ${data}`);
@@ -633,4 +651,49 @@ test('a stalled OPERATOR_GRANT_DELAY read leaves the allowlist unavailable after
     g.operatorAllowlist.status === 'unavailable' ? g.operatorAllowlist.reason : '',
     /did not answer the OPERATOR_GRANT_DELAY\(\) read within 40 ms/,
   );
+});
+
+test('a capital-control read that fails stops its sibling reads instead of leaving them running', async () => {
+  // maxAdvance fails at once while totalOutstanding, in the same group, never answers. The load is
+  // a 503 either way; what matters is that the stalled sibling is told to stop rather than left
+  // running with no deadline after the error went out.
+  reset();
+  const signals: AbortSignal[] = [];
+  await assert.rejects(
+    loadGovernance(
+      { ...config, capReadBudgetMs: 60_000 },
+      fakeRPC(basePool, baseVault, { caps: { fail: 'maxAdvance', stall: ['totalOutstanding'], signals } }),
+    ),
+    (error: unknown) => error instanceof RPCError && error.httpStatus === 503,
+    'the first failure is the error, not the abort it caused',
+  );
+  assert.ok(signals.length >= 5, `every capital-control read carried a signal (${signals.length})`);
+  assert.ok(
+    signals.every((s) => s.aborted),
+    'a capital-control read still in flight after a sibling failed was not aborted',
+  );
+});
+
+test('a stalled capital-control read ends the load at its deadline, not when the browser gives up', { timeout: 5_000 }, async () => {
+  reset();
+  const signals: AbortSignal[] = [];
+  const started = Date.now();
+  await assert.rejects(
+    loadGovernance(
+      { ...config, capReadBudgetMs: 40 },
+      fakeRPC(basePool, baseVault, { caps: { stall: ['pendingMaxAdvance'], signals } }),
+    ),
+    /did not answer the capital-control reads within 40 ms/,
+  );
+  assert.ok(Date.now() - started < 1_000, 'the deadline, not the stalled read, ended the load');
+  assert.ok(signals.length > 0 && signals.every((s) => s.aborted), 'every capital-control read was told to stop');
+});
+
+test('a completed load leaves no capital-control read running', async () => {
+  reset();
+  const signals: AbortSignal[] = [];
+  const g = await loadGovernance(config, fakeRPC(basePool, baseVault, { caps: { signals } }));
+  assert.equal(g.status, 'ok');
+  assert.ok(signals.length >= 15, `every capital-control read carried a signal (${signals.length})`);
+  assert.ok(signals.every((s) => s.aborted), 'nothing is left in flight once the load returns');
 });

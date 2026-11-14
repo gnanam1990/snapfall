@@ -399,7 +399,13 @@ export default function FloatPage() {
         <span className="page-header-aside">
           <span className="float-live-meta">
             <span className={`badge-live${streamStatus !== 'live' ? ' badge-reconnecting' : ''}`}>
-              {networkLabel()} · {streamStatus === 'live' ? 'live' : streamStatus === 'signed-out' ? 'chain polling · owner signed out' : 'chain polling'}
+              {networkLabel()} · {streamStatus === 'live'
+                ? 'live'
+                : streamStatus === 'signed-out'
+                  ? 'chain polling · owner signed out'
+                  : streamStatus === 'unavailable'
+                    ? 'chain polling · live stream unavailable'
+                    : 'chain polling'}
             </span>
             <small>block {snapshot.blockNumber.toLocaleString('en-US')}</small>
           </span>

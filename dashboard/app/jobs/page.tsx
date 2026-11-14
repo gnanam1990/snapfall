@@ -33,6 +33,7 @@ import type { JobSummary, OpenAdvance, StreamMessage } from '@/lib/types';
 import { formatUsdcExact } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
 import OwnerSignIn from '@/components/OwnerSignIn';
+import StreamUnavailable from '@/components/StreamUnavailable';
 import { networkLabel } from '@/lib/network';
 import Badge from '@/components/Badge';
 
@@ -99,6 +100,8 @@ export default function JobsPage() {
             <span className="status-badge AwaitingFunding">demo replay</span>
           ) : status === 'signed-out' ? (
             <span className="status-badge Cancelled">owner sign-in required</span>
+          ) : status === 'unavailable' ? (
+            <span className="status-badge Cancelled">live stream unavailable</span>
           ) : status === 'unverified' ? (
             <span className="status-badge AwaitingFunding">checking owner session…</span>
           ) : status === 'live' ? (
@@ -125,6 +128,10 @@ export default function JobsPage() {
       ) : status === 'signed-out' ? (
         // The list is daemon data streamed with the owner token; it needs an owner session.
         <OwnerSignIn />
+      ) : status === 'unavailable' ? (
+        // The stream has not connected for a while: the list stays hidden, as while unverified,
+        // but the page stops waiting and offers the sign-in prompt.
+        <StreamUnavailable what="the job list" />
       ) : status === 'unverified' ? (
         // The session just changed, or could not be checked: the list stays hidden until the
         // stream is live again, so it is never shown to a visitor who is no longer the owner.

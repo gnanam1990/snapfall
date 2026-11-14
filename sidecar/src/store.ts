@@ -15,8 +15,35 @@
  *     A genuinely absent file still starts empty — that is a fresh start, not corruption.
  */
 
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { dirname } from 'node:path';
+
+/**
+ * The file operations the store uses, so a test can see that a write is made durable (and in
+ * which order) without pulling the power. Defaults to node:fs.
+ */
+export interface StoreFs {
+  existsSync(path: string): boolean;
+  readFileSync(path: string, encoding: 'utf8'): string;
+  /** Returns the first directory it created, or undefined when every one already existed. */
+  mkdirSync(path: string, options: { recursive: true }): string | undefined;
+  openSync(path: string, flags: string): number;
+  writeSync(fd: number, buffer: Buffer, offset: number, length: number): number;
+  fsyncSync(fd: number): void;
+  closeSync(fd: number): void;
+  renameSync(from: string, to: string): void;
+}
+
+const nodeFs: StoreFs = {
+  existsSync: (p) => fs.existsSync(p),
+  readFileSync: (p, e) => fs.readFileSync(p, e),
+  mkdirSync: (p, o) => fs.mkdirSync(p, o),
+  openSync: (p, f) => fs.openSync(p, f),
+  writeSync: (fd, b, o, l) => fs.writeSync(fd, b, o, l),
+  fsyncSync: (fd) => fs.fsyncSync(fd),
+  closeSync: (fd) => fs.closeSync(fd),
+  renameSync: (a, b) => fs.renameSync(a, b),
+};
 
 export type PaymentState = 'SIGNED' | 'SUBMITTED' | 'DELIVERED' | 'RECONCILING' | 'SETTLED' | 'FAILED' | 'EXPIRED';
 
@@ -65,8 +92,14 @@ export class PaymentStore {
   /** True from the start of a write until one completes: memory holds something the file may not
    *  (a tombstone among it), so the next tombstone() call must write again before it returns. */
   private unflushed = false;
+  /** The top directory a persist() created whose new entries are not yet known to be on disk. Kept
+   *  across a failed write, since the retry's mkdir finds the directories already there. */
+  private createdUnsynced: string | null = null;
 
-  constructor(private readonly path: string) {
+  constructor(
+    private readonly path: string,
+    private readonly io: StoreFs = nodeFs,
+  ) {
     this.load();
   }
 
@@ -74,10 +107,10 @@ export class PaymentStore {
     // A missing file is a fresh start. An existing file that will not parse is
     // CORRUPTION, and starting empty would silently drop the records the double-pay
     // guard depends on — so fail closed and make the operator look.
-    if (!existsSync(this.path)) return;
+    if (!this.io.existsSync(this.path)) return;
     let raw: string;
     try {
-      raw = readFileSync(this.path, 'utf8');
+      raw = this.io.readFileSync(this.path, 'utf8');
     } catch (e) {
       throw new Error(`H3 store ${this.path} exists but could not be read: ${(e as Error).message}`);
     }
@@ -111,14 +144,57 @@ export class PaymentStore {
 
   private persist(): void {
     this.unflushed = true;
-    mkdirSync(dirname(this.path), { recursive: true });
+    const dir = dirname(this.path);
+    const created = this.io.mkdirSync(dir, { recursive: true }) ?? this.createdUnsynced;
+    this.createdUnsynced = created;
     // Atomic write: a crash mid-write leaves the OLD file intact, never a torn one.
     // rename() is atomic on the same filesystem, so a reader (or a restart) always sees
     // a complete document — the same posture as the Go daemon's memory files.
+    //
+    // Atomic is not durable. Without fsync the rename can reach the disk before the temp file's
+    // data (a power loss then leaves an empty or torn file under the real name), or not reach it
+    // at all (the old file comes back). A tombstone is a promise made to the daemon the moment the
+    // 404 goes out, so this returns only once both the data and the rename are on disk: the temp
+    // file is synced before the rename, and its directory after it.
     const tmp = `${this.path}.tmp`;
-    writeFileSync(tmp, JSON.stringify([...this.byNonce.values(), ...this.tombstones.values()], null, 2));
-    renameSync(tmp, this.path);
+    const data = Buffer.from(JSON.stringify([...this.byNonce.values(), ...this.tombstones.values()], null, 2));
+    const fd = this.io.openSync(tmp, 'w');
+    try {
+      // writeSync may write less than asked; loop until the whole document is out.
+      for (let off = 0; off < data.length; ) off += this.io.writeSync(fd, data, off, data.length - off);
+      this.io.fsyncSync(fd);
+    } finally {
+      this.io.closeSync(fd);
+    }
+    this.io.renameSync(tmp, this.path);
+    this.syncDir(dir);
+    // A directory this write had to create is itself a new entry in its parent: sync each parent up
+    // to the one that already existed, or a power loss can drop the whole directory, file and all.
+    if (created !== null) {
+      for (let d = dir; ; d = dirname(d)) {
+        const parent = dirname(d);
+        if (parent === d) break;
+        this.syncDir(parent);
+        if (d === created) break;
+      }
+      this.createdUnsynced = null;
+    }
     this.unflushed = false;
+  }
+
+  /** fsync a directory, so a rename in it survives a power loss. Windows cannot open a directory
+   *  for syncing (and NTFS journals the rename itself), so it is skipped there; anywhere else a
+   *  failure throws, and the caller treats the write as not done. On macOS fsync reaches the drive
+   *  but not past its write cache (that takes F_FULLFSYNC, which node:fs does not expose), so a
+   *  power loss there can still lose the last writes; Linux is the durable deployment target. */
+  private syncDir(dir: string): void {
+    if (process.platform === 'win32') return;
+    const fd = this.io.openSync(dir, 'r');
+    try {
+      this.io.fsyncSync(fd);
+    } finally {
+      this.io.closeSync(fd);
+    }
   }
 
   getByNonce(nonce: string): PaymentRecord | undefined {
