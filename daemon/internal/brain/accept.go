@@ -759,6 +759,17 @@ func (b *Brain) resolveBroadcasts(ctx context.Context, jobID, vaultJobID string,
 				if state, done, oerr := b.observeSettlement(ctx, jobID, vaultJobID, rec.ours, false); oerr != nil || done {
 					return state, true, oerr
 				}
+				// A wired lane that refuses for good (the record names no signer and has no
+				// bytes, or its bytes are not its transaction) will answer the same on every
+				// pass, and nothing can replace it either: record it stuck, once, so the owner
+				// is told. A lane that is simply not wired stays pending without a record.
+				if reason := stuckReasonOf(err); reason != "" && !bc.stuck {
+					if serr := b.recordStuck(ctx, jobID, bc, res.Head, rec.chainLen[bc.root]-1, reason, "unresolvable",
+						"the recorded acceptDelivery cannot be resolved by the daemon's lane: "+err.Error()); serr != nil {
+						return "", true, serr
+					}
+					return "accepted-pending-chain", true, nil
+				}
 				b.log.Warn("a recorded acceptDelivery cannot be resolved by the wired lane; nothing is resubmitted",
 					"job", jobID, "tx", bc.TxHash, "err", err)
 				return "accepted-pending-chain", true, nil

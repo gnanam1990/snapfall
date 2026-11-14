@@ -324,6 +324,9 @@ or missing credential), `404 UNKNOWN_JOB`, `409 NOT_READY`, `423 FROZEN`, `503 N
   cannot sign at that account's nonce), `fee_cap` (the previous price plus a quarter is
   over 3× the fresh price), `record_mismatch` (its `raw_tx` is not the recorded
   transaction), `signer_unknown` (the record names no signer and has no `raw_tx`).
+  `signer_unknown` and `record_mismatch` are also recorded when the lane cannot resolve such
+  a transaction at all (no receipt, unknown to the node, and no signer to compare a nonce
+  against): nothing is sent, and the job stays `pending` until the owner acts.
 - **Manual recovery** applies to a `settlement.stuck` job, or to a record the lane cannot
   sign for (another key signed it). The operator sends any transaction from that record's
   signer at its nonce, for example a zero-value self-transfer at a fee the chain takes. The

@@ -957,6 +957,65 @@ func TestAcceptBroadcast_PermanentReplaceRefusalIsRecordedStuckOnce(t *testing.T
 	}
 }
 
+// A recorded broadcast the wired lane can never resolve (no signer and no bytes, so with no
+// receipt and unknown to the node it has no nonce to compare; or bytes that are not its
+// transaction) is recorded settlement.stuck once, at ERROR, and nothing is sent: not a
+// resubmission, a re-send or a replacement. A lane that merely cannot answer (none wired)
+// stays pending with no stuck record.
+func TestAcceptBroadcast_UnresolvableBroadcastIsRecordedStuckOnce(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"signer_unknown", fmt.Errorf("%w: resolve 0x01: %w", funding.ErrSettlementUnresolvable, funding.ErrSignerUnknown), "signer_unknown"},
+		{"record_mismatch", fmt.Errorf("%w: %w: swapped bytes", funding.ErrSettlementUnresolvable, funding.ErrBroadcastMismatch), "record_mismatch"},
+		{"no lane answers", funding.ErrSettlementUnresolvable, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, lane, jobID := trackedRig(t, receiptTimeout)
+			logs := &syncBuffer{}
+			b.log = slog.New(slog.NewTextHandler(logs, nil))
+			b.replaceAfterBlocks = 1
+			if _, err := b.AcceptDelivery(ctx, jobID); err != nil {
+				t.Fatal(err)
+			}
+			lane.mu.Lock()
+			lane.resolveErr = tc.err
+			lane.mu.Unlock()
+			for i := 0; i < 3; i++ {
+				if _, err := b.ResolveOpenSettlements(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if s, err := b.AcceptDelivery(ctx, jobID); err != nil || s != "accepted-pending-chain" {
+					t.Fatalf("accept over an unresolvable broadcast: state=%q err=%v", s, err)
+				}
+			}
+			stuck := stuckPayloads(t, b, jobID)
+			if tc.reason == "" {
+				if len(stuck) != 0 {
+					t.Fatalf("settlement.stuck %v with no lane able to answer, want none", stuck)
+				}
+			} else {
+				if len(stuck) != 1 || stuck[0]["reason"] != tc.reason || stuck[0]["tx_hash"] != txHashN(1) || stuck[0]["nonce"] != float64(0) {
+					t.Fatalf("settlement.stuck %v, want exactly one for tx1 with reason %q", stuck, tc.reason)
+				}
+				if out := logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "reason="+tc.reason) {
+					t.Fatalf("no ERROR log naming the reason: %s", out)
+				}
+			}
+			lane.mu.Lock()
+			subs, calls, resent := lane.submits, lane.replaceCalls, len(lane.rebroadcasts)
+			lane.mu.Unlock()
+			if subs != 1 || calls != 0 || resent != 0 {
+				t.Fatalf("submissions=%d replace calls=%d rebroadcasts=%d, want 1/0/0: nothing is sent", subs, calls, resent)
+			}
+			wantStatus(t, b, jobID, SettlementPending)
+		})
+	}
+}
+
 // An evicted transaction the node keeps evicting is re-sent at most maxRebroadcasts times
 // (each re-send starts its observations over, so without a bound it would stay open
 // forever); past that it falls through to fee replacement at its nonce.
