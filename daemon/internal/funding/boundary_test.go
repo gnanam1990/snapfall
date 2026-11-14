@@ -90,6 +90,25 @@ func TestFunding_SoleEntryPointDemandsAGrant(t *testing.T) {
 		// contract refuses unless msg.sender is the job's customer and the job is
 		// Delivered, a misdirected call reverts; it cannot misappropriate).
 		"SettleOnChain": true,
+		// ResolveSettlement takes NO Grant, classified: it is a READ. It asks the settle
+		// lane what became of a transaction that lane already broadcast (receipt and mined
+		// nonce), and signs and sends nothing.
+		"ResolveSettlement": true,
+		// RebroadcastSettlement takes NO Grant, classified: it signs NOTHING. It re-sends
+		// the exact signed bytes the settle lane already broadcast for an authorized
+		// Accept (verified against the recorded hash, nonce and signer before sending),
+		// so it can only put the same transaction back in the mempool: same nonce, same
+		// hash, no new authorization, and it cannot settle twice.
+		"RebroadcastSettlement": true,
+		// ReplaceSettlement takes NO Grant, classified: like SettleOnChain it takes only a
+		// vault job id and derives the acceptDelivery calldata itself, and it re-signs that
+		// SAME call at the nonce of a transaction the settle lane already broadcast for an
+		// authorized Accept (a fee bump of a stalled one). At most one transaction per nonce
+		// can mine, so it cannot settle twice, and the contract's SC-JV-005 checks still
+		// bind it. Brain calls it only for a recorded, unresolved broadcast.
+		"ReplaceSettlement": true,
+		// SettleLaneWired is a READ: whether a settle lane is installed. Moves nothing.
+		"SettleLaneWired": true,
 		// The H3 payment lane (classified at the V6 review):
 		// ExecutePayment DEMANDS the Grant like Execute and derives the wire intent, the
 		// approvalToken and the paymentId FROM the grant: no caller-supplied payee,

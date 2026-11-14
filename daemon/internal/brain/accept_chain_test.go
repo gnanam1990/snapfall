@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -317,26 +318,72 @@ func TestAcceptChain_CustomerWalletSettlementIsObservedNotResubmitted(t *testing
 	}
 }
 
-// Not settled on chain, or an unreadable chain: the Accept takes the customer lane exactly
-// as before this check existed.
-func TestAcceptChain_UnsettledOrUnreadableChainUsesTheLane(t *testing.T) {
-	for _, oracle := range []func(context.Context, string) (bool, error){
-		func(context.Context, string) (bool, error) { return false, nil },
-		func(context.Context, string) (bool, error) { return false, errors.New("rpc down") },
-	} {
-		b, st, jobID := acceptRig(t)
-		if err := b.memory.Update(jobID, func(jm *JobMemory) { jm.VaultJobID = "0x" + repeat64("e") }); err != nil {
-			t.Fatal(err)
+// Not settled on chain: the Accept takes the customer lane exactly as before this check
+// existed.
+func TestAcceptChain_UnsettledChainUsesTheLane(t *testing.T) {
+	b, st, jobID := acceptRig(t)
+	if err := b.memory.Update(jobID, func(jm *JobMemory) { jm.VaultJobID = "0x" + repeat64("e") }); err != nil {
+		t.Fatal(err)
+	}
+	b.funding.SetChain(nil, fakeSettleLane{out: funding.ChainOutcome{Submitted: true, TxHash: "0xlane"}})
+	b.SetSettlementOracle(func(context.Context, string) (bool, error) { return false, nil })
+	if state, err := b.AcceptDelivery(context.Background(), jobID); err != nil || state != "accepted-settled" {
+		t.Fatalf("state=%q err=%v", state, err)
+	}
+	var actor string
+	if err := st.DB().QueryRow(`SELECT actor FROM events WHERE kind='settlement.executed' AND entity_id=?`,
+		jobID).Scan(&actor); err != nil || actor != "funding" {
+		t.Fatalf("actor=%q err=%v, want the funding lane's record", actor, err)
+	}
+}
+
+// countingLane settles and counts its submissions.
+type countingLane struct{ n *atomic.Int32 }
+
+func (c countingLane) Submit(context.Context, []byte) (funding.ChainOutcome, error) {
+	c.n.Add(1)
+	return funding.ChainOutcome{Submitted: true, TxHash: "0xlane"}, nil
+}
+
+// An unreadable chain FAILS CLOSED on the first Accept as on a retry: the chain may already
+// show the job settled, so nothing is submitted blind. The claim stands, the customer's
+// status says retry once the chain reads again, and that Accept settles.
+func TestAcceptChain_UnreadableChainFailsClosedThenRetries(t *testing.T) {
+	b, st, jobID := acceptRig(t)
+	if err := b.memory.Update(jobID, func(jm *JobMemory) { jm.VaultJobID = "0x" + repeat64("e") }); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	b.funding.SetChain(nil, countingLane{&calls})
+	var down atomic.Bool
+	down.Store(true)
+	b.SetSettlementOracle(func(context.Context, string) (bool, error) {
+		if down.Load() {
+			return false, errors.New("rpc down")
 		}
-		b.funding.SetChain(nil, fakeSettleLane{out: funding.ChainOutcome{Submitted: true, TxHash: "0xlane"}})
-		b.SetSettlementOracle(oracle)
-		if state, err := b.AcceptDelivery(context.Background(), jobID); err != nil || state != "accepted-settled" {
-			t.Fatalf("state=%q err=%v", state, err)
-		}
-		var actor string
-		if err := st.DB().QueryRow(`SELECT actor FROM events WHERE kind='settlement.executed' AND entity_id=?`,
-			jobID).Scan(&actor); err != nil || actor != "funding" {
-			t.Fatalf("actor=%q err=%v, want the funding lane's record", actor, err)
-		}
+		return false, nil
+	})
+	ctx := context.Background()
+	if state, err := b.AcceptDelivery(ctx, jobID); err == nil {
+		t.Fatalf("accept over an unreadable chain returned %q with no error", state)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("lane submissions = %d, want 0: nothing is submitted blind", calls.Load())
+	}
+	if js, _ := b.Job(jobID); js.Stage != StageAccepted {
+		t.Fatalf("stage %s, want the claim to stand", js.Stage)
+	}
+	if _, err := b.SettlementStatus(ctx, jobID); err == nil {
+		t.Fatal("status over an unreadable chain returned no error")
+	}
+	down.Store(false)
+	if s, err := b.SettlementStatus(ctx, jobID); err != nil || s != SettlementRetry {
+		t.Fatalf("status = %q err=%v, want retry", s, err)
+	}
+	if state, err := b.AcceptDelivery(ctx, jobID); err != nil || state != "accepted-settled" {
+		t.Fatalf("retry: state=%q err=%v", state, err)
+	}
+	if calls.Load() != 1 || countEvents(t, st, "settlement.executed", jobID) != 1 {
+		t.Fatalf("lane calls=%d, want 1 and one settlement.executed", calls.Load())
 	}
 }

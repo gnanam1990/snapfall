@@ -13,8 +13,13 @@ Contradictions and gaps found while implementing against PRD v4.1 FINAL (Jul 202
 >   reading is unruled. Adjacent to the unwired-`recordExpense` work (V6-F1 / issue #49) —
 >   whoever wires that call chooses what a recorded expense does to the money, so record the
 >   ruling before writing it.
-> - **SPEC-03** — implemented (admin/operator may create; customer-only funding bounds the
->   blast radius); no formal ruling recorded.
+> - **SPEC-03** — implemented (admin/operator may create); no formal ruling recorded. The
+>   original "blast radius is job-ID squatting" claim was **wrong**: a self-named operator could
+>   borrow from FloatPool. ⏳ **Fixed in source, OPEN on chain:** the FloatPool operator
+>   allowlist (Nov 2026, see SPEC-03) closes it for pools deployed from current source, but
+>   every live pool predates it and still lends to self-named operators up to its caps. It
+>   stays open until each live set is paused and replaced (`docs/MAINNET.md`, "Live pools
+>   deployed before the operator allowlist").
 > - **SPEC-04** — ✅ RESOLVED 19 Jul: one-shot `wireFloatPool` / `wireJobVault`.
 > - **SPEC-05** — ⏳ OPEN: the flat manifest files on disk are authoritative today.
 > - **SPEC-06** — ✅ RESOLVED in practice by V12: the demo pool depth is computed from the
@@ -27,7 +32,7 @@ Contradictions and gaps found while implementing against PRD v4.1 FINAL (Jul 202
 | --- | --- | --- | --- |
 | [SPEC-01](#spec-01) | **Blocker** | FloatPool advance sizing | ✅ **RESOLVED 19 Jul** — budget term removed; `advance = rate × customerPayment` |
 | [SPEC-02](#spec-02) | Medium | JobVault.recordExpense semantics | Implemented conservatively, needs ruling |
-| [SPEC-03](#spec-03) | Low | createJob authorization | Implemented, needs ruling |
+| [SPEC-03](#spec-03) | ~~Low~~ **High** (security audit, Nov 2026) | createJob authorization | ⏳ Fixed in source by the FloatPool operator allowlist; **open on every live pool** until it is replaced; createJob itself still needs a ruling |
 | [SPEC-04](#spec-04) | Medium — **ABI-AFFECTING** | JobVault↔FloatPool wiring | ✅ **RESOLVED 19 Jul** — one-shot `wireFloatPool` / `wireJobVault` |
 | [SPEC-05](#spec-05) | Low | Manifest schema: PRD §8.2 vs. the files on disk | Implemented against the files |
 | [SPEC-06](#spec-06) | Blocker (orig.) | Demo pool seed breaks the exposure cap | ✅ **RESOLVED (V12)** — pool depth computed, not hardcoded |
@@ -133,6 +138,34 @@ the PRD does not give. Locked in by `test_recordExpense_movesNoEscrow`; flag if 
 
 ## SPEC-03
 
+> ### ⚠️ CORRECTED — Nov 2026 (security audit)
+> **The blast-radius claim below was wrong, and the gap was HIGH severity.** `createJob` lets
+> any address name *itself* as operator, and nothing stops it naming itself (or an address it
+> controls) as customer too. `FloatPool.requestAdvance` authorised the borrower only as "the
+> operator the vault recorded", so an outsider could create → fund → `requestAdvance` →
+> `refund`: the escrow came back in full, the advance stayed with the outsider, and `writeOff`
+> charged it to the reserve and then the LPs. A fresh address per cycle dodged the 10%-per-org
+> cap and the write-off penalty, so the loop ran until `maxTotalExposure` was spent, which also
+> locked the real operator out of advances.
+>
+> **Fix:** borrowing is an explicit admin grant held by FloatPool (`allowedOperator`,
+> `setOperatorAllowed`), checked in `requestAdvance` right after the treasury check and failing
+> closed with `OperatorNotAllowed()`. On a configured pool a grant waits `OPERATOR_GRANT_DELAY`
+> (2 days, the same as a cap raise); revocation is immediate. `Deploy.s.sol` grants
+> `SNAPFALL_OPERATOR` before the first `setCaps`, when a grant still applies at once. Pinned in
+> `test/OperatorAllowlist.t.sol`, including the outsider loop.
+>
+> **`createJob` itself is deliberately left as it was.** The pool is the only contract that
+> hands LP money to an operator, so the check belongs there and holds whoever created the job.
+> A job whose operator is not allowed is just customer-funded escrow between two parties who
+> chose each other: it can settle or refund, but it cannot borrow. What a hostile creator can
+> still do is register a job ID first, so the legitimate `createJob` reverts `JobExists`. That
+> is a liveness nuisance, not a loss of funds, and creating under a fresh id clears it.
+> Gating `createJob` too would need JobVault to read the pool's list (new cross-contract
+> coupling) or keep a second list with its own governance, for no extra protection of funds.
+>
+> A *vetted* operator can still self-deal: see HARD-QUESTIONS.md §2.
+
 ### Who may call `createJob`?
 
 Unspecified. SC-JV-001 covers *funding* (customer only) but nothing says who registers the job.
@@ -140,6 +173,8 @@ Unspecified. SC-JV-001 covers *funding* (customer only) but nothing says who reg
 **Implemented:** `admin` (demo seeding) or the designated `operator` (self-service, multi-org
 ready). The customer is designated at creation and is the only address that can fund, so a
 hostile creator cannot redirect anyone's money — the blast radius is job-ID squatting.
+
+*(Superseded: this missed the FloatPool borrowing path. See the correction above.)*
 
 ---
 

@@ -32,6 +32,7 @@ import Link from 'next/link';
 import type { JobSummary, OpenAdvance, StreamMessage } from '@/lib/types';
 import { formatUsdcExact } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import OwnerSignIn from '@/components/OwnerSignIn';
 import { networkLabel } from '@/lib/network';
 import Badge from '@/components/Badge';
 
@@ -96,6 +97,10 @@ export default function JobsPage() {
             <span className="status-badge Cancelled">no daemon</span>
           ) : demo ? (
             <span className="status-badge AwaitingFunding">demo replay</span>
+          ) : status === 'signed-out' ? (
+            <span className="status-badge Cancelled">owner sign-in required</span>
+          ) : status === 'unverified' ? (
+            <span className="status-badge AwaitingFunding">checking owner session…</span>
           ) : status === 'live' ? (
             // Not "updates in <2s": nothing re-sends this list after the opening snapshot.
             <span className="status-badge Funded">connected · list as at connect</span>
@@ -116,6 +121,15 @@ export default function JobsPage() {
             </Link>{' '}
             are read straight from {networkLabel()} and do not need a daemon.
           </p>
+        </div>
+      ) : status === 'signed-out' ? (
+        // The list is daemon data streamed with the owner token; it needs an owner session.
+        <OwnerSignIn />
+      ) : status === 'unverified' ? (
+        // The session just changed, or could not be checked: the list stays hidden until the
+        // stream is live again, so it is never shown to a visitor who is no longer the owner.
+        <div className="card">
+          <p className="stat-sub">Checking the owner session before showing the job list…</p>
         </div>
       ) : jobs === null ? (
         <div className="card">

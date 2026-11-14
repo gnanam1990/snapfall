@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatBps, formatUsdcExact, isSafeExplorerUrl, relativeTime } from '@/lib/format';
 import { rateProvenance, mayClaimOnChain } from '@/lib/rateProvenance';
 import { useEventStream } from '@/lib/useEventStream';
+import { ownerDataHidden } from '@/lib/streamClient';
 import { networkLabel } from '@/lib/network';
 import Badge from '@/components/Badge';
 import type {
@@ -366,6 +367,21 @@ export default function FloatPage() {
     [refresh],
   );
   const streamStatus = useEventStream('/api/events/stream', onStreamMessage);
+  // The pool stats and open advances above are daemon data streamed under the owner session.
+  // Losing the session drops them, as the overview and job detail do, so the signed-out view
+  // cannot show them and the next session starts clean. The chain read (snapshot) is public
+  // and stays.
+  const signedOut = streamStatus === 'signed-out';
+  useEffect(() => {
+    if (!signedOut) return;
+    setH2Pool(null);
+    setH2Advances(null);
+  }, [signedOut]);
+  // Hidden, not dropped, while the session is unverified (it just changed, or could not be
+  // checked): shown again once the stream is live.
+  const ownerHidden = ownerDataHidden(streamStatus);
+  const ownerPool = ownerHidden ? null : h2Pool;
+  const ownerAdvances = ownerHidden ? null : h2Advances;
 
   useEffect(() => {
     void refresh();
@@ -383,7 +399,7 @@ export default function FloatPage() {
         <span className="page-header-aside">
           <span className="float-live-meta">
             <span className={`badge-live${streamStatus !== 'live' ? ' badge-reconnecting' : ''}`}>
-              {networkLabel()} · {streamStatus === 'live' ? 'live' : 'chain polling'}
+              {networkLabel()} · {streamStatus === 'live' ? 'live' : streamStatus === 'signed-out' ? 'chain polling · owner signed out' : 'chain polling'}
             </span>
             <small>block {snapshot.blockNumber.toLocaleString('en-US')}</small>
           </span>
@@ -419,8 +435,8 @@ export default function FloatPage() {
   // non-null 0 masked the honest "Awaiting…" placeholder — an unknown rendered as a
   // measured 0.00. Unknown must read as unknown. (review: chain-authoritative fee path)
   const feesAccrued = snapshot.feesAccruedUsdc ?? null;
-  const displayedAdvances = snapshot.openAdvances ?? h2Advances;
-  const displayedRate = snapshot.orgRateBps ?? h2Pool?.orgRateBps ?? null;
+  const displayedAdvances = snapshot.openAdvances ?? ownerAdvances;
+  const displayedRate = snapshot.orgRateBps ?? ownerPool?.orgRateBps ?? null;
 
   return (
     <div className="float-page">

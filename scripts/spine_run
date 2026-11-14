@@ -734,6 +734,21 @@ false. Use a separate funded wallet for the LP (see docs/V3-CIRCLE-SETUP.md)."
 		printf '   note     dashboard %s is not answering: the V7/V10/V11 beats will have no witness\n' "$dashboard_base"
 	else
 		printf '   ok       dashboard answers at %s\n' "$dashboard_base"
+		# The dashboard's job detail, approvals and live event stream (what V7/V10/V11 are watched
+		# on) are owner views: they need the daemon URL and SNAPFALL_DASHBOARD_OWNER_SECRET on the
+		# dashboard, and a sign-in in the witness's browser. GET /api/owner/session reports the
+		# first two (presence only, never a value); the sign-in is the human's, before beat 1.
+		session_json="$(curl -sS -m 10 "$dashboard_base/api/owner/session" 2>/dev/null)" || session_json=""
+		session_state="$(node -e '
+let d; try { d = JSON.parse(process.argv[1]); } catch { d = null; }
+process.stdout.write(!d || typeof d.ownerApi !== "boolean" ? "unknown" : !d.ownerApi ? "no-daemon" : !d.accessConfigured ? "no-secret" : "ok");
+' -- "$session_json" 2>/dev/null)" || session_state="unknown"
+		case "$session_state" in
+			ok) printf '   ok       dashboard owner access is configured: sign in at %s/settings before beat 1\n' "$dashboard_base" ;;
+			no-daemon) printf '   note     dashboard has no SNAPFALL_OWNER_API_URL: its job, approval and event views will be empty\n' ;;
+			no-secret) printf '   note     dashboard owner access is not configured (SNAPFALL_DASHBOARD_OWNER_SECRET): every owner view refuses, so V7/V10/V11 have no witness\n' ;;
+			*) printf '   note     could not read %s/api/owner/session: check the dashboard owner sign-in by hand\n' "$dashboard_base" ;;
+		esac
 	fi
 
 	if (( do_seed == 0 )); then

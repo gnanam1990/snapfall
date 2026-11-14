@@ -126,7 +126,7 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
 **Execution order (normative; the first failure short-circuits).** No signature is produced before step 7.
 1. Bearer auth → `401 UNAUTHENTICATED`.
 2. Shape/type validation of `intent` + `approvalToken` → `400 BAD_REQUEST`. Includes **canonical atomic-amount validation**: `intent.amount`, `intent.maxAmount`, `approvalToken.approvedAmount` must each be a base-10 non-negative integer string (`^(0|[1-9][0-9]*)$`), validated **before** any `BigInt()` conversion so a non-canonical amount is a `400`, never a `500`.
-3. **Durable idempotency lookup by `idempotencyNonce`** (§4.2): if a record exists and is `DELIVERED`/terminal, return it (`idempotentReplay:true`); if it exists but is unresolved (`SIGNED`/`SUBMITTED` after a crash) → `409 PAYMENT_IN_PROGRESS` (reconcile via `status`, never a `200` that reads as success); if an in-flight lock is held → `409 PAYMENT_IN_PROGRESS`. Never re-execute.
+3. **Durable idempotency lookup by `idempotencyNonce`** (§4.2): if a record exists and is `DELIVERED`/terminal, return it (`idempotentReplay:true`); if it exists but is unresolved (`SIGNED`/`SUBMITTED` after a crash) → `409 PAYMENT_IN_PROGRESS` (reconcile via `status`, never a `200` that reads as success); then the **not-found fence**: if `status` has already answered `PAYMENT_NOT_FOUND` for this intent's precomputed `paymentId` (§2.3) → `410 APPROVAL_EXPIRED`, `paymentId: null`, nothing probed, nothing signed, no record written (the daemon released the hold on that answer, so the approval no longer backs one); then, if an in-flight lock is held → `409 PAYMENT_IN_PROGRESS`. Never re-execute.
 4. **Approval HMAC verify (§3.4) → `401 APPROVAL_TOKEN_INVALID` — FIRST, so the token is authenticated before any of its fields are trusted** (`paymentId: null`).
 5. Recompute `intentHash(intent)` and compare to `approvalToken.intentHash` → `409 INTENT_HASH_MISMATCH` (**AT-05, hash defense**). Then enforce `approvalToken.decision == intent.decision` and `approvalToken.expiresAt == intent.expiresAt` (→ `401 APPROVAL_TOKEN_INVALID`), and `approvalToken.approvedAmount == intent.amount` (→ `409 APPROVED_AMOUNT_MISMATCH`). (all `paymentId: null`)
 6. Expiry: `now < intent.expiresAt` AND `intent.expiresAt` parses to a finite instant → else `410 APPROVAL_EXPIRED` (an unparseable timestamp fails closed). Decision gate (Gate 1): `intent.decision ∈ {AUTO_APPROVE, HUMAN_APPROVED}` → else `403 INTENT_NOT_APPROVED`.
@@ -137,7 +137,7 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
    - `accept.amount == intent.amount` else `409 PRICE_CHANGED`
    - `BigInt(accept.amount) <= BigInt(intent.maxAmount)` else `402 PRICE_EXCEEDS_RESERVED` (Gate 2; `details:{quoted,reserved}`)
 8. **Write-ahead** a durable `SIGNED` record keyed by `idempotencyNonce` (with the precomputed `paymentId`, §4.1). From here the error envelope carries `paymentId`. Then sign the EIP-3009 authorization **against that exact validated `accept`** with the deterministic `authNonce` (§4.4). Do **not** re-probe.
-9. Submit `X-PAYMENT`; on seller `200` → `DELIVERED`; on seller non-200 → `PAYMENT_REJECTED`; on transport failure after submit → `RECONCILING` (non-terminal, `FACILITATOR_ERROR`, `retriable:true`).
+9. Re-check `intent.expiresAt` after signing returns and before sending, with nothing awaited in between: if it has passed, the signed authorization is discarded without ever leaving the process (it is not stored, logged or returned), the record becomes `FAILED` and the reply is `410 APPROVAL_EXPIRED` carrying `paymentId`; the reservation may be released. Otherwise submit `X-PAYMENT`. On seller `200` → `DELIVERED` **only** with a usable receipt. A body that is not JSON is treated as absent (the receipt may ride in a header; `data` is then `null`), never as a failure by itself. A transport that supplies a receipt must supply a whole one: a body `receipt` that is present (not `null`) but not five strings, a header that does not decode to a JSON object, or a header object carrying any receipt-only field (`amount`, `payee`, `nonce`, `settlement`) that is not a whole receipt, is a malformed receipt and fails the response (`RECONCILING`, `FACILITATOR_ERROR`) even when another transport's receipt is valid. A header object with none of those fields (an ordinary x402 settle response, `{success, transaction, network, payer}`) is metadata and is ignored. Every receipt the seller sends (`X-PAYMENT-RESPONSE`, `PAYMENT-RESPONSE`, body) must agree, its amount, payer, payee and nonce must equal the signed authorization (amount and payee also the approved intent), and its settlement must be a 32-byte tx hash or `NOT_BROADCAST`; anything else → `RECONCILING` (`FACILITATOR_ERROR`). On seller non-200 → `PAYMENT_REJECTED`; on transport failure after submit → `RECONCILING` (non-terminal, `FACILITATOR_ERROR`, `retriable:true`). Once a signature exists, only a proven signing failure or the pre-send expiry above records `FAILED`.
 
 **Response `200`** (executed or idempotent replay)
 ```json
@@ -171,10 +171,11 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
 | 401 | `UNAUTHENTICATED` | bad bearer token |
 | 400 | `BAD_REQUEST` | malformed intent/token, non-atomic amount, bad hex |
 | 409 | `PAYMENT_IN_PROGRESS` | same nonce executing elsewhere (§4.3); `retriable:true`, carries `paymentId` |
+| 410 | `APPROVAL_EXPIRED` | **not-found fence** (step 3): `status` already reported this `paymentId` as `PAYMENT_NOT_FOUND`; pre-sign, `paymentId: null` |
 | 401 | `APPROVAL_TOKEN_INVALID` | approval HMAC verify failed (**checked first — authenticate the token before trusting its fields**); OR `token.decision`/`token.expiresAt` diverge from the intent |
 | 409 | `INTENT_HASH_MISMATCH` | recomputed hash != token hash — **AT-05 hash defense**, pre-sign |
 | 409 | `APPROVED_AMOUNT_MISMATCH` | `approvalToken.approvedAmount != intent.amount` — evaluated in step 5, **before** the decision/expiry gates |
-| 410 | `APPROVAL_EXPIRED` | `now >= intent.expiresAt`, OR `intent.expiresAt` is unparseable (fail closed) |
+| 410 | `APPROVAL_EXPIRED` | `now >= intent.expiresAt`, OR `intent.expiresAt` is unparseable (fail closed); checked before signing and again before sending (§2.2 step 9), where it carries `paymentId` and nothing was sent. (Also the step-3 not-found fence above.) |
 | 403 | `INTENT_NOT_APPROVED` | decision ∉ {AUTO_APPROVE, HUMAN_APPROVED} — Gate 1, pre-sign |
 | 422 | `NO_MATCHING_NETWORK` | live `accept.network != intent.network` |
 | 409 | `MERCHANT_CHANGED` | live `accept.payTo != intent.merchant` — **AT-05 live defense**, pre-sign |
@@ -182,7 +183,7 @@ Verifies the approval, binds it to the exact intent by hash, **compares the live
 | 409 | `PRICE_CHANGED` | live `accept.amount != intent.amount` — **AT-05 live defense**, pre-sign |
 | 402 | `PRICE_EXCEEDS_RESERVED` | live `accept.amount > intent.maxAmount` — Gate 2, pre-sign |
 | 402 | `PAYMENT_REJECTED` | seller non-200 to `X-PAYMENT`; `details.sellerReason` = challenge `error`. **POST-sign** (see release safety) |
-| 502 | `FACILITATOR_ERROR` | transport failure **after submit**, OR a 200 whose body did not parse; record → `RECONCILING` (non-terminal), `retriable:true` |
+| 502 | `FACILITATOR_ERROR` | transport failure **after submit**, OR a 200 without a usable, matching receipt (§2.2 step 9); record → `RECONCILING` (non-terminal), `retriable:true` |
 | 500 | `INTERNAL` | unexpected sidecar fault |
 
 The table lists codes in evaluation order (matching the step order above), so the row order is normative, not cosmetic.
@@ -216,7 +217,10 @@ codes to `RECONCILING`, so the distinction holds the moment a key exists.)
 | HTTP | `code` | Cause |
 |---|---|---|
 | 401 | `UNAUTHENTICATED` | bad bearer token |
-| 404 | `PAYMENT_NOT_FOUND` | no record for `paymentId` |
+| 404 | `PAYMENT_NOT_FOUND` | no record for `paymentId` **and** no `pay` for it running — nothing was signed **and nothing ever will be**: before answering, the sidecar durably tombstones the id, and any later `pay` for it (one still in transit when this answer was given) is refused pre-sign with `410 APPROVAL_EXPIRED` (§2.2 step 3). The hold may be released |
+| 409 | `PAYMENT_IN_PROGRESS` | a `pay` for this `paymentId` is still running (e.g. waiting on the 402 probe) — the hold stands; poll again |
+
+**Not-found tombstone (late-pay fence).** A `pay` is visible to `status` only once the sidecar has read it; one that is sent but not yet read is neither recorded nor in flight. So `PAYMENT_NOT_FOUND` alone could not promise the daemon that nothing *will* be signed. The sidecar makes it true: when `status` is about to answer `PAYMENT_NOT_FOUND` for a well-formed id (`^pay_[0-9a-f]{16}$`, §4.1), it first writes a tombstone for that id into the same durable store as the payment records (same atomic write, same fail-closed load, same lifetime: never pruned, so it outlives any approval). `pay` checks the tombstone in the same synchronous block that takes the in-flight lock, and `status` checks the in-flight set and writes the tombstone in one synchronous block, so the two cannot interleave: either the `pay` registers first (`status` answers `409 PAYMENT_IN_PROGRESS`, unchanged) or the tombstone does (`pay` answers `410 APPROVAL_EXPIRED`, pre-sign). If the tombstone write fails, the reply is `500 INTERNAL` (the daemon keeps the hold) and the in-memory fence still refuses the id. A malformed id is answered `PAYMENT_NOT_FOUND` without a tombstone, since no `pay` can produce it.
 
 `status` is safe to poll. **Reality of the Gateway facilitator path:** the Gateway broadcast is
 wired but dormant without `CIRCLE_API_KEY`. With no key, `DELIVERED` is the committed-final success

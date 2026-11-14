@@ -51,6 +51,9 @@ contract AdvanceTest is Test {
         // exactly the behaviour these assertions were written against. The absolute controls
         // have their own file, Caps.t.sol.
         vault.setMaxJobPayment(type(uint256).max);
+        // Borrowing is an admin grant (Nov 2026 operator allowlist). Granted before the first
+        // setCaps, so it applies at once, exactly as Deploy.s.sol does it.
+        pool.setOperatorAllowed(OPERATOR, true);
         pool.setCaps(type(uint256).max, type(uint256).max);
         pool.setDepositorAllowed(LP, true);
         vm.stopPrank();
@@ -70,6 +73,16 @@ contract AdvanceTest is Test {
         usdc.approve(address(pool), type(uint256).max);
         pool.deposit(assets, LP);
         vm.stopPrank();
+    }
+
+    /// Grant a further org borrowing authority on the already-configured pool: queued for
+    /// OPERATOR_GRANT_DELAY, then executed. The delay itself is pinned in OperatorAllowlist.t.sol.
+    function _allowOperator(address org) internal {
+        vm.prank(ADMIN);
+        pool.setOperatorAllowed(org, true);
+        vm.warp(block.timestamp + pool.OPERATOR_GRANT_DELAY());
+        vm.prank(ADMIN);
+        pool.executeOperatorGrant(org);
     }
 
     function _createAndFund(bytes32 jobId, uint256 payment, uint256 budget) internal {
@@ -232,6 +245,7 @@ contract AdvanceTest is Test {
         p.wireJobVault(address(v));
         // Absolute controls opened; this test is about the percentage caps (see Caps.t.sol).
         v.setMaxJobPayment(type(uint256).max);
+        p.setOperatorAllowed(OPERATOR, true);
         p.setCaps(type(uint256).max, type(uint256).max);
         p.setDepositorAllowed(LP, true);
         vm.stopPrank();
@@ -267,6 +281,7 @@ contract AdvanceTest is Test {
         p.wireJobVault(address(v));
         // Absolute controls opened; this test is about the percentage caps (see Caps.t.sol).
         v.setMaxJobPayment(type(uint256).max);
+        p.setOperatorAllowed(OPERATOR, true);
         p.setCaps(type(uint256).max, type(uint256).max);
         p.setDepositorAllowed(LP, true);
         vm.stopPrank();
@@ -318,6 +333,7 @@ contract AdvanceTest is Test {
             address org = address(0x1000 + i);
             bytes32 job = keccak256(abi.encode("job", i));
             address cust = address(0x2000 + i);
+            _allowOperator(org);
 
             usdc.mint(cust, 30_000_000);
             vm.prank(cust);
@@ -350,6 +366,7 @@ contract AdvanceTest is Test {
         p.wireJobVault(address(v));
         // Absolute controls opened; this test is about the percentage caps (see Caps.t.sol).
         v.setMaxJobPayment(type(uint256).max);
+        p.setOperatorAllowed(OPERATOR, true);
         p.setCaps(type(uint256).max, type(uint256).max);
         p.setDepositorAllowed(LP, true);
         vm.stopPrank();

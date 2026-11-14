@@ -1,18 +1,11 @@
+import { ownerApiBase, ownerAuthHeaders, requireOwnerRequest } from '@/lib/ownerApi';
 import { CATALOG_MANIFESTS } from '@/lib/workforce';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-function ownerHeaders(): Headers {
-  const headers = new Headers({ accept: 'application/json' });
-  const token = process.env.SNAPFALL_OWNER_TOKEN;
-  if (token) headers.set('authorization', `Bearer ${token}`);
-  return headers;
-}
-
-export async function GET(): Promise<Response> {
-  const base = process.env.SNAPFALL_OWNER_API_URL?.replace(/\/$/, '');
-  if (!base) {
+export async function GET(req: Request): Promise<Response> {
+  if (!ownerApiBase()) {
     // No daemon (the public deploy): serve the committed catalogue. This is the SAME source the
     // page initialises from (lib/workforce.ts CATALOG_MANIFESTS), so the route and the page cannot
     // disagree about which workers exist. These entries are static repo artefacts — name, category,
@@ -21,10 +14,15 @@ export async function GET(): Promise<Response> {
     // source below.
     return Response.json({ manifests: CATALOG_MANIFESTS, activations: [], source: 'local-catalog' });
   }
+  // Activation state is daemon data read with the owner token: owner session required.
+  const gate = requireOwnerRequest(req);
+  if (!gate.ok) return gate.response;
+  const base = gate.grant.base;
+  const headers = () => ownerAuthHeaders(gate.grant, { accept: 'application/json' });
   try {
     const [catalog, activationState] = await Promise.all([
-      fetch(`${base}/workforce/manifests`, { headers: ownerHeaders(), cache: 'no-store' }),
-      fetch(`${base}/workforce/activations`, { headers: ownerHeaders(), cache: 'no-store' }),
+      fetch(`${base}/workforce/manifests`, { headers: headers(), cache: 'no-store' }),
+      fetch(`${base}/workforce/activations`, { headers: headers(), cache: 'no-store' }),
     ]);
     if (!catalog.ok || !activationState.ok) {
       return Response.json({ error: { code: 'DAEMON_UNAVAILABLE', message: 'Workforce state unavailable.' } }, { status: 502 });

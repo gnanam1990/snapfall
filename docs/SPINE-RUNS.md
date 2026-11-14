@@ -37,13 +37,34 @@ cd sidecar && npm run service
 # terminal 3: the indexer, started EARLY so catch-up finishes before the take (RUNBOOK)
 cd daemon && go run ./cmd/indexer --deployment ../deployments/arc-testnet.json --db snapfall.db
 
-# terminal 4: the dashboard, so V7/V10/V11 have a witness
-cd dashboard && npm run dev
+# terminal 4: the dashboard, so V7/V10/V11 have a witness (owner sign-in: see below)
+cd dashboard
+export SNAPFALL_OWNER_API_URL=http://127.0.0.1:4010/api/v1
+export SNAPFALL_OWNER_TOKEN=<the same token the run uses>
+export SNAPFALL_DASHBOARD_OWNER_SECRET=<openssl rand -hex 32, kept for the sign-in>
+npm run dev
 
 # terminal 5: the run itself
 ./scripts/spine_run --dry-run     # preflight and plan; touches nothing
 ./scripts/spine_run               # the real thing, one log line
 ```
+
+**The dashboard witness has to sign in.** Job detail, the approvals inbox and the live event
+stream that drives the money graph are owner views, and the dashboard now refuses them without
+an owner session (`docs/HOSTING.md`, "Connecting a daemon: owner access"). So the dashboard needs
+`SNAPFALL_OWNER_API_URL` pointing at the daemon the run starts (`127.0.0.1:4010`), the run's
+`SNAPFALL_OWNER_TOKEN`, and `SNAPFALL_DASHBOARD_OWNER_SECRET` (generate it with
+`openssl rand -hex 32`; at least 32 characters and different from the owner token). Before
+beat 1, open the dashboard's Settings page in the browser you will watch with and sign in with
+that secret; a session lasts 12 hours, so one sign-in covers a run. Without the secret every
+owner view answers `503 OWNER_ACCESS_NOT_CONFIGURED`, and without a sign-in `401`, and either way
+V7/V10/V11 have nothing to watch.
+
+The run's own beats are unaffected: `spine_run` drives the daemon's owner API directly with
+`SNAPFALL_OWNER_TOKEN` and never goes through the dashboard, so the dashboard guard does not
+touch the money path. Its preflight reads the dashboard's `GET /api/owner/session`
+(presence flags only) and prints a note when the dashboard has no daemon URL or no owner secret.
+It cannot see whether the witness's browser is signed in; that stays on the human.
 
 `--dry-run` exits 0 only when every prerequisite is present, so it doubles as the morning
 readiness check. Other flags: `--no-seed` (attach to the job already in `.demo/current.json`),
@@ -165,7 +186,8 @@ Optional: `ARC_TESTNET_RPC` (a private endpoint, per the RUNBOOK's 429 notes),
 It also requires the deployment config to exist and to say chain **5042002**, the sidecar to
 answer `/health`, the seller to answer **402** on a paid route, and port 4010 to be **free**
 (the run starts its own daemon, and a stray one would silently receive the owner's clicks). A
-dashboard that is not answering is a note, not a refusal: it does not make the money wrong.
+dashboard that is not answering, or that answers without owner access configured, is a note, not
+a refusal: it does not make the money wrong.
 
 ---
 
@@ -236,8 +258,8 @@ PASS. **UNVERIFIED is not a pass.** V-tasks stay open on it.
 ### What is never asserted here
 
 V7, V10, V11 and A9 are screen claims. The runner prints a checklist at the end and stops; it
-will not invent a PASS for pixels it cannot see. Watch the dashboard during the run and note
-what you saw in the log line by hand.
+will not invent a PASS for pixels it cannot see. Watch the dashboard during the run, signed in as
+the owner, and note what you saw in the log line by hand.
 
 ---
 

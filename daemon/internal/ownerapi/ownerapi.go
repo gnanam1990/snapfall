@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -37,6 +36,9 @@ type Server struct {
 	// every request (bearer auth, constant-time) — not a startup permission slip. When
 	// empty, the posture is loopback-only and Run refuses any non-loopback bind (H2 §1).
 	token string
+	// allowedHosts is SNAPFALL_OWNER_ALLOWED_HOSTS plus, after Run, a specific non-loopback
+	// bind address: the Host values the request guard accepts besides loopback (guard.go).
+	allowedHosts []string
 	// pollEvery is the SSE reader's cadence over the events table — the same pattern as
 	// the outbox publisher (the store is the bus's source of truth; seq gives replay and
 	// Last-Event-ID for free).
@@ -61,6 +63,10 @@ type Server struct {
 	VerifyAccept func(jobID, token string) bool
 	Accept       func(ctx context.Context, jobID string) (string, error)
 	JobState     func(jobID string) (string, bool)
+	// Settlement is the job's customer-facing settlement status, exactly one of "none",
+	// "settled", "pending" or "retry" (H2 §4.3). An error is served as "unknown" (the detail
+	// logged server-side), never guessed.
+	Settlement func(ctx context.Context, jobID string) (string, error)
 	// VaultJobID names the job's on-chain identity for the customer's own wallet. Optional:
 	// nil, or an empty answer, leaves it out of the acceptance read.
 	VaultJobID func(jobID string) string
@@ -121,9 +127,10 @@ var positiveUSDCQuote = regexp.MustCompile(`^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?$
 func New(life *approval.Lifecycle, st *store.Store, log *slog.Logger) *Server {
 	return &Server{
 		life: life, st: st, log: log,
-		token:      os.Getenv("SNAPFALL_OWNER_TOKEN"),
-		orgAddress: os.Getenv("SNAPFALL_TREASURY_ADDRESS"),
-		pollEvery:  200 * time.Millisecond,
+		token:        os.Getenv("SNAPFALL_OWNER_TOKEN"),
+		allowedHosts: parseAllowedHosts(os.Getenv(allowedHostsEnv)),
+		orgAddress:   os.Getenv("SNAPFALL_TREASURY_ADDRESS"),
+		pollEvery:    200 * time.Millisecond,
 	}
 }
 
@@ -131,7 +138,8 @@ func New(life *approval.Lifecycle, st *store.Store, log *slog.Logger) *Server {
 // routes live behind withAuth (the owner bearer); the customer routes live behind
 // withCustomerAuth (the per-job accept credential) and are NOT under the owner token —
 // the settlement principal is the customer, and neither credential opens the other's
-// surface.
+// surface. Both domains sit behind the request guard (guard.go): Host allowlist, browser
+// cross-origin refusal, and JSON-only bodies, whatever the auth mode.
 func (s *Server) Handler() http.Handler {
 	owner := http.NewServeMux()
 	owner.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -153,7 +161,7 @@ func (s *Server) Handler() http.Handler {
 	root.HandleFunc("GET /api/v1/customer/jobs/{id}/acceptance", s.withCustomerAuth(s.handleCustomerAcceptance))
 	root.HandleFunc("GET /api/v1/customer/jobs/{id}/invoice", s.withCustomerAuth(s.handleCustomerInvoice))
 	root.Handle("/", s.withAuth(owner))
-	return root
+	return s.guard(root)
 }
 
 func (s *Server) handleWorkerManifests(w http.ResponseWriter, _ *http.Request) {
@@ -218,7 +226,8 @@ func (s *Server) handleHireWorker(w http.ResponseWriter, r *http.Request) {
 // requests go unauthenticated is an auth bypass, not auth. With no token configured the
 // surface is loopback-only (Run refuses other binds) and requests carry no credential;
 // `by` on a decision is then a recorded label, not an authenticated identity — exactly
-// the written H2 §1 posture, no more.
+// the written H2 §1 posture, no more. In that mode the request guard (guard.go) is what
+// keeps a web page in the owner's browser from acting as the owner.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	if s.token == "" {
 		return next
@@ -236,18 +245,18 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
-// Run serves until ctx is cancelled (H2 §1). The loopback guard is enforced BEFORE
-// listening: any non-loopback bind requires SNAPFALL_OWNER_TOKEN (>=32 bytes) — refusing
-// to start beats serving a payment-approval surface to a network by accident.
+// Run serves until ctx is cancelled (H2 §1). The bind posture is enforced BEFORE
+// listening (checkBindPosture): any non-loopback bind requires SNAPFALL_OWNER_TOKEN
+// (>=32 bytes) — refusing to start beats serving a payment-approval surface to a network
+// by accident.
 func (s *Server) Run(ctx context.Context, addr string) error {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("owner api addr %q: %w", addr, err)
+	if err := s.checkBindPosture(addr); err != nil {
+		return err
 	}
-	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		if len(s.token) < 32 {
-			return fmt.Errorf("owner api: refusing non-loopback bind %q without SNAPFALL_OWNER_TOKEN (>=32 bytes) — H2 §1", addr)
-		}
+	if s.token == "" {
+		s.log.Warn("owner api has no SNAPFALL_OWNER_TOKEN: any local process can act as the owner; "+
+			"browser cross-origin and foreign-Host requests are refused, but set a token for a real deployment",
+			"addr", addr)
 	}
 
 	srv := &http.Server{Addr: addr, Handler: s.Handler(), ReadHeaderTimeout: 5 * time.Second}

@@ -5,7 +5,7 @@
  *   npm run store:test
  */
 
-import { writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -85,9 +85,69 @@ function main() {
   check('written file reloads cleanly', new PaymentStore(p4).getByNonce('cc') !== undefined);
   rmSync(p4, { force: true });
 
+  // 5. Not-found tombstones (the late-pay fence) are durable, idempotent, and kept apart from
+  //    payment records, in a file that stays a flat array.
+  const p5 = tmpPath();
+  const s5 = new PaymentStore(p5);
+  s5.upsert(rec('dd'));
+  s5.tombstone('pay_0123456789abcdef', '2026-11-14T00:00:00.000Z');
+  s5.tombstone('pay_0123456789abcdef', '2026-11-14T09:99:99.000Z'); // idempotent: first report wins
+  const s5b = new PaymentStore(p5); // "restart"
+  check('tombstone survives restart', s5b.isTombstoned('pay_0123456789abcdef'));
+  check('an unreported id is not tombstoned', !s5b.isTombstoned('pay_ffffffffffffffff'));
+  check('records survive alongside tombstones', s5b.getByNonce('dd')?.paymentId === 'pay_dd');
+  check('a tombstone is never returned as a payment record', s5b.getById('pay_0123456789abcdef') === undefined);
+  const onDisk = JSON.parse(readFileSync(p5, 'utf8')) as Array<Record<string, unknown>>;
+  check('store file stays a flat array', Array.isArray(onDisk));
+  check(
+    'tombstone written once, first report kept',
+    onDisk.filter((e) => e.kind === 'PAYMENT_NOT_FOUND_TOMBSTONE').length === 1 &&
+      onDisk.some((e) => e.reportedAt === '2026-11-14T00:00:00.000Z'),
+  );
+  rmSync(p5, { force: true });
+
+  // 6. A tombstone that cannot name its id fails closed, like any other corruption.
+  const p6 = tmpPath();
+  writeFileSync(p6, JSON.stringify([{ kind: 'PAYMENT_NOT_FOUND_TOMBSTONE', reportedAt: '2026-11-14T00:00:00.000Z' }]));
+  let threw6 = false;
+  try {
+    new PaymentStore(p6);
+  } catch (e) {
+    threw6 = /tombstone/i.test((e as Error).message);
+  }
+  check('tombstone without paymentId fails closed', threw6);
+  rmSync(p6, { force: true });
+
+  // 7. A tombstone whose write failed is not "already recorded". The first status answers 500; a
+  //    repeat must write again (and fail again while the disk refuses), never return quietly and
+  //    let the second status answer 404 with nothing on disk to survive a restart.
+  const p7 = tmpPath();
+  const s7 = new PaymentStore(p7);
+  s7.upsert(rec('ee'));
+  mkdirSync(`${p7}.tmp`); // the atomic write's temp path is a directory: every write now throws
+  const throws = (fn: () => void) => {
+    try {
+      fn();
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  check('a tombstone whose write fails throws', throws(() => s7.tombstone('pay_00000000000000a7')));
+  check('the id is still refused in this process', s7.isTombstoned('pay_00000000000000a7'));
+  check(
+    'a repeat while the disk still refuses throws again, so the status stays a 500',
+    throws(() => s7.tombstone('pay_00000000000000a7')),
+  );
+  check('nothing reached the disk yet', !new PaymentStore(p7).isTombstoned('pay_00000000000000a7'));
+  rmSync(`${p7}.tmp`, { recursive: true, force: true });
+  check('a repeat once the disk recovers succeeds', !throws(() => s7.tombstone('pay_00000000000000a7')));
+  check('and the tombstone survives a restart', new PaymentStore(p7).isTombstoned('pay_00000000000000a7'));
+  rmSync(p7, { force: true });
+
   console.log(
     failures === 0
-      ? '\nPaymentStore green: atomic write, fail-closed load, restart survival.\n'
+      ? '\nPaymentStore green: atomic write, fail-closed load, restart survival, durable not-found tombstones.\n'
       : `\n${failures} check(s) FAILED.\n`,
   );
   process.exit(failures === 0 ? 0 : 1);

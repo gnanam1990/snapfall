@@ -71,6 +71,28 @@ type Brain struct {
 	// with their own wallet settles directly; this is how the Accept that follows learns
 	// the settlement already happened instead of submitting a second, doomed one.
 	settlementLanded func(ctx context.Context, vaultJobID string) (bool, error)
+	// deliveryAnchored reads whether a job is Delivered on chain, the only status in which
+	// JobVault.acceptDelivery can succeed. A RETRIED settlement consults it so a repeated
+	// Accept never spends gas on a submission the contract is certain to revert.
+	deliveryAnchored func(ctx context.Context, vaultJobID string) (bool, error)
+	// settling holds the jobs whose Accept settlement attempt is in flight. It is guarded
+	// by mu and is deliberately in memory only: it serializes attempts within this process,
+	// and after a restart nothing is in flight, so an empty map is the correct state.
+	settling map[string]bool
+	// replaceAfterBlocks and maxReplacements bound the fee replacement of a recorded
+	// acceptDelivery the chain does not mine (resolveBroadcasts): how many blocks it sits
+	// before it is re-priced at its nonce, and how many replacements a nonce gets before a
+	// settlement.stuck is recorded. Guarded by mu.
+	replaceAfterBlocks uint64
+	maxReplacements    int
+	// maxRebroadcasts bounds how often one evicted transaction's same bytes are re-sent
+	// before it is left to fee replacement. Guarded by mu.
+	maxRebroadcasts int
+	// stallSince is the chain head at which this process first saw a recorded broadcast
+	// with no sent_head stall (lower-cased tx hash -> head), the age a record without one
+	// is measured from. In memory only: after a restart the age restarts, which delays a
+	// replacement and never causes one. Guarded by mu.
+	stallSince map[string]uint64
 	// rootCtx, when set (the serving daemon), bounds every task goroutine's lifetime:
 	// SIGTERM cancels it -> blocked tasks wake, new dispatches are refused. nil in
 	// package tests/demos (tasks then detach from the request ctx, as before).
@@ -130,6 +152,11 @@ func New(log *slog.Logger, st *store.Store, mem *MemoryStore, fund *funding.Agen
 		jobs:                      make(map[string]*jobState),
 		tasks:                     make(map[string]*taskHandle),
 		milestoneObservationGates: make(map[string]*milestoneObservationGate),
+		settling:                  make(map[string]bool),
+		replaceAfterBlocks:        defaultSettlementReplaceAfterBlocks,
+		maxReplacements:           defaultSettlementMaxReplacements,
+		maxRebroadcasts:           defaultSettlementMaxRebroadcasts,
+		stallSince:                make(map[string]uint64),
 	}
 
 	b.maxRevisions = 2

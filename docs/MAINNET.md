@@ -5,6 +5,111 @@ true before Snapfall is allowed to exist there, and what to do when something go
 
 Read it before running `script/Deploy.s.sol` against mainnet.
 
+## Live pools deployed before the operator allowlist
+
+**Every Snapfall set live on chain today predates the operator allowlist and cannot be patched.**
+The contracts are not upgradeable, so the fix (FloatPool `allowedOperator`, Nov 2026) protects
+only a set deployed from this source. Until then each live FloatPool is open to the outsider
+drain: any address can `createJob` naming itself operator and customer, `fund` it,
+`requestAdvance`, then `refund` the escrow to itself, and the pool writes the advance off
+against its LPs. A fresh address per cycle gets past the per-org cap and the write-off penalty.
+
+| Set | Addresses (FloatPool / JobVault / AuditAnchor) | What bounds the drain | Stop available |
+|---|---|---|---|
+| Arc mainnet, 12 Nov 2026 ([addresses §9](addresses.md#9-arc-mainnet-12-nov-2026)), committed in `deployments/arc-mainnet.json` | `0xD2FaB9CD08a73B476e8DC81Afb7b57564dEef08f` / `0x67FeD7B5eaA966c4cc2738d1530f230B31B6f372` / `0xe8886A39158C7CC504F31789513b926704CCaB4D` | `maxTotalExposure` (1.00 USDC), and only once LP capital is in the pool | `setPaused` on both |
+| Arc testnet with capital controls, 12 Nov 2026 ([addresses §8](addresses.md#8-a-second-deployment-with-the-mainnet-capital-controls-12-nov-2026)) | `0x1022265Ca692fc2D9a80cF823E5AE7371BA13D95` / `0xE4Ebf1bfFC11B72BE489209BC17AcFA8EEBaaB1F` / `0x29861d3969B27ad56d80bBf40EEE1ccce98c9288` | `maxTotalExposure` (50.00 USDC), and only once LP capital is in the pool | `setPaused` on both |
+| Arc testnet original, 23 Jul 2026 (tag `testnet-deployment-frozen`), committed in `deployments/arc-testnet.json`; the services use this one | `0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5` / `0xF3830D7C3B8ca873bB0b277c0e179999e3d52681` / `0x7CDBF8a6D33d4c4C55fb94447E7E90905b3672c6` | only the percentage caps: 80% of TVL in total, and 10% per org, which a fresh address per cycle gets around | **none.** The frozen source has no `setPaused`, caps, deposit allowlist or admin transfer |
+
+Put no new LP capital into any of these pools, and take out what is already there. The only
+fix is the checklist below.
+
+**What pause does on the two sets that have it** (read from the deployed source, `dc07e9d` /
+`7fad758`): FloatPool `setPaused(true)` blocks `deposit` and `requestAdvance`, which is
+enough to stop the drain. JobVault `setPaused(true)` blocks `createJob` and `fund`. Every exit
+stays open: `withdraw`, `startWork`, `submitDelivery`, `acceptDelivery` (with its
+`repayAdvance`), `refund` (with its `writeOff`) and `cancel`. Both are `onlyAdmin`. On
+mainnet that is the deployer `0xb6e5…4fAC` until the pending admin `0x0f09…b2fB` calls
+`acceptAdmin`. Use whichever key is admin at that moment; do not wait for the handover first.
+
+### Owner checklist
+
+For each live set (old-set addresses as `$OLD_POOL` / `$OLD_VAULT`, its RPC as `$ARC_RPC`).
+The commands use the mainnet deployer keystore `snapfall-mainnet`. For a testnet set, use that
+set's admin key instead.
+
+- [ ] **Pause the old FloatPool, then the old JobVault.** On the frozen testnet set there is
+      nothing to pause, so skip to the withdrawal.
+      ```bash
+      cast send "$OLD_POOL"  "setPaused(bool)" true --rpc-url "$ARC_RPC" --account snapfall-mainnet
+      cast send "$OLD_VAULT" "setPaused(bool)" true --rpc-url "$ARC_RPC" --account snapfall-mainnet
+      cast call "$OLD_POOL" "paused()(bool)" --rpc-url "$ARC_RPC"
+      cast call "$OLD_VAULT" "paused()(bool)" --rpc-url "$ARC_RPC"
+      ```
+      Both reads must print `true`. Stop the daemon too (`pkill -f snapfalld`) if it points at this set.
+- [ ] **Size what is already out.** Read `totalOutstanding()`, `totalWrittenOff()` and
+      `totalAssets()` on the old pool. Then look for `AdvanceIssued` logs whose `org`
+      (`topics[2]`) is not your operator treasury. Each one is a draw by someone else.
+- [ ] **Withdraw the LP capital.** Each LP calls `withdraw(assets, receiver, owner)` from its
+      own key. It works while paused and is bounded by idle capital
+      (`totalAssets - totalOutstanding`). Capital lent to the real operator comes back as its
+      jobs settle, which also works while paused. Read `sharesOf(lp)` until it is 0, or as
+      close as rounding allows.
+- [ ] **Retire the old set.** Leave it paused for good and never deposit into it again. Its
+      pending admin handover (mainnet: `0x0f09…b2fB`, acceptable from 1794639448 on FloatPool
+      and 1794639451 on JobVault) no longer matters. Accepting it changes nothing once the set
+      is paused and drained, and the deployer can also cancel it with `transferAdmin(<deployer>)`.
+      Do not raise caps or unpause on the old set, whoever holds admin.
+- [ ] **Redeploy from this source** with `SNAPFALL_OPERATOR` set to the daemon's
+      `SNAPFALL_TREASURY_ADDRESS`, following [Deploying](#deploying): dry run first, check the
+      logged `operator` and caps, then `--broadcast`. Set `SNAPFALL_ADMIN` to start the handoff
+      in the same run. `test/DeployScript.t.sol` pins that the grant lands before the first
+      `setCaps`, so the operator can borrow straight after the deploy.
+- [ ] **Verify the operator grant on the new pool** (`$POOL`):
+      ```bash
+      cast call "$POOL" "allowedOperator(address)(bool)" "$SNAPFALL_OPERATOR" --rpc-url "$ARC_RPC"
+      cast call "$POOL" "operatorGrantExecutableAt(address)(uint64)" "$SNAPFALL_OPERATOR" --rpc-url "$ARC_RPC"
+      ```
+      These must print `true` and `0`: the grant was applied, not queued. Also read back the
+      wiring, caps and `depositAllowlistEnabled`, as for the first deployment.
+- [ ] **Prove an outsider cannot borrow, with `eth_call` only for the draw.** `requestAdvance`
+      checks that the job is `Funded` and that the caller is the job's operator before it checks
+      the allowlist. Without a funded job a call reverts `JobNotFunded`, which proves nothing.
+      So, from a throwaway address `$OUTSIDER` that holds a few cents of USDC and is not
+      `SNAPFALL_OPERATOR` (imported as keystore `outsider-check`), create and fund a tiny
+      self-dealt job of 0.01 USDC on the new vault (`$VAULT`). These are real transactions,
+      and the escrow comes back in the last step.
+      ```bash
+      export JOBID=$(cast keccak "operator-allowlist-check")
+      export DEADLINE=$(( $(date +%s) + 86400 ))
+      cast send "$VAULT" "createJob(bytes32,address,address,uint256,uint256,bytes32,uint64)" "$JOBID" "$OUTSIDER" "$OUTSIDER" 10000 0 "$JOBID" "$DEADLINE" --rpc-url "$ARC_RPC" --account outsider-check
+      cast send 0x3600000000000000000000000000000000000000 "approve(address,uint256)" "$VAULT" 10000 --rpc-url "$ARC_RPC" --account outsider-check
+      cast send "$VAULT" "fund(bytes32)" "$JOBID" --rpc-url "$ARC_RPC" --account outsider-check
+      cast call "$POOL" "requestAdvance(bytes32)" "$JOBID" --from "$OUTSIDER" --rpc-url "$ARC_RPC"
+      ```
+      The `cast call` must revert with `OperatorNotAllowed()`, revert data `0x8a109193`.
+      Then get the escrow back. As the job's operator, `$OUTSIDER` may refund at once:
+      ```bash
+      cast send "$VAULT" "refund(bytes32)" "$JOBID" --rpc-url "$ARC_RPC" --account outsider-check
+      ```
+- [ ] **Accept admin on the new set** from the `SNAPFALL_ADMIN` signer, on **both** FloatPool
+      and JobVault, once `adminTransferAcceptableAt` has passed (`ADMIN_TRANSFER_DELAY`,
+      2 days). Then check that nothing is queued that you did not start: there should be no
+      `CapsRaiseQueued` or `OperatorGrantQueued` log you do not recognise (see
+      [Queued changes survive an admin handover](#queued-changes-survive-an-admin-handover)).
+- [ ] **Repoint everything at the new set.**
+  - `deployments/arc-mainnet.json` (or `arc-testnet.json`): the three `address` fields, and
+    `startBlock` = the AuditAnchor creation block.
+  - `docs/addresses.md`: a new section for the new set. Mark the old section retired and
+    paused.
+  - Environment: `SNAPFALL_JOB_VAULT_ADDRESS`, `SNAPFALL_FLOAT_POOL_ADDRESS`,
+    `SNAPFALL_AUDIT_ANCHOR_ADDRESS` and `SNAPFALL_DEPLOYMENT_BLOCK`. Set them to the new values,
+    or clear them so the committed record applies. Check that `SNAPFALL_TREASURY_ADDRESS` still
+    equals `SNAPFALL_OPERATOR`.
+  - Reset the indexer cursor (`chain_cursors`), restart the indexer and the daemon in the order
+    `docs/RUNBOOK.md` gives, and rebuild the dashboard, as listed in
+    [addresses §8](addresses.md#8-a-second-deployment-with-the-mainnet-capital-controls-12-nov-2026).
+- [ ] **Seed the new pool last,** after all of the above checks out.
+
 ## Why the contracts were unfrozen
 
 ADR-014 froze the contracts for the hackathon. That freeze was scoped to a testnet deployment
@@ -23,8 +128,8 @@ have:
 The percentage caps remain and still bound the *shape* of the book. The new controls bound its
 *size*. Both are checked; the absolute ceiling is checked first and is authoritative.
 
-The testnet deployment recorded in `docs/addresses.md` predates all of this and is unaffected.
-Its source is tagged `testnet-deployment-frozen`.
+The testnet deployment recorded in `docs/addresses.md` predates all of this. Its source is
+tagged `testnet-deployment-frozen`.
 The current source, with these controls, was deployed once on Arc Testnet on 12 Nov 2026 as a
 separate set, and its caps, allowlist and fail-closed reverts were read back from chain
 ([addresses §8](addresses.md#8-a-second-deployment-with-the-mainnet-capital-controls-12-nov-2026)).
@@ -33,6 +138,10 @@ No service points at it yet.
 **Deployed on Arc mainnet on 12 Nov 2026**, with every cap at 1.00 USDC and the admin handover to
 the owner's wallet in progress. See
 [addresses §9](addresses.md#9-arc-mainnet-12-nov-2026) and `deployments/arc-mainnet.json`.
+
+All three of those sets predate the operator allowlist, so they still have to be retired and
+redeployed. See
+[Live pools deployed before the operator allowlist](#live-pools-deployed-before-the-operator-allowlist).
 
 ## The controls
 
@@ -47,6 +156,7 @@ until the numbers are set.
 | `maxAdvance` | FloatPool | absolute ceiling on one advance; reverts `AdvanceTooLarge()` |
 | `maxJobPayment` | JobVault | absolute ceiling on one job's escrow; reverts `JobTooLarge()` |
 | `depositAllowlistEnabled` + `allowedDepositor` | FloatPool | who may supply capital; reverts `DepositorNotAllowed()` |
+| `allowedOperator`, `setOperatorAllowed`, `OPERATOR_GRANT_DELAY` (2 days) | FloatPool | who may **borrow**; `requestAdvance` from any other job operator reverts `OperatorNotAllowed()`. Starts empty. A grant before the first `setCaps` is immediate (that is how `Deploy.s.sol` allows `SNAPFALL_OPERATOR`); after it a grant is queued (`OperatorGrantQueued`) and applied by `executeOperatorGrant` after the delay, or dropped by `cancelOperatorGrant`. Revoking (`setOperatorAllowed(op, false)`) is immediate and also drops a queued grant. Added Nov 2026 after a security audit: without it any address could name itself operator in `createJob`, borrow, refund the escrow to itself and leave the LPs the write-off |
 | `paused` | both | emergency stop; reverts `EnforcedPause()` |
 | `CAP_RAISE_DELAY` (2 days) | FloatPool | raising either cap is queued (`CapsRaiseQueued`) and applied by `executeCapsRaise` only after the delay; the first configuration and any lowering are immediate, lowering cancels a queued raise (`CapsRaiseCancelled`), and a call that raises one cap while lowering the other reverts `MixedCapChange()` |
 | `transferAdmin` / `acceptAdmin`, `ADMIN_TRANSFER_DELAY` (2 days) | both | the admin role moves in two steps, and the new admin can accept only after the delay; until then the current admin cancels with `transferAdmin(currentAdmin)` |
@@ -97,8 +207,13 @@ A deliberately small first deployment — the only kind that should happen — l
 export SNAPFALL_MAX_TOTAL_EXPOSURE=50000000   # 50.00 USDC total at risk, ever
 export SNAPFALL_MAX_ADVANCE=10000000          # 10.00 USDC per advance
 export SNAPFALL_MAX_JOB_PAYMENT=25000000      # 25.00 USDC per job
+export SNAPFALL_OPERATOR=0x...               # required: the daemon's operator treasury (SNAPFALL_TREASURY_ADDRESS)
 export SNAPFALL_ADMIN=0x...                  # optional: start admin handoff; that signer accepts after 2 days
 ```
+
+`SNAPFALL_OPERATOR` is the only address the pool will lend to. It is a public address, never a
+key, and it must be the address the daemon signs `requestAdvance` from. Allowing another
+operator later (for example the Circle treasury wallet lane) takes `OPERATOR_GRANT_DELAY`.
 
 The ceiling is the most you can lose to a total failure of everything off-chain. Pick a number
 you would be willing to lose outright, not a number you expect to need.
@@ -118,16 +233,30 @@ limits a compromised admin key:
   raise) or pause, and the LP can withdraw idle capital, because `withdraw` is never paused.
   Until the raise applies, the most a compromised admin can lose is what is left of the current
   lifetime budget.
+- **New borrowers are delayed.** On a configured pool `setOperatorAllowed(op, true)` only
+  queues the grant (`OperatorGrantQueued`); `executeOperatorGrant` applies it after
+  `OPERATOR_GRANT_DELAY` (2 days). So a leaked key cannot add an address of its own as an
+  operator and borrow in the same block. Revoke it with `setOperatorAllowed(op, false)`, which
+  is immediate and drops the queued grant. The key can still borrow through an operator that is
+  already allowed only if it also holds that operator's key, which is one more reason to keep
+  admin and the daemon's keys apart.
 - **Rotation is delayed too.** `transferAdmin` + `acceptAdmin` move admin to a new key, but
   the new key can accept only after `ADMIN_TRANSFER_DELAY` (2 days). An attacker holding the
   leaked key therefore cannot rotate you out before you react: `AdminTransferStarted` is
   emitted at once, and `transferAdmin(<your current admin>)` cancels it. Watch for both
-  `CapsRaiseQueued` and `AdminTransferStarted`.
+  `CapsRaiseQueued`, `OperatorGrantQueued` and `AdminTransferStarted`.
 - **Where to watch.** The dashboard's Audit page has a "Capital controls" section read straight
   from the contracts: the lifetime budget (lent, lost, left), the caps, pause state, a queued
   raise and any pending admin, each with its deadline. `GET /api/governance` returns the same
   as JSON; alert whenever `pendingCapRaise` or a `pendingAdmin` is non-null and you did not
-  start it.
+  start it. The same section lists the operator allowlist: alert whenever
+  `operatorAllowlist.pendingGrants` is non-empty and you did not queue it, whenever an
+  operator is `allowed` but not `configured` (not the daemon's `SNAPFALL_TREASURY_ADDRESS`),
+  whenever `operatorAllowlist.discovery.status` stays other than `complete`, whenever
+  `operatorAllowlist.unknown` is non-empty (an operator whose state could not be read), and
+  whenever `operatorAllowlist.status` is `unavailable` (the allowlist itself could not be read). A pool
+  deployed before the allowlist reports it as unsupported; see "Live pools deployed before
+  the operator allowlist" above.
 - **Move admin off the deployer** right after deploying (`SNAPFALL_ADMIN` in `Deploy.s.sol`
   starts the handoff; the new signer accepts after the delay), ideally to a multisig or
   hardware wallet, and keep it separate from every key the daemon holds.
@@ -137,6 +266,31 @@ raises and transfers and unpause, and you can cancel them and pause again, but n
 finish a rotation the other contests. That stalemate is the designed outcome: it holds the loss
 at the current lifetime budget while LPs withdraw idle capital, after which the deployment is
 retired and redeployed under a clean key.
+
+### Queued changes survive an admin handover
+
+`acceptAdmin` does not clear a queued cap raise or a queued operator grant. That is deliberate,
+and it is the same rule for both. Neither one applies itself: `executeCapsRaise` and
+`executeOperatorGrant` are `onlyAdmin`. Once the new admin accepts, the old key can no longer
+apply anything it queued, and the new key decides. Clearing them on handover would add no
+safety. For grants it would also need extra bookkeeping, because they are a per-address
+mapping that cannot be wiped in one write. `OperatorAllowlist.t.sol`
+(`test_queuedGrantSurvivesHandoverButOnlyTheNewAdminCanActOnIt`) pins this.
+
+What it asks of the new admin, right after `acceptAdmin` on both contracts:
+
+- `capRaiseExecutableAt()` must read `0`. If it does not and you did not queue that raise,
+  `cancelCapsRaise()`.
+- List every operator named in an `OperatorGrantQueued` or `OperatorAllowed` log on FloatPool
+  since the deployment block. For each one:
+  - `operatorGrantExecutableAt(op)` must read `0` unless you queued that grant. Otherwise
+    `cancelOperatorGrant(op)`.
+  - `allowedOperator(op)` must be `true` only for operators you chose. Otherwise
+    `setOperatorAllowed(op, false)`. This catches a grant the old key queued and executed
+    before the handover, which is already live.
+
+The dashboard's governance view reads the caps queue from state, but it has no per-address
+view of operator grants. Until it does, the logs are the only place to see them.
 
 ## Use a new key. Not the testnet one.
 
@@ -213,8 +367,9 @@ Then, with the caps exported:
 cd contracts && forge script script/Deploy.s.sol --rpc-url "$ARC_RPC" --account snapfall-mainnet --sender "$DEPLOYER_ADDRESS" --broadcast
 ```
 
-The script deploys, wires both directions, and sets all three caps **in one broadcast**. It
-aborts before broadcasting if any cap env var is missing. Afterwards, record the addresses and
+The script deploys, wires both directions, allows `SNAPFALL_OPERATOR` to borrow, and sets all
+three caps **in one broadcast**. It aborts before broadcasting if any cap env var or
+`SNAPFALL_OPERATOR` is missing. Afterwards, record the addresses and
 the deployment block in `deployments/arc-mainnet.json` and `docs/addresses.md`.
 
 The wiring setters are one-shot. A botched deploy is redeployed, never repointed.
@@ -298,9 +453,11 @@ Work down this list. Nothing here needs a redeployment except the last step.
    (`totalAssets - totalOutstanding`). Capital that is lent out becomes withdrawable as
    advances close in step 3.
 
-5. **Close the allowlist.** `setDepositorAllowed(addr, false)` removes a supplier without
+5. **Close the allowlists.** `setDepositorAllowed(addr, false)` removes a supplier without
    touching anyone else. `setDepositAllowlistEnabled(true)` re-arms the gate if it was ever
-   opened.
+   opened. `setOperatorAllowed(op, false)` stops an operator borrowing at once (its open
+   advances still close through their jobs), and `cancelOperatorGrant(op)` drops a grant you
+   did not queue.
 
 6. **Unpause when the cause is understood and the ceiling reflects it.**
 

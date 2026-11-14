@@ -1,42 +1,28 @@
+/**
+ * POST /api/workforce/[id]/hire — activates a worker through the daemon's owner-gated
+ * `POST /api/v1/workforce/{id}/hire`.
+ *
+ * With no daemon configured this answers DAEMON_UNAVAILABLE without touching any owner
+ * authority. With one, the owner guard runs before the owner token is attached: a signed-in
+ * owner session, then a same-origin JSON request (the old Sec-Fetch-Site/Origin check alone
+ * was CSRF defence, not authentication — a non-browser client could send those headers).
+ */
+
+import { ownerApiBase, ownerAuthHeaders, requireOwnerRequest } from '@/lib/ownerApi';
+
+export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-function ownerHeaders(): Headers {
-  const headers = new Headers({ accept: 'application/json', 'content-type': 'application/json' });
-  const token = process.env.SNAPFALL_OWNER_TOKEN;
-  if (token) headers.set('authorization', `Bearer ${token}`);
-  return headers;
-}
-
-function isTrustedMutation(req: Request): boolean {
-  const contentType = req.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
-  if (contentType !== 'application/json') return false;
-
-  const fetchSite = req.headers.get('sec-fetch-site')?.toLowerCase();
-  if (fetchSite) return fetchSite === 'same-origin';
-
-  const origin = req.headers.get('origin');
-  if (!origin) return false;
-  try {
-    return new URL(origin).origin === new URL(req.url).origin;
-  } catch {
-    return false;
-  }
-}
-
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
-  if (!isTrustedMutation(req)) {
-    return Response.json(
-      { error: { code: 'FORBIDDEN', message: 'Workforce activation requires a same-origin JSON request.' } },
-      { status: 403 },
-    );
-  }
-  const base = process.env.SNAPFALL_OWNER_API_URL?.replace(/\/$/, '');
-  if (!base) {
+  if (!ownerApiBase()) {
     return Response.json(
       { error: { code: 'DAEMON_UNAVAILABLE', message: 'Start the daemon and configure SNAPFALL_OWNER_API_URL to hire a watcher.' } },
       { status: 503 },
     );
   }
+  const gate = requireOwnerRequest(req);
+  if (!gate.ok) return gate.response;
+
   const { id } = await context.params;
   let body: unknown;
   try {
@@ -45,16 +31,16 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     return Response.json({ error: { code: 'BAD_REQUEST', message: 'Malformed hire request.' } }, { status: 400 });
   }
   try {
-    const upstream = await fetch(`${base}/workforce/${encodeURIComponent(id)}/hire`, {
+    const upstream = await fetch(`${gate.grant.base}/workforce/${encodeURIComponent(id)}/hire`, {
       method: 'POST',
-      headers: ownerHeaders(),
+      headers: ownerAuthHeaders(gate.grant, { accept: 'application/json', 'content-type': 'application/json' }),
       body: JSON.stringify(body),
       cache: 'no-store',
       signal: AbortSignal.any([req.signal, AbortSignal.timeout(5_000)]),
     });
     return new Response(upstream.body, {
       status: upstream.status,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
     });
   } catch {
     return Response.json({ error: { code: 'DAEMON_UNAVAILABLE', message: 'Worker activation endpoint unavailable.' } }, { status: 502 });

@@ -122,6 +122,32 @@ test('fails closed when the RPC is not the configured chain', async () => {
   );
 });
 
+test('an RPC call takes a signal: it reaches fetch, and an abort also ends a retry wait', async () => {
+  const originalFetch = globalThis.fetch;
+  const seen: Array<AbortSignal | null | undefined> = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    seen.push(init?.signal);
+    return new Response('', { status: 429 }); // always rate-limited: the transport waits to retry
+  }) as typeof fetch;
+  try {
+    const rpc = createRPCTransport('https://rpc.invalid', { retryDelayMs: 10_000 });
+    const call = new AbortController();
+    const started = Date.now();
+    const pending = rpc<string>('eth_getLogs', [], { signal: call.signal });
+    setTimeout(() => call.abort(new Error('budget spent')), 20);
+    await assert.rejects(pending, /budget spent/);
+    assert.ok(Date.now() - started < 2_000, 'the 10s retry wait was cut short');
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0], call.signal, 'the request itself was abortable');
+
+    seen.length = 0;
+    await assert.rejects(rpc<string>('eth_getLogs', [], { signal: AbortSignal.abort(new Error('already spent')) }), /already spent/);
+    assert.equal(seen.length, 0, 'an already-aborted call sends nothing');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('retries a transient public-RPC rate limit without changing the request ID', async () => {
   const originalFetch = globalThis.fetch;
   const requestIds: number[] = [];

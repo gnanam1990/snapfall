@@ -26,7 +26,8 @@ import {
   signAndSubmit,
   PolicyViolation,
   PaymentFailed,
-  isPostSign,
+  provenNotSent,
+  SendDeadlinePassed,
   type ApprovedIntent,
 } from './buyer.js';
 import { formatUsdc } from './x402.js';
@@ -58,6 +59,19 @@ const signer: LocalAccount = await loadSigner();
 const store = new PaymentStore(STORE_PATH);
 /** In-memory per-nonce lock: prevents two concurrent `pay` calls executing the same intent. */
 const inFlight = new Set<string>();
+/**
+ * The paymentIds of those same in-flight executions, so `status` can see them.
+ *
+ * Between accepting a pay and its durable write-ahead record there is an await on the seller's
+ * 402 probe. Without this, `status` answered PAYMENT_NOT_FOUND for that whole window, and the
+ * daemon reads PAYMENT_NOT_FOUND as "nothing was or will be signed" and releases the hold -- while
+ * this process was about to sign. In memory is enough: if the process dies, the pending execution
+ * dies with it before signing, and PAYMENT_NOT_FOUND becomes true.
+ */
+const inFlightIds = new Set<string>();
+
+/** The shape computePaymentId produces (H3 §4.1). */
+const PAYMENT_ID_RE = /^pay_[0-9a-f]{16}$/;
 
 const TERMINAL: ReadonlySet<PaymentState> = new Set(['SETTLED', 'FAILED', 'EXPIRED']);
 
@@ -300,13 +314,35 @@ async function handlePay(body: unknown): Promise<Reply> {
       { retriable: true },
     );
   }
+  // ── Not-found fence: `status` already told the daemon this paymentId does not exist, and the
+  //    daemon released the hold on that answer. This pay was in transit when it was given (sent,
+  //    not yet read here, so neither recorded nor in flight). Signing it now would put a bearer
+  //    authorization behind a released hold, so it is refused, pre-sign, with no record written.
+  //    APPROVAL_EXPIRED because that is what happened to it: the approval stopped backing a hold
+  //    the moment its hold was released. The daemon reads the code as pre-sign, which is the truth.
+  //    This check, the in-flight registration below, and handleStatus's tombstone write are each
+  //    synchronous with nothing awaited, so a status and a pay for one id cannot interleave: either
+  //    the pay registers first (status answers PAYMENT_IN_PROGRESS) or the tombstone does (this). ──
+  if (store.isTombstoned(paymentId)) {
+    return errorReply(
+      410,
+      'APPROVAL_EXPIRED',
+      `status already reported ${paymentId} as PAYMENT_NOT_FOUND and its budget hold may have been released; ` +
+        'this approval can no longer be executed. Nothing was signed',
+      null,
+    );
+  }
   if (inFlight.has(intent.nonce)) {
-    // No durable record yet (the holder is still pre-write-ahead), so paymentId is not
-    // yet resolvable via status — carry null, consistent with the envelope rule below.
+    // No durable record yet (the holder is still pre-write-ahead), so carry null, consistent
+    // with the envelope rule below. `status` on the precomputed paymentId answers the same
+    // PAYMENT_IN_PROGRESS for this window (inFlightIds), never PAYMENT_NOT_FOUND.
     return errorReply(409, 'PAYMENT_IN_PROGRESS', 'an execution for this nonce is in flight', null, { retriable: true });
   }
 
+  // Registered BEFORE the first await, so from here until the durable record exists `status`
+  // reports this paymentId as in progress, never as not found.
   inFlight.add(intent.nonce);
+  inFlightIds.add(paymentId);
   try {
     // ── Pre-sign checks persist NO record (H3 §2.2), so the error envelope carries a
     //    NULL paymentId: `status` would 404 on the deterministic id, and a non-null id
@@ -353,6 +389,14 @@ async function handlePay(body: unknown): Promise<Reply> {
       return mapBuyerError(e, null); // pre-sign: still no record persisted
     }
 
+    // The probe awaited a seller-timed response, so the approval checked above may have lapsed
+    // while it ran. Re-check immediately before the write-ahead and the signature: nothing is
+    // awaited between this line and signAndSubmit starting, so the approval is live when the key
+    // is used. Still pre-sign, so still no record and a null paymentId.
+    if (Date.parse(intent.expiresAt) <= Date.now()) {
+      return errorReply(410, 'APPROVAL_EXPIRED', 'the approval window elapsed while the seller challenge was being fetched; nothing was signed', null);
+    }
+
     // ── Write-ahead the durable record, THEN sign the same validated accept. A crash after
     //    this point recovers via the record + deterministic authNonce, never a second pay. ──
     const nowIso = new Date().toISOString();
@@ -373,7 +417,13 @@ async function handlePay(body: unknown): Promise<Reply> {
     store.upsert(rec);
 
     try {
-      const result = await signAndSubmit(accept, buyerIntent, signer, chainId, computeAuthNonce(intentHash));
+      // sendBy: the check above runs before signing, but signing itself can await a remote signer
+      // (the Circle wallet), so the approval is checked AGAIN after the signature exists and before
+      // X-PAYMENT goes out. A lapse there is SendDeadlinePassed, which provenNotSent counts as
+      // unsent: the signature never left this process.
+      const result = await signAndSubmit(accept, buyerIntent, signer, chainId, computeAuthNonce(intentHash), {
+        sendBy: Date.parse(intent.expiresAt),
+      });
       rec = {
         ...rec,
         state: 'DELIVERED',
@@ -386,29 +436,58 @@ async function handlePay(body: unknown): Promise<Reply> {
       store.upsert(rec);
       return { status: 200, json: payResponse(rec, false) };
     } catch (e) {
-      // Post-sign failure. The authorization is already signed and submitted, so the question
-      // is whether it may still settle. buyer.ts names both codes that can:
-      // FACILITATOR_ERROR and PAYMENT_REJECTED -- a non-200 to X-PAYMENT still means the seller
-      // RECEIVED the bearer authorization.
+      // Past the write-ahead. The question is whether the signed authorization may still settle,
+      // because the daemon reads FAILED as "nothing settled, release" (h3.Unresolved, h3.go) and
+      // RECONCILING as "unknown, the hold stands".
       //
-      // This used to special-case FACILITATOR_ERROR only, so PAYMENT_REJECTED became FAILED,
-      // which the daemon reads as "nothing settled, release" (h3.Unresolved, h3.go). That
-      // releases the budget reservation backing an authorization somebody else is holding and
-      // can still present. Inert only while nothing broadcasts; live the hour a facilitator is
-      // wired, which is exactly when nobody would be looking for it.
-      const mayStillSettle = isPostSign(e);
-      store.upsert({ ...rec, state: mayStillSettle ? 'RECONCILING' : 'FAILED', reason: (e as Error).message, updatedAt: new Date().toISOString() });
-      return mapBuyerError(e, paymentId);
+      // FAILED is reserved for the PROVEN non-settlements: the signature was never produced, or it
+      // was produced after the approval lapsed and discarded unsent, so nothing left this process
+      // (buyer.provenNotSent). Everything else is RECONCILING. Once
+      // X-PAYMENT is sent the seller holds a bearer instrument, and no shape of its reply proves
+      // otherwise: a rejection, a 200 with no receipt, a null body, a v2 PAYMENT-RESPONSE header,
+      // a parse error, or a bug in our own handling of the reply. This used to be decided by
+      // isPostSign, a positive list of two PaymentFailed codes, so every OTHER exception after
+      // the send -- a TypeError on a receipt-less 200, say -- became FAILED and released the
+      // budget behind a delivered authorization.
+      const unsent = provenNotSent(e);
+      store.upsert({ ...rec, state: unsent ? 'FAILED' : 'RECONCILING', reason: (e as Error).message, updatedAt: new Date().toISOString() });
+      if (e instanceof SendDeadlinePassed) {
+        // Same code as the pre-sign expiry checks, but past the write-ahead, so the envelope carries
+        // the paymentId of the durable FAILED record. Both say "release": nothing was sent.
+        return errorReply(410, 'APPROVAL_EXPIRED', e.message, paymentId);
+      }
+      if (unsent || e instanceof PaymentFailed) return mapBuyerError(e, paymentId);
+      // An unclassified throw after the send must still read as post-sign on the wire, not as the
+      // ambiguous INTERNAL.
+      return errorReply(502, 'FACILITATOR_ERROR', `outcome unknown after the authorization was submitted: ${(e as Error).message}`, paymentId, {
+        retriable: true,
+      });
     }
   } finally {
     inFlight.delete(intent.nonce);
+    inFlightIds.delete(paymentId);
   }
 }
 
 function handleStatus(paymentId: string): Reply {
   const rec = store.getById(paymentId);
-  if (!rec) return errorReply(404, 'PAYMENT_NOT_FOUND', `no payment record for ${paymentId}`);
-  return { status: 200, json: statusResponse(rec) };
+  if (rec) return { status: 200, json: statusResponse(rec) };
+  if (inFlightIds.has(paymentId)) {
+    // Accepted but not yet written ahead (the seller probe is still running). NOT "not found":
+    // the daemon releases its hold on PAYMENT_NOT_FOUND, and this execution may yet sign. Same
+    // code and envelope rule as the in-flight branch of `pay` (null paymentId until a durable
+    // record exists); the daemon keeps the hold on it and polls again.
+    return errorReply(409, 'PAYMENT_IN_PROGRESS', `payment ${paymentId} is in flight and has not been written ahead yet; poll again`, null, {
+      retriable: true,
+    });
+  }
+  // About to promise the daemon that nothing was or will be signed for this id, on which it releases
+  // the hold. Make the "will be" true first: a durable tombstone that any later pay for this id hits
+  // before signing (handlePay). Written in this same synchronous block as the two lookups above, so
+  // no pay can be accepted in between. Only a well-formed id can be the precomputed id of some pay,
+  // so only those are recorded; anything else is not found and can never be paid.
+  if (PAYMENT_ID_RE.test(paymentId)) store.tombstone(paymentId);
+  return errorReply(404, 'PAYMENT_NOT_FOUND', `no payment record for ${paymentId}`);
 }
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────────────

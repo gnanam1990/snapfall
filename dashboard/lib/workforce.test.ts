@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import { GET } from '../app/api/workforce/route';
 import { POST } from '../app/api/workforce/[id]/hire/route';
+import { OWNER_SESSION_COOKIE, issueSessionValue } from './ownerSession';
 import {
   BUILD_MONITOR_MANIFEST,
   CATALOG_MANIFESTS,
@@ -71,7 +72,7 @@ test('the no-daemon route serves the full committed catalogue, not just build-mo
   const prev = process.env.SNAPFALL_OWNER_API_URL;
   delete process.env.SNAPFALL_OWNER_API_URL; // force the local-catalogue branch (public deploy)
   try {
-    const res = await GET();
+    const res = await GET(new Request('http://dashboard.local/api/workforce'));
     const body = (await res.json()) as { manifests: Array<{ id: string }>; source?: string };
     assert.equal(body.source, 'local-catalog');
     const ids = body.manifests.map((m) => m.id).sort();
@@ -130,10 +131,18 @@ test('hire input requires a repository and positive two-decimal quote', () => {
   assert.equal(validHireInput('/work/acme', '2.345'), false);
 });
 
+// Obvious fake; the owner guard (lib/ownerApi requireOwnerRequest) needs a configured secret and a
+// session signed with it before the hire proxy forwards anything. ownerAccess.test.ts covers the
+// guard itself; these two keep the hire route's own CSRF behaviour pinned.
+const FAKE_DASHBOARD_SECRET = 'fake-dashboard-owner-secret-for-tests-0000';
+const ownerCookie = () => `${OWNER_SESSION_COOKIE}=${issueSessionValue(FAKE_DASHBOARD_SECRET).value}`;
+
 test('hire proxy rejects cross-site simple requests before forwarding owner authority', async () => {
   const previousURL = process.env.SNAPFALL_OWNER_API_URL;
+  const previousSecret = process.env.SNAPFALL_DASHBOARD_OWNER_SECRET;
   const previousFetch = globalThis.fetch;
   process.env.SNAPFALL_OWNER_API_URL = 'http://127.0.0.1:4010/api/v1';
+  process.env.SNAPFALL_DASHBOARD_OWNER_SECRET = FAKE_DASHBOARD_SECRET;
   let forwarded = 0;
   globalThis.fetch = async () => {
     forwarded += 1;
@@ -146,23 +155,29 @@ test('hire proxy rejects cross-site simple requests before forwarding owner auth
         'content-type': 'text/plain',
         origin: 'https://attacker.example',
         'sec-fetch-site': 'cross-site',
+        // Even a browser that somehow sent the owner's cookie cross-site is refused.
+        cookie: ownerCookie(),
       },
       body: JSON.stringify({ repository: '/work/acme', quoteUsdc: '25.00', by: 'anandan' }),
     });
     const response = await POST(request, { params: Promise.resolve({ id: 'build-monitor' }) });
-    assert.equal(response.status, 403);
+    assert.ok([403, 415].includes(response.status), `expected a CSRF refusal, got ${response.status}`);
     assert.equal(forwarded, 0);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousURL === undefined) delete process.env.SNAPFALL_OWNER_API_URL;
     else process.env.SNAPFALL_OWNER_API_URL = previousURL;
+    if (previousSecret === undefined) delete process.env.SNAPFALL_DASHBOARD_OWNER_SECRET;
+    else process.env.SNAPFALL_DASHBOARD_OWNER_SECRET = previousSecret;
   }
 });
 
-test('hire proxy permits a same-origin JSON action', async () => {
+test('hire proxy permits a signed-in same-origin JSON action', async () => {
   const previousURL = process.env.SNAPFALL_OWNER_API_URL;
+  const previousSecret = process.env.SNAPFALL_DASHBOARD_OWNER_SECRET;
   const previousFetch = globalThis.fetch;
   process.env.SNAPFALL_OWNER_API_URL = 'http://127.0.0.1:4010/api/v1';
+  process.env.SNAPFALL_DASHBOARD_OWNER_SECRET = FAKE_DASHBOARD_SECRET;
   let forwarded = 0;
   let forwardedSignal: AbortSignal | null | undefined;
   globalThis.fetch = async (_input, init) => {
@@ -176,6 +191,7 @@ test('hire proxy permits a same-origin JSON action', async () => {
       headers: {
         'content-type': 'application/json',
         origin: 'http://dashboard.local',
+        cookie: ownerCookie(),
       },
       body: JSON.stringify({ repository: '/work/acme', quoteUsdc: '25.00', by: 'anandan' }),
     });
@@ -188,6 +204,8 @@ test('hire proxy permits a same-origin JSON action', async () => {
     globalThis.fetch = previousFetch;
     if (previousURL === undefined) delete process.env.SNAPFALL_OWNER_API_URL;
     else process.env.SNAPFALL_OWNER_API_URL = previousURL;
+    if (previousSecret === undefined) delete process.env.SNAPFALL_DASHBOARD_OWNER_SECRET;
+    else process.env.SNAPFALL_DASHBOARD_OWNER_SECRET = previousSecret;
   }
 });
 

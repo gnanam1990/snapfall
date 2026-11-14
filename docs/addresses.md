@@ -83,6 +83,11 @@ payout at 14 (18dp) *and* 15 (6dp).
 
 ## 2. Deployment
 
+> **Predates the operator allowlist (Nov 2026), and has no pause.** Any address can borrow from
+> this FloatPool and leave the LPs the write-off, bounded only by its percentage caps. Withdraw
+> LP capital and put no more in. See
+> [MAINNET.md, "Live pools deployed before the operator allowlist"](MAINNET.md#live-pools-deployed-before-the-operator-allowlist).
+
 All three contracts were deployed by the operator key at 25 gwei. Addresses, creation
 transactions, blocks, and gas are read from the receipts — not from the deploy script's
 stdout.
@@ -297,6 +302,10 @@ operator liquidity, one automated on independent LP liquidity — is a stronger 
 
 ## 8. A second deployment with the mainnet capital controls (12 Nov 2026)
 
+> **Predates the operator allowlist (Nov 2026).** Any address can borrow from this FloatPool and
+> leave the LPs the write-off, up to its caps. Put no capital in. To retire it, see
+> [MAINNET.md, "Live pools deployed before the operator allowlist"](MAINNET.md#live-pools-deployed-before-the-operator-allowlist).
+
 The contracts above predate the capital controls in `docs/MAINNET.md`. The current source
 (`main` at `7fad758`) was deployed separately on Arc Testnet with `script/Deploy.s.sol`,
 from the same deployer `0x99B7…792D`. It was deployed with `forge script` directly, not through `daemon/cmd/redeploy-testnet`, so no redeploy-cadence marker was recorded. **No service points at it yet.** The dashboard, daemon
@@ -345,6 +354,10 @@ The sidecar does not read these addresses.
 That would also leave the live proofs above on a pool that is no longer the active one.
 
 ## 9. Arc mainnet (12 Nov 2026)
+
+> **Predates the operator allowlist (Nov 2026).** Any address can borrow from this FloatPool and
+> leave the LPs the write-off, up to its caps. Put no capital in. To retire it, see
+> [MAINNET.md, "Live pools deployed before the operator allowlist"](MAINNET.md#live-pools-deployed-before-the-operator-allowlist).
 
 The same source as §8 (`main` at `dc07e9d`) was deployed on **Arc mainnet, chain 5042**, with
 `script/Deploy.s.sol` from a fresh deployer `0xb6e55668efB27a1571DBe14A9e388eed8A654fAC`. The deployer

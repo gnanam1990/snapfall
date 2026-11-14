@@ -23,6 +23,21 @@ document is the missing half of the done-criterion ("schema committed").
   every route including the stream. A token that only gates startup while requests go
   unauthenticated would be an auth bypass, not auth. `by` on a decision is a recorded
   label; the bearer token is the authenticated identity when configured.
+- **Request guard, in both modes, on every route (owner and customer).** "Anyone who can
+  execute code on the owner's machine" does not include a web page open in the owner's
+  browser, which can reach loopback too. Before any auth check the daemon refuses:
+  a `Host` that is not loopback (`127.0.0.0/8`, `::1`, `localhost`, any port) or listed in
+  `SNAPFALL_OWNER_ALLOWED_HOSTS` (`403 BAD_HOST`, defeats DNS rebinding); a `Sec-Fetch-Site`
+  other than `same-origin`/`none`, or an `Origin` that is not the request's own host
+  (`403 CROSS_ORIGIN`); and a non-GET request whose body is not `application/json`
+  (`415 UNSUPPORTED_MEDIA_TYPE`). A bodyless POST with no `Content-Type` is accepted.
+  Callers without `Origin` or fetch metadata (curl, Go clients, the dashboard's server-side
+  proxy) are unaffected. Tokenless mode stays the local default and logs a startup warning.
+- **Non-loopback deployments.** `SNAPFALL_OWNER_ALLOWED_HOSTS` (comma-separated, `host` for
+  any port or `host:port`) names the Host a reverse proxy forwards or a LAN name clients use;
+  it requires the token. A specific non-loopback bind address is allowed automatically; a
+  wildcard bind (`0.0.0.0`, `::`, `:port`) without `SNAPFALL_OWNER_ALLOWED_HOSTS` is refused
+  at startup.
 
 ## 2. The events stream — ONE stream, TWO sources (decided)
 
@@ -192,6 +207,131 @@ scoping by magic link server-side, or a customer-scoped auth path in the daemon 
 open cross-stream seam, and both sides assuming the other handled it is how gaps
 happen. Until that is decided all-three, the customer copy stays unserved; serving it
 will be a versioned addition to this contract, not a silent one.
+
+### 4.3 Customer acceptance: `settlement` status
+
+Customer routes are gated by the per-job accept credential (`Authorization: Bearer act_…`),
+never by the owner token.
+
+`GET /api/v1/customer/jobs/{jobId}/acceptance`: response `200`:
+
+```jsonc
+{ "jobId": "job_demo_1",
+  "stage": "accepted",               // the job's stage, verbatim
+  "accepted": true,                  // stage == "accepted": the CLAIM happened, nothing more
+  "settlement": "none" | "settled" | "pending" | "retry" | "unknown",
+  "vaultJobId": "0x…" }              // present only once a chain identity is bound
+```
+
+`POST /api/v1/customer/jobs/{jobId}/accept`: response `200`:
+
+```jsonc
+{ "jobId": "job_demo_1",
+  "state": "accepted-settled" | "accepted-pending-chain" | "accepted-settlement-reverted",
+  "settlement": "none" | "settled" | "pending" | "retry" | "unknown" }   // read AFTER the attempt
+```
+
+`accepted: true` does **not** mean settled. `settlement` is what says whether pressing
+Accept again does anything. It always holds exactly one of five values:
+
+| `settlement` | meaning | portal |
+|---|---|---|
+| `none` | not accepted yet | show Accept |
+| `settled` | a `settlement.executed` is recorded | accepted and settled; hide Accept |
+| `pending` | accepted, and nothing the customer does changes anything right now: an attempt is in flight, a broadcast `acceptDelivery` has no outcome yet, the job has no chain identity or no settle lane is wired, or the chain has not reached `Delivered` | Accept is safe but will most likely report pending again |
+| `retry` | accepted, and the last attempt reverted, failed, was dropped or was never recorded | show Accept again |
+| `unknown` | the status could not be read: a wired chain oracle (settled on chain? `Delivered`?) or the settlement record was unreadable. The rest of the response is accurate. | say the status is unavailable for now; Accept is safe (it re-reads everything and fails closed) |
+
+It comes from the same rules the retried Accept acts on (`brain.nextSettlementStep`). It
+is not a second copy of them. When a chain oracle is wired the read consults it (settled
+on chain? `Delivered`?). A failed status read is never a guessed value and never fails the
+route: both responses stay `200` with `"settlement": "unknown"`, the acceptance read keeps
+`jobId`/`stage`/`accepted`/`vaultJobId`, and the Accept keeps its `state` (the Accept was
+processed). The detail is logged server-side against the job, never echoed: a chain error
+can carry the RPC URL and its API key, and these routes are reachable by any credential
+holder.
+
+When the chain shows the job settled and no `settlement.executed` is recorded yet (the
+customer's own wallet settled it, or the oracle read failed during the Accept that would
+have recorded it), the status read itself records the settlement, as an observation and
+never a transaction, and answers `settled`. The `settlement-resolver` records the same
+observation on its next pass whether or not anyone reads the status. It is the same record
+an Accept writes: `settlement.executed`, signer derived from the indexed `JobSettled` hash
+(a hash the daemon's lane recorded is `daemon_custodial`, any other is `customer`; not yet
+indexed is `customer` with `tx_hash_pending`). A self-custody customer has no Accept left to
+press, so nothing waits on one. A frozen job reads and records the same way: the kill switch
+stops settlement transactions, not the record of one the chain already shows (a frozen job
+can read `retry`, and the Accept answers `423 FROZEN`).
+
+A failed Accept is `500 INTERNAL` with a generic message (`"the acceptance could not be
+processed; try again shortly"`), the detail logged server-side. `401 UNAUTHENTICATED` (bad
+or missing credential), `404 UNKNOWN_JOB`, `409 NOT_READY`, `423 FROZEN`, `503 NOT_WIRED`
+(any customer seam, `settlement` included, unwired).
+
+**Settlement recovery, as recorded (daemon event log, per job):**
+
+- `settlement.submitted` is written **write-ahead**: once the lane's `acceptDelivery` is
+  signed and before it is sent. The lane signs locally, so the record holds `tx_hash`,
+  `nonce`, `signer_address` (the signing account), `raw_tx` (the signed bytes) and
+  `sent_head` (the chain head it was signed at) before any node sees the transaction. If
+  the record cannot be written, nothing is sent and the Accept fails with nothing out.
+  Once it is written, a send error (a timed-out `eth_sendRawTransaction` the node accepted,
+  or an error from one backend of a load-balanced RPC) is never read as "not sent": the
+  job is `pending` and the record is resolved by hash. Only a submission refused before
+  signing (gas estimation reverts) is retried as never sent.
+- Open broadcasts are resolved at boot (a pass bounded to 20 s; whatever it does not reach
+  waits for the next one), every minute by the `settlement-resolver` worker, and on every
+  Accept. All three run the same code. It records outcomes and never
+  submits at a new nonce. It may re-send an evicted transaction's same bytes, or
+  fee-replace a stalled one at its own nonce (both below). A receipt gives
+  `settlement.executed` or `settlement.reverted`. The mined nonce compared is always the
+  signer's: `signer_address`, or the account `raw_tx` recovers to. A record with neither is
+  unresolvable and is never called dropped. Rotating the key across a restart cannot
+  redirect it. A recorded `raw_tx` is verified before any use: it must decode to the
+  recorded `tx_hash` at the recorded `nonce`, signed by `signer_address` when one is
+  recorded. A record that fails gives no signer (unresolvable, never dropped), no previous
+  fee and no bytes to re-send.
+- Every transaction at one nonce is resolved together: the original, plus each fee
+  replacement linked to it by `replaces`. A receipt for any one decides the nonce. Every
+  other transaction at that nonce is recorded `settlement.dropped` with `taken_by`.
+- A transaction with no receipt that the node does not know (`eth_getTransactionByHash`
+  null) is one observation, recorded as `settlement.unseen` with `verdict` and chain
+  `head`. It acts only when a later observation with the same verdict is taken at a
+  strictly higher head. A load-balanced RPC whose nonce backend is ahead of its receipt
+  backend makes a mined transaction look exactly like this.
+  - verdict `dropped` (signer nonce past it): confirmed → `settlement.dropped`, and the
+    job becomes `retry`.
+  - verdict `evicted` (signer nonce still open): confirmed → the newest transaction's
+    recorded `raw_tx` is re-sent unchanged (`settlement.rebroadcast`). It has the same nonce
+    and the same hash, so it cannot settle twice. Nothing is re-sent while the job is frozen.
+    Each re-send starts the observations over, so one transaction is re-sent at most 3
+    times; after that it is left to fee replacement, like one whose re-send the node refuses.
+- **Fee replacement.** A transaction the node holds but does not mine (priced under what
+  the chain takes) never sees its nonce move. The same applies to an evicted one whose
+  re-send the node refuses or that has no `raw_tx`. Either one would stay `pending` forever.
+  After it has sat 240 blocks (about two minutes of Arc's 500 ms blocks) since its
+  `sent_head`, `acceptDelivery` is re-signed at the **same nonce** with a higher fee. The
+  fee is the highest of a fresh `eth_gasPrice`, the latest block's fresh base fee (never
+  cached), and the previous price (read only from verified `raw_tx`) plus a quarter, and
+  never more than 3× the fresh price, max(`eth_gasPrice`, base fee). The replacement is
+  recorded write-ahead as a new `settlement.submitted` carrying `replaces`. At most one
+  transaction per nonce mines, so replacing cannot settle twice. Nothing is replaced while
+  the job is frozen.
+- **`settlement.stuck`** is recorded once per transaction, logged at ERROR, and after it
+  nothing more is replaced automatically (the transaction is still resolved). Its `reason`
+  is one of: `max_replacements` (a nonce got 3 replacements and is still unmined),
+  `signer_mismatch` (another key signed it, typically after a key rotation, so this lane
+  cannot sign at that account's nonce), `fee_cap` (the previous price plus a quarter is
+  over 3× the fresh price), `record_mismatch` (its `raw_tx` is not the recorded
+  transaction), `signer_unknown` (the record names no signer and has no `raw_tx`).
+  `signer_unknown` and `record_mismatch` are also recorded when the lane cannot resolve such
+  a transaction at all (no receipt, unknown to the node, and no signer to compare a nonce
+  against): nothing is sent, and the job stays `pending` until the owner acts.
+- **Manual recovery** applies to a `settlement.stuck` job, or to a record the lane cannot
+  sign for (another key signed it). The operator sends any transaction from that record's
+  signer at its nonce, for example a zero-value self-transfer at a fee the chain takes. The
+  broadcasts then confirm as dropped and the next Accept resubmits. JobVault refuses a
+  second `acceptDelivery` for a settled job, so this cannot double-settle.
 
 ## 5. What ships when
 

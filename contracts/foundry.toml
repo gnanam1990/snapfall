@@ -5,6 +5,8 @@ libs = ["lib"]
 solc_version = "0.8.26"
 optimizer = true
 optimizer_runs = 200
+# test/IndexerAbi.t.sol compares the curated indexer ABIs against the compiled artifacts.
+fs_permissions = [{ access = "read", path = "./abi" }, { access = "read", path = "./out" }]
 # Arc testnet — fill after verifying docs.arc.io/arc/references/connect-to-arc
 # [rpc_endpoints]
 # arc_testnet = "${ARC_TESTNET_RPC}"

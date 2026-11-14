@@ -63,6 +63,10 @@ The Circle wallet has its own address. On chain that is a **new operator**:
 
 - FloatPool keys the advance rate by org address, so the new address starts at the base rate,
   with none of the old address's accepted-job history.
+- FloatPool lends only to allowed operators. The Circle address must be granted with
+  `setOperatorAllowed(<circle address>, true)` from the pool admin; on a configured pool that
+  queues the grant, and `executeOperatorGrant(<circle address>)` applies it after
+  `OPERATOR_GRANT_DELAY` (2 days). Until then its `requestAdvance` reverts `OperatorNotAllowed()`.
 - `startWork`, `recordExpense` and `submitDelivery` require `msg.sender == j.operator`. Jobs
   for this lane must be created with the Circle address as `operator` (`createJob` accepts the
   admin or the operator as sender), and those three calls must be signed by the Circle wallet:

@@ -2,7 +2,8 @@
  *  daemon's credential-gated POST /api/v1/customer/jobs/{id}/accept. The daemon fires
  *  the on-chain settlement waterfall; its status and body (accepted-settled /
  *  accepted-settlement-reverted / accepted-pending-chain, or FROZEN/NOT_READY) pass
- *  through verbatim. */
+ *  through verbatim, including the daemon's `settlement` field (none | settled | pending |
+ *  retry) that lib/portalSettlement.ts reads. */
 
 import { proxyCustomer } from '@/lib/ownerApi';
 

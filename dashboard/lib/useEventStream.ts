@@ -1,18 +1,23 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { OWNER_SESSION_EVENT, listenForOwnerSessionChanges, readOwnerSession } from './ownerSessionClient';
+import { createStreamClient, type StreamStatus } from './streamClient';
 import type { StreamMessage } from './types';
 
-export type StreamStatus = 'connecting' | 'live' | 'reconnecting';
+export type { StreamStatus } from './streamClient';
 
 /**
- * Resilient SSE client (review: PR #8 HIGH).
+ * Subscribes a page to an SSE stream and reports its status (review: PR #8 HIGH).
  *
- * EventSource auto-reconnects on transient drops (dev-server reload, network blip), so we
- * never close it from onerror - we only surface a "reconnecting" status. If the browser
- * gives up entirely (readyState CLOSED), we recreate the source with a short backoff, so
- * the dashboard can never silently freeze while claiming to be live. One malformed frame
- * is skipped rather than crashing the page.
+ * The connection logic is lib/streamClient (createStreamClient): reconnects, the owner-session
+ * check when the browser gives up, the 'unverified' state in which pages hide owner data
+ * (ownerDataHidden), and the overlapping handover that loses no chain event when the owner stream
+ * route closes a stream to re-check the session.
+ *
+ * Any session change, in this tab or another (lib/ownerSessionClient relays them), closes the open
+ * source and reconnects through the owner guard. After a sign-out anywhere that reconnect is
+ * refused, so the stream stops at once instead of running on with the old session.
  */
 export function useEventStream(url: string, onMessage: (msg: StreamMessage) => void): StreamStatus {
   const [status, setStatus] = useState<StreamStatus>('connecting');
@@ -20,37 +25,19 @@ export function useEventStream(url: string, onMessage: (msg: StreamMessage) => v
   handler.current = onMessage;
 
   useEffect(() => {
-    let es: EventSource | null = null;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-    let disposed = false;
-
-    const connect = () => {
-      if (disposed) return;
-      es = new EventSource(url);
-      es.onopen = () => setStatus('live');
-      es.onmessage = (m) => {
-        let msg: StreamMessage;
-        try {
-          msg = JSON.parse(m.data) as StreamMessage;
-        } catch {
-          return; // bad frame: skip it, keep the stream alive
-        }
-        handler.current(msg);
-      };
-      es.onerror = () => {
-        setStatus('reconnecting');
-        if (es && es.readyState === EventSource.CLOSED) {
-          es.close();
-          retry = setTimeout(connect, 2000);
-        }
-      };
-    };
-
-    connect();
+    const client = createStreamClient({
+      url,
+      onMessage: (msg) => handler.current(msg),
+      onStatus: setStatus,
+      open: (u) => new EventSource(u),
+      readSession: readOwnerSession,
+    });
+    const onSessionChange = () => client.sessionChanged();
+    listenForOwnerSessionChanges();
+    window.addEventListener(OWNER_SESSION_EVENT, onSessionChange);
     return () => {
-      disposed = true;
-      if (retry) clearTimeout(retry);
-      es?.close();
+      window.removeEventListener(OWNER_SESSION_EVENT, onSessionChange);
+      client.dispose();
     };
   }, [url]);
 

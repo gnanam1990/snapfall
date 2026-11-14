@@ -2,3 +2,6 @@
 # A blob is one exact file version; `git rev-parse <rev>:<path>` prints it. Entries never
 # exempt the current tree. Add one only after reviewing that version's matches in code review.
 256f811e3e84176f4e8b05d1ae94d2612a0fa3d9 | dashboard/lib/network.test.ts | #112 redaction tests used literal fake basic-auth RPC URLs (rpcuser/hunter2hunter2, u/p on example hosts); the later version assembles them at runtime.
+2b0a9d368f2b0ddef57cb451fd46314bdba66b62 | sidecar/src/seller-hostile-test.ts | #126 hostile-seller test set the loopback stub facilitator's CIRCLE_API_KEY to a value generated at runtime (`hostile-${Math.random()...}`), never a real key; the later version builds the env name in code.
+f509550638d3d7e2fbb0da6889131ba00c45eff0 | dashboard/lib/ownerAccess.test.ts | #126 owner-access test used a literal fake u/p credential origin on dash.example.com as a malformed SNAPFALL_DASHBOARD_ORIGIN that must fail closed; the later version assembles it at runtime.
+aa60aeeb7c4ef5ce0719cfca2b785c983ebc0f7a | dashboard/lib/ownerAccess.test.ts | #126 same inert u/p credential-origin fixture, second version; the later version assembles it at runtime.

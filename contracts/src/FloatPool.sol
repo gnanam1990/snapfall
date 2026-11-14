@@ -78,6 +78,27 @@ contract FloatPool is ReentrancyGuard {
     bool public depositAllowlistEnabled;
     mapping(address => bool) public allowedDepositor;
 
+    // ── Added Nov 2026 (security audit): operator allowlist ──
+    //
+    // JobVault.createJob accepts any caller that names itself as the operator, and the operator
+    // is also free to name itself (or an address it controls) as the customer. Before this list,
+    // requestAdvance trusted that vault-reported operator outright, so any address could create
+    // a job, fund it, draw an advance, refund the escrow to itself and leave the LPs holding the
+    // write-off, once per fresh address, until maxTotalExposure was spent. Borrowing is now an
+    // explicit admin grant held HERE, because this is the contract that guards the money: it
+    // holds no matter who created the job. It fails closed like the deposit allowlist: nobody is
+    // allowed until the admin says so.
+    //
+    // A grant raises risk, so it follows the cap rule. Before the pool's first setCaps it applies
+    // immediately (nothing can be borrowed yet, which is how Deploy.s.sol allows the operator in
+    // the deploying broadcast). After that it is queued for OPERATOR_GRANT_DELAY, the same window
+    // as a cap raise: a leaked admin key cannot add a borrower and draw in the same block, and
+    // OperatorGrantQueued gives the real key holder time to cancel or pause. A revocation lowers
+    // risk and is always immediate.
+    uint256 public constant OPERATOR_GRANT_DELAY = 2 days;
+    mapping(address => bool) public allowedOperator;
+    mapping(address => uint64) public operatorGrantExecutableAt; // 0 = no grant queued
+
     mapping(bytes32 => Advance) public advances;           // one advance per job (SC-FP-003)
     mapping(address => uint32) public acceptedJobs;        // org → count
     mapping(address => uint32) public writtenOffJobs;      // org → count
@@ -113,6 +134,10 @@ contract FloatPool is ReentrancyGuard {
     event AdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin, uint64 acceptableAt);
     event AdminTransferCancelled();
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+    // ── Added Nov 2026 (security audit): operator allowlist ──
+    event OperatorAllowed(address indexed operator, bool allowed);
+    event OperatorGrantQueued(address indexed operator, uint64 executableAt);
+    event OperatorGrantCancelled(address indexed operator);
 
     error NotJobVault();
     error JobNotFunded();
@@ -140,6 +165,10 @@ contract FloatPool is ReentrancyGuard {
     error NotPendingAdmin();
     error AdminTransferTimelocked();
     error MixedCapChange();
+    // ── Added Nov 2026 (security audit): operator allowlist ──
+    error OperatorNotAllowed();
+    error NoOperatorGrantQueued();
+    error OperatorGrantTimelocked();
 
     constructor(IERC20 _usdc) {
         usdc = _usdc;
@@ -274,6 +303,53 @@ contract FloatPool is ReentrancyGuard {
         emit DepositorAllowed(depositor, allowed);
     }
 
+    /// @notice Grant or revoke an operator's authority to draw advances (requestAdvance).
+    /// @dev Revoking is immediate and also drops a queued grant for that address. An open
+    ///      advance is unaffected by revocation: it still ends through its job, by repayAdvance or
+    ///      writeOff, which only the vault can call.
+    ///
+    ///      Granting is immediate before the pool's first setCaps, and for an address that is
+    ///      already allowed. Otherwise it is queued for OPERATOR_GRANT_DELAY and applied by
+    ///      executeOperatorGrant. Calling again for the same address restarts the delay.
+    function setOperatorAllowed(address operator, bool allowed) external onlyAdmin {
+        if (operator == address(0)) revert ZeroAddress();
+        if (!allowed) {
+            if (operatorGrantExecutableAt[operator] != 0) {
+                operatorGrantExecutableAt[operator] = 0;
+                emit OperatorGrantCancelled(operator);
+            }
+            allowedOperator[operator] = false;
+            emit OperatorAllowed(operator, false);
+            return;
+        }
+        bool configured = maxTotalExposure != 0; // caps can never be zeroed once set
+        if (configured && !allowedOperator[operator]) {
+            uint64 executableAt = uint64(block.timestamp + OPERATOR_GRANT_DELAY);
+            operatorGrantExecutableAt[operator] = executableAt;
+            emit OperatorGrantQueued(operator, executableAt);
+            return;
+        }
+        allowedOperator[operator] = true;
+        emit OperatorAllowed(operator, true);
+    }
+
+    /// @notice Apply a queued operator grant once its delay has passed.
+    function executeOperatorGrant(address operator) external onlyAdmin {
+        uint64 executableAt = operatorGrantExecutableAt[operator];
+        if (executableAt == 0) revert NoOperatorGrantQueued();
+        if (block.timestamp < executableAt) revert OperatorGrantTimelocked();
+        operatorGrantExecutableAt[operator] = 0; // consumed, not cancelled: only OperatorAllowed is emitted
+        allowedOperator[operator] = true;
+        emit OperatorAllowed(operator, true);
+    }
+
+    /// @notice Drop a queued operator grant without changing who is allowed.
+    function cancelOperatorGrant(address operator) external onlyAdmin {
+        if (operatorGrantExecutableAt[operator] == 0) revert NoOperatorGrantQueued();
+        operatorGrantExecutableAt[operator] = 0;
+        emit OperatorGrantCancelled(operator);
+    }
+
     /// SPEC-04 — set-once wiring. SC-FP-010 depends on this being set: repayAdvance and
     /// writeOff are callable only by the registered JobVault, and "registered" means here.
     function wireJobVault(address vault) external {
@@ -389,6 +465,9 @@ contract FloatPool is ReentrancyGuard {
 
         // SC-FP-004: only the treasury registered for THIS job may draw against it.
         if (msg.sender != org) revert NotTreasury();
+        // Being the job's operator is not enough: JobVault lets any address name itself operator
+        // (and pick its own customer). Only an admin-granted operator may borrow LP capital.
+        if (!allowedOperator[org]) revert OperatorNotAllowed();
 
         // SC-FP-003: exactly one advance per job.
         if (advances[jobId].status != AdvanceStatus.None) revert DuplicateAdvance();

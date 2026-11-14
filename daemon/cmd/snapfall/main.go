@@ -113,7 +113,49 @@ const (
 	// nothing in the sidecar ever leaves RECONCILING, and a signed authorization is a bearer
 	// instrument that may still settle (H3 §7 step 4).
 	reconcileDeadline = 24 * time.Hour
+	// settlementResolveInterval re-asks the chain about every recorded acceptDelivery
+	// broadcast no record resolves yet. Each pass is one observation; a dropped or evicted
+	// verdict is acted on only when a later pass, at a higher chain head, agrees, so this
+	// cadence is also how long such a confirmation takes without a customer pressing Accept.
+	// It also paces fee replacement of a stalled broadcast (brain's replace-after age).
+	settlementResolveInterval = time.Minute
+	// settlementBootResolveBudget bounds the boot resolution pass, which runs before the
+	// owner API serves: a slow or unreachable RPC must not hold the daemon's start. Whatever
+	// the pass does not reach in time is left to the per-minute settlement-resolver.
+	settlementBootResolveBudget = 20 * time.Second
 )
+
+// resolveOpenSettlements runs one resolution pass over every open acceptDelivery broadcast
+// (brain.ResolveOpenSettlements: the same code a retried Accept uses; it records, re-sends an
+// evicted transaction's same bytes, and fee-replaces a stalled one at its OWN nonce, but never
+// submits at a new nonce) and logs what it did. Boot calls it once, through
+// bootResolveOpenSettlements, and the settlement-resolver worker calls it on
+// settlementResolveInterval.
+func resolveOpenSettlements(ctx context.Context, br settlementResolver, log *slog.Logger, when string) {
+	n, err := br.ResolveOpenSettlements(ctx)
+	if err != nil {
+		log.Warn("could not resolve every open settlement broadcast; they stay open and the next pass retries",
+			"when", when, "err", err)
+	}
+	if n > 0 {
+		log.Info("resolved open settlement broadcasts", "when", when, "jobs", n)
+	}
+}
+
+// settlementResolver is the one Brain method the resolution passes need (*brain.Brain).
+type settlementResolver interface {
+	ResolveOpenSettlements(ctx context.Context) (int, error)
+}
+
+// bootResolveOpenSettlements is the boot pass, bounded by budget: it runs before the owner API
+// serves, so a slow or unreachable RPC must not hold the start. A pass cut short stops
+// between jobs (and signs nothing new once the budget is spent); what it did not reach waits
+// for the settlement-resolver's first tick.
+func bootResolveOpenSettlements(ctx context.Context, br settlementResolver, log *slog.Logger, budget time.Duration) {
+	bctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	resolveOpenSettlements(bctx, br, log, "boot")
+}
 
 // statusPoller reads one payment's durable state from the H3 sidecar. *h3.Client satisfies
 // it; the interface exists so the reclaim paths name a READ capability rather than the whole
@@ -149,6 +191,59 @@ func (l lane) Submit(ctx context.Context, calldata []byte) (funding.ChainOutcome
 		return funding.ChainOutcome{}, err
 	}
 	return funding.ChainOutcome{Submitted: true, TxHash: r.TxHash, Block: r.Block, GasUsed: r.GasUsed, Reverted: r.Reverted}, nil
+}
+
+// customerSettleLane is the customer lane: a lane over a raw-key client that also records each
+// acceptDelivery before it is sent and can resolve, re-send or replace it later
+// (funding.TrackedSubmitter). A send or receipt wait that fails says nothing about whether the
+// transaction mines, so a retried Accept asks about the recorded transaction instead of
+// sending a second one.
+type customerSettleLane struct {
+	c  *chain.Client
+	to common.Address
+}
+
+var _ funding.TrackedSubmitter = customerSettleLane{}
+
+func outcomeOf(r chain.Receipt) funding.ChainOutcome {
+	return funding.ChainOutcome{Submitted: true, TxHash: r.TxHash, Block: r.Block, GasUsed: r.GasUsed, Reverted: r.Reverted}
+}
+
+func (l customerSettleLane) Submit(ctx context.Context, calldata []byte) (funding.ChainOutcome, error) {
+	return lane{l.c, l.to}.Submit(ctx, calldata)
+}
+
+func (l customerSettleLane) SubmitTracked(ctx context.Context, calldata []byte, onSigned func(funding.Broadcast) error) (funding.ChainOutcome, error) {
+	r, err := l.c.SubmitTracked(ctx, l.to, calldata, onSigned)
+	if err != nil {
+		return funding.ChainOutcome{}, err
+	}
+	return outcomeOf(r), nil
+}
+
+func (l customerSettleLane) Resolve(ctx context.Context, b funding.Broadcast) (funding.Resolution, error) {
+	r, err := l.c.Resolve(ctx, b)
+	if errors.Is(err, chain.ErrSignerUnknown) || errors.Is(err, chain.ErrBroadcastMismatch) {
+		// No account to compare a nonce against (none recorded, or the recorded bytes are not
+		// the recorded transaction): unresolvable, never "dropped".
+		return funding.Resolution{State: funding.TxPending}, fmt.Errorf("%w: %w", funding.ErrSettlementUnresolvable, err)
+	}
+	if err != nil {
+		return funding.Resolution{State: funding.TxPending}, err
+	}
+	res := funding.Resolution{State: r.State, Head: r.Head}
+	if r.State == chain.TxMined {
+		res.Outcome = outcomeOf(r.Receipt)
+	}
+	return res, nil
+}
+
+func (l customerSettleLane) Rebroadcast(ctx context.Context, b funding.Broadcast) error {
+	return l.c.Rebroadcast(ctx, b)
+}
+
+func (l customerSettleLane) Replace(ctx context.Context, calldata []byte, prev funding.Broadcast, onSigned func(funding.Broadcast) error) (funding.Broadcast, error) {
+	return l.c.Replace(ctx, l.to, calldata, prev, onSigned)
 }
 
 // chainBudget is V6 §1.C's alarm. Two independent 6.00 figures govern one job's spending:
@@ -492,6 +587,7 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 		}
 		return string(js.Stage), true
 	}
+	api.Settlement = br.SettlementStatus
 	api.VaultJobID = br.VaultJobID
 	// The snap's owner-initiated trigger: the proposal lands pending in this same
 	// inbox; the owner's approval mints the Grant and Funding stops honestly at
@@ -556,6 +652,24 @@ func run(log *slog.Logger, cfg config.Config, beats int, validateOnly bool, owne
 	}
 	if err := sup.Register(workerFunc{name: "owner-api", fn: func(wctx context.Context) error {
 		return api.Run(wctx, apiAddr)
+	}}); err != nil {
+		return err
+	}
+
+	// A recorded acceptDelivery broadcast whose receipt was never read (a timed-out wait, a
+	// crash) is resolved here too, not only when the customer presses Accept again: one
+	// observation per tick, recorded exactly as a retried Accept records it.
+	if err := sup.Register(workerFunc{name: "settlement-resolver", fn: func(wctx context.Context) error {
+		tick := time.NewTicker(settlementResolveInterval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-wctx.Done():
+				return nil
+			case <-tick.C:
+				resolveOpenSettlements(wctx, br, log, "tick")
+			}
+		}
 	}}); err != nil {
 		return err
 	}
@@ -934,7 +1048,7 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		if customer, err := chain.NewFromEnv("SNAPFALL_CUSTOMER_PRIVATE_KEY", dep.Network.RPCURL, dep.Network.ChainID); err != nil {
 			log.Warn("customer chain lane NOT wired, settlements stop at settlement.pending_chain", "reason", err)
 		} else {
-			settleLane = lane{customer, jvAddr}
+			settleLane = customerSettleLane{customer, jvAddr}
 			if reader == nil {
 				reader = customer
 			}
@@ -953,6 +1067,9 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 			// A customer with their own wallet settles on chain directly; the Accept that
 			// follows must find that out instead of submitting a second acceptDelivery.
 			br.SetSettlementOracle(oracle.SettlementLanded)
+			// A RETRIED Accept (after a revert or a failed submission) resubmits only once
+			// the job is Delivered on chain, so repeated early Accepts spend no gas.
+			br.SetDeliveryOracle(oracle.DeliveryAnchored)
 			// Read the org's current advance rate at intent creation so the amount the
 			// owner approves matches what FloatPool draws (no hardcoded-50%-vs-55%
 			// divergence when the rate has climbed).
@@ -1036,6 +1153,11 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 		return nil, nil, nil, err
 	}
 	log.Info("brain serving", "jobs_recovered", br.JobCount())
+	// Every acceptDelivery broadcast a previous run left open (its receipt wait timed out,
+	// or the process died during it) is resolved once now, with the lanes and oracles above
+	// already wired, before the customer surface serves, within a bounded budget: what it
+	// does not reach in time waits for the settlement-resolver's first tick.
+	bootResolveOpenSettlements(ctx, br, log, settlementBootResolveBudget)
 
 	// V6 §1.C at boot, over every job that already HAS a chain identity. Milestones are the
 	// only jobs whose vault ids the daemon can enumerate (Brain's in-memory job state carries
@@ -1223,6 +1345,8 @@ func wirePayer(ctx context.Context, log *slog.Logger, fund *funding.Agent, chain
 //	                                            releases the remainder in the same event.
 //	FAILED / EXPIRED                            nothing settled: release, NOT pre-sign.
 //	SIGNED / SUBMITTED / RECONCILING            the outcome is unknown: the hold STANDS.
+//	409 PAYMENT_IN_PROGRESS (the CODE)          a pay for this id is still running: the hold
+//	                                            STANDS.
 //	any transport or decode failure             the outcome is unknown: the hold STANDS.
 //	ANY OTHER state, including ""               the vocabulary changed under a live hold: the
 //	                                            hold STANDS and the owner is escalated.
@@ -1252,6 +1376,15 @@ func reconcileUnresolved(ctx context.Context, led *budget.Ledger, poller statusP
 	for _, h := range holds {
 		res, err := poller.Status(ctx, h.PaymentID)
 		if err != nil {
+			if h3.PaymentInProgress(err) {
+				// The sidecar is still running a pay for this id: nothing is known yet, and
+				// the reservation is what backs it. The hold stands, named by the code so the
+				// stall escalation says what the sidecar answered.
+				log.Info("a claimed budget hold's payment is still in progress at the sidecar: it stands",
+					"request", h.RequestID, "job", h.JobID, "payment_id", h.PaymentID)
+				open[h.RequestID] = h3.CodePaymentInProgress
+				continue
+			}
 			var he *h3.Error
 			if errors.As(err, &he) && he.Code == h3.CodePaymentNotFound {
 				// W2 and W5 are the same recovery: the sidecar's pre-sign checks persist

@@ -215,6 +215,31 @@ func TestV6_ATransportFailureKeepsTheHold(t *testing.T) {
 	}
 }
 
+func TestV6_PaymentInProgressKeepsTheHold(t *testing.T) {
+	// The sidecar answers 409 PAYMENT_IN_PROGRESS while a pay for this id is still running:
+	// the outcome is not known yet and the reservation backs it, so the hold STANDS. It is a
+	// decoded *h3.Error, the same type as PAYMENT_NOT_FOUND, so this pins that only that one
+	// code releases. The open state names the code, so a stall escalation says what the
+	// sidecar answered instead of UNKNOWN.
+	const pid = "pay_00000000000000aa"
+	f := newRecFixture(t, pid)
+	poller := &stubPoller{err: map[string]error{
+		pid: &h3.Error{HTTPStatus: 409, Code: h3.CodePaymentInProgress, Message: "a pay for this id is in flight"},
+	}}
+
+	open := reconcileUnresolved(context.Background(), f.led, poller, quietLog())
+
+	if !f.stillHeld(t) {
+		t.Fatal("PAYMENT_IN_PROGRESS released the hold; the payment may still settle")
+	}
+	if got := open[recRequest]; got != h3.CodePaymentInProgress {
+		t.Errorf("open state %q, want %q", got, h3.CodePaymentInProgress)
+	}
+	if len(poller.calls) != 1 || poller.calls[0] != pid {
+		t.Errorf("polled %v, want the persisted id %s once", poller.calls, pid)
+	}
+}
+
 func TestV6_AnUnrecognisedStateKeepsTheHoldRatherThanGuessing(t *testing.T) {
 	// If the sidecar grows a state this daemon does not know, the safe reading is "unknown",
 	// not "failed". The empty string is the same case, and is what a decode failure produces.

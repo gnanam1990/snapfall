@@ -13,7 +13,7 @@
  *   - the H2 event stream supplies the live timeline, filtered to this job.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import type { StreamMessage } from '@/lib/types';
@@ -21,6 +21,9 @@ import type { ActivityMessage } from '@/lib/activity';
 import { humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdcExact, formatBps, relativeTime } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import { ownerDataHidden } from '@/lib/streamClient';
+import { isOwnerLocked } from '@/lib/ownerSessionClient';
+import OwnerSignIn from '@/components/OwnerSignIn';
 import type { JobSnapshot } from '@/lib/jobChain';
 import { belongsToJob, expenseRows } from '@/lib/jobTimeline';
 import SettlementWaterfall from '@/components/SettlementWaterfall';
@@ -107,30 +110,70 @@ function ExpenseRows({ timeline, total }: { timeline: ActivityMessage[]; total: 
  *
  * The token is shown ONCE and rotates any prior credential (the daemon says so in its response),
  * so this deliberately renders the full link for copying rather than storing it anywhere.
+ *
+ * The link is a per-job credential that opens the customer's acceptance route with no owner
+ * session, so it is owner data like the timeline: it is forgotten the moment the page stops knowing
+ * the visitor is the owner (`ownerHidden`: a sign-out here or in another tab, or a session that
+ * could not be verified), not left on screen under the signed-out badge.
  */
-function AcceptLink({ jobId }: { jobId: string }) {
+function AcceptLink({ jobId, ownerHidden, signedOut }: { jobId: string; ownerHidden: boolean; signedOut: boolean }) {
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [locked, setLocked] = useState(false);
+
+  // Each mint takes a generation; hiding owner data moves it on. A mint that answers after the
+  // visitor stopped being known as the owner must neither store the credential nor copy it.
+  const generation = useRef(0);
+  const ownerHiddenNow = useRef(ownerHidden);
+
+  useEffect(() => {
+    ownerHiddenNow.current = ownerHidden;
+    if (!ownerHidden) return;
+    generation.current += 1;
+    setLink(null);
+    setCopied(false);
+  }, [ownerHidden]);
 
   const mint = useCallback(async () => {
+    // Minting rotates the job's current link, so it never starts while owner data is hidden: the
+    // new link could not be shown, and the old one would already be dead.
+    if (ownerHiddenNow.current) return;
+    const mine = ++generation.current;
+    const current = () => generation.current === mine && !ownerHiddenNow.current;
     setBusy(true);
     setError(null);
     setCopied(false);
     try {
-      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/accept-link`, { method: 'POST' });
+      // Same-origin JSON: the owner guard refuses any other shape for a mutation.
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/accept-link`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
       const body = (await res.json()) as { acceptToken?: string; error?: { message?: string } };
+      if (isOwnerLocked(res.status, body)) {
+        setLocked(true);
+        return;
+      }
       if (!res.ok || !body.acceptToken) {
         // Surface the daemon's own reason. A nil MintAccept seam answers 503 NOT_WIRED, which is
         // a different problem from "no such job", and flattening them wastes the operator's time.
         setError(body?.error?.message ?? `mint failed (${res.status})`);
         return;
       }
+      if (!current()) {
+        // Owner data was hidden while this mint was in flight. The daemon already rotated the
+        // link, so say so rather than drop the result silently.
+        setError('owner data was hidden before the new link arrived; any earlier link no longer works, so mint again once signed in');
+        return;
+      }
       const url = `${window.location.origin}/portal/${encodeURIComponent(jobId)}?token=${encodeURIComponent(body.acceptToken)}`;
       setLink(url);
       try {
         await navigator.clipboard.writeText(url);
+        if (!current()) return;
         setCopied(true);
       } catch {
         // Clipboard access is denied outside a secure context or without permission. The link is
@@ -149,7 +192,7 @@ function AcceptLink({ jobId }: { jobId: string }) {
     <div className="card mt">
       <div className="job-expense-head">
         <p className="card-title">Customer link</p>
-        <button type="button" className="activity-action" onClick={() => void mint()} disabled={busy}>
+        <button type="button" className="activity-action" onClick={() => void mint()} disabled={busy || ownerHidden}>
           {busy ? 'Minting…' : link ? 'Mint a new link' : 'Mint customer link'}
         </button>
       </div>
@@ -157,7 +200,12 @@ function AcceptLink({ jobId }: { jobId: string }) {
         Shown once, and minting again rotates any link already issued for this job.
       </p>
       {error ? <p className="job-link-error">{error}</p> : null}
-      {link ? (
+      {/* Minting is off while owner data is hidden, so a signed-out owner signs in here rather
+          than through a mint's 401. */}
+      {locked || signedOut ? <OwnerSignIn className="mt" onSignedIn={() => setLocked(false)} /> : null}
+      {/* Checked here too, so the render that first reports the change never paints the link
+          before the effect above has cleared it. */}
+      {link && !ownerHidden ? (
         <p className="job-link mono">
           {link}
           {copied ? <span className="job-link-copied">copied</span> : null}
@@ -216,6 +264,16 @@ export default function JobDetailPage() {
     [jobId, load],
   );
   const status = useEventStream('/api/events/stream', onMessage);
+  // The timeline is daemon events streamed under the owner session. When the session ends it is
+  // dropped, not just hidden, so a later session's feed starts clean. While the session is
+  // unverified (it just changed, or could not be checked) it is hidden until the stream is live
+  // again. The chain read stays.
+  const signedOut = status === 'signed-out';
+  const ownerHidden = ownerDataHidden(status);
+  useEffect(() => {
+    if (signedOut) setTimeline([]);
+  }, [signedOut]);
+  const ownerTimeline = ownerHidden ? [] : timeline;
 
   const stageIndex = useMemo(
     () => (job?.status ? HAPPY_PATH.indexOf(job.status as (typeof HAPPY_PATH)[number]) : -1),
@@ -286,6 +344,10 @@ export default function JobDetailPage() {
         </div>
         {status === 'live' ? (
           <span className="badge-live">live · chain-read on every event</span>
+        ) : status === 'signed-out' ? (
+          <span className="badge-live badge-reconnecting">chain read · owner signed out</span>
+        ) : status === 'unverified' ? (
+          <span className="badge-live badge-reconnecting">chain read · checking owner session…</span>
         ) : (
           <span className="badge-live badge-reconnecting">reconnecting…</span>
         )}
@@ -464,19 +526,19 @@ export default function JobDetailPage() {
       </div>
 
       {/* timeline */}
-      <ExpenseRows timeline={timeline} total={job?.onchainExpensesUsdc ?? null} />
+      <ExpenseRows timeline={ownerTimeline} total={job?.onchainExpensesUsdc ?? null} />
 
-      <AcceptLink jobId={jobId} />
+      <AcceptLink jobId={jobId} ownerHidden={ownerHidden} signedOut={signedOut} />
 
       <div className="card mt">
         <p className="card-title">Timeline</p>
-        {timeline.length === 0 ? (
+        {ownerTimeline.length === 0 ? (
           <p className="stat-sub">
             Waiting for events on this job. The chain figures above are already current.
           </p>
         ) : (
           <ol className="job-timeline">
-            {timeline.map((item) => (
+            {ownerTimeline.map((item) => (
               <li key={item.id} className="job-event">
                 <div className="job-event-head">
                   <span className="job-event-actor">{item.actor}</span>

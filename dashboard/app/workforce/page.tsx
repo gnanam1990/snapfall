@@ -1,6 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import OwnerSignIn from '@/components/OwnerSignIn';
+import { isOwnerLocked } from '@/lib/ownerSessionClient';
 
 import {
   BUILD_MONITOR_MANIFEST,
@@ -72,7 +75,19 @@ function ActiveTeam() {
   );
 }
 
-function BuildMonitorCard({ manifest, activation, catalogOnly }: { manifest: WorkerManifest; activation: WorkerActivation | null; catalogOnly: boolean }) {
+function BuildMonitorCard({
+  manifest,
+  activation,
+  catalogOnly,
+  ownerLocked,
+  onOwnerLocked,
+}: {
+  manifest: WorkerManifest;
+  activation: WorkerActivation | null;
+  catalogOnly: boolean;
+  ownerLocked: boolean;
+  onOwnerLocked: () => void;
+}) {
   const [repository, setRepository] = useState(activation?.repository ?? '');
   const [quoteUsdc, setQuoteUsdc] = useState(activation?.quoteUsdc ?? '25.00');
   const [submitting, setSubmitting] = useState(false);
@@ -112,6 +127,10 @@ function BuildMonitorCard({ manifest, activation, catalogOnly }: { manifest: Wor
         body = await response.json() as HireWorkerResult & { error?: { message?: string } };
       } catch {
         setError(fallback);
+        return;
+      }
+      if (isOwnerLocked(response.status, body)) {
+        onOwnerLocked();
         return;
       }
       if (!response.ok) {
@@ -182,7 +201,9 @@ function BuildMonitorCard({ manifest, activation, catalogOnly }: { manifest: Wor
           onClick={hire}
           disabled={catalogOnly || !valid || submitting || Boolean(activeResult)}
         >
-          {catalogOnly
+          {ownerLocked
+            ? 'Owner sign-in required'
+            : catalogOnly
             ? 'Needs a connected daemon'
             : activeResult
               ? `✓ ${activationLabel(activeResult.state)}`
@@ -192,7 +213,9 @@ function BuildMonitorCard({ manifest, activation, catalogOnly }: { manifest: Wor
         </button>
         <div className="watcher-feedback" aria-live="polite">
           {error ? <p className="is-error">{error}</p> : null}
-          {catalogOnly ? (
+          {ownerLocked ? (
+            <p>A daemon is connected, but activation acts with the owner’s authority. Sign in above first.</p>
+          ) : catalogOnly ? (
             // Same honesty as the missing operator-tool cards: a visitor clicking Activate and
             // getting a 502 reads as "broken", not "quiet". Say why it is disabled instead.
             <p>Activation needs a connected daemon. This public catalogue shows what Build Monitor is, not a running instance.</p>
@@ -257,18 +280,30 @@ export default function WorkforcePage() {
    * from a connected one, and the Activate button below it will not work.
    */
   const [catalogOnly, setCatalogOnly] = useState(true);
+  /** A daemon is connected but this visitor has no owner session (the route answered 401). */
+  const [ownerLocked, setOwnerLocked] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const lockOwner = useCallback(() => {
+    setOwnerLocked(true);
+    setCatalogOnly(true);
+  }, []);
 
   useEffect(() => {
     let active = true;
     fetch('/api/workforce', { cache: 'no-store' })
       .then(async (response) => {
-        if (!response.ok) return;
+        if (!response.ok) {
+          const failure = await response.json().catch(() => null);
+          if (active && isOwnerLocked(response.status, failure)) lockOwner();
+          return;
+        }
         const body = (await response.json()) as {
           manifests?: WorkerManifest[];
           activations?: WorkerActivation[];
           source?: string;
         };
         if (!active) return;
+        setOwnerLocked(false);
         if (body.manifests?.length) setManifests(body.manifests);
         if (body.activations) setActivations(body.activations);
         // With no daemon configured the route still answers 200, carrying the committed catalogue
@@ -280,7 +315,7 @@ export default function WorkforcePage() {
         // The committed catalog remains visible; activation reports daemon availability.
       });
     return () => { active = false; };
-  }, []);
+  }, [reloadKey, lockOwner]);
 
   const buildMonitor = useMemo(
     () => manifests.find((manifest) => manifest.id === 'build-monitor') ?? BUILD_MONITOR_MANIFEST,
@@ -307,13 +342,17 @@ export default function WorkforcePage() {
           </p>
         </div>
         <span className="page-header-aside">
-          {catalogOnly ? (
+          {ownerLocked ? (
+            <span className="status-badge Cancelled">owner sign-in required</span>
+          ) : catalogOnly ? (
             <span className="status-badge Cancelled">committed catalogue</span>
           ) : (
             <span className="status-badge Funded">daemon connected</span>
           )}
         </span>
       </div>
+
+      {ownerLocked ? <OwnerSignIn className="mb" onSignedIn={() => setReloadKey((k) => k + 1)} /> : null}
 
       <ActiveTeam />
 
@@ -332,7 +371,13 @@ export default function WorkforcePage() {
             form. They no longer share a grid row — the form's height stretched the tools into 144px
             columns padded to match. Build Monitor keeps its full-width block; the tools get their
             own content-height row below. */}
-        <BuildMonitorCard manifest={buildMonitor} activation={buildMonitorActivation} catalogOnly={catalogOnly} />
+        <BuildMonitorCard
+          manifest={buildMonitor}
+          activation={buildMonitorActivation}
+          catalogOnly={catalogOnly}
+          ownerLocked={ownerLocked}
+          onOwnerLocked={lockOwner}
+        />
         {operatorTools.length > 0 ? (
           <div className="operator-tools">
             {operatorTools.map((manifest) => (

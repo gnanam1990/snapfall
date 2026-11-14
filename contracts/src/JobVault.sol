@@ -160,6 +160,9 @@ contract JobVault is ReentrancyGuard {
     ///         ONLY address that may later fund it (SC-JV-001).
     /// @dev Not in the Jul 19 task list, but fund/startWork/recordExpense/submitDelivery are all
     ///      unreachable without it. Kept deliberately thin — no unspecified constraints.
+    ///      Any address may register a job naming itself as operator, and choose its customer.
+    ///      That confers no borrowing authority: FloatPool.requestAdvance also requires the
+    ///      operator to be on the pool's admin-managed allowlist (SPEC-03, corrected Nov 2026).
     function createJob(
         bytes32 jobId,
         address customer,

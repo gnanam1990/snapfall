@@ -673,6 +673,32 @@ func TestStatus_NotFoundIsClassifiedByCodeNotByHTTPStatus(t *testing.T) {
 	}
 }
 
+// A 409 PAYMENT_IN_PROGRESS from status is a pay still running: PaymentInProgress names
+// it from the decoded envelope, and nothing else (not PAYMENT_NOT_FOUND, not another 409,
+// not a plain transport error) reads as it.
+func TestStatus_InProgressIsClassifiedByCode(t *testing.T) {
+	c, _ := stub(t, func(w http.ResponseWriter, r *http.Request) {
+		writeH3(w, http.StatusConflict, envelope(CodePaymentInProgress, "a pay for this id is in flight", "null", true))
+	})
+	_, err := c.Status(context.Background(), gv1PaymentID)
+	if !PaymentInProgress(err) {
+		t.Fatalf("409 PAYMENT_IN_PROGRESS was not classified as in progress: %v", err)
+	}
+	if asH3(t, err).PreSign() {
+		t.Error("an in-flight pay must never read as provably unsigned")
+	}
+	for _, other := range []error{
+		&Error{HTTPStatus: http.StatusNotFound, Code: CodePaymentNotFound},
+		&Error{HTTPStatus: http.StatusConflict, Code: CodeBadRequest},
+		errors.New("connection refused"),
+		nil,
+	} {
+		if PaymentInProgress(other) {
+			t.Errorf("%v read as PAYMENT_IN_PROGRESS", other)
+		}
+	}
+}
+
 // SIGNED, SUBMITTED and RECONCILING all mean the outcome is unknown, so the hold stands.
 func TestStatus_UnresolvedStatesKeepTheHold(t *testing.T) {
 	for _, state := range []string{StateSigned, StateSubmitted, StateReconciling} {

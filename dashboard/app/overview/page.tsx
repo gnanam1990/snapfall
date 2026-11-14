@@ -16,6 +16,7 @@ function payloadString(payload: unknown, key: string): string | null {
 }
 import { formatUsdc, formatUsdcExact, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import { ownerDataHidden } from '@/lib/streamClient';
 import { networkLabel } from '@/lib/network';
 import PoolCapacity from '@/components/PoolCapacity';
 import MoneyGraph from '@/components/MoneyGraph';
@@ -25,6 +26,7 @@ import TeamActivityFeed from '@/components/TeamActivityFeed';
 import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
 import ActiveJobs from '@/components/ActiveJobs';
+import OwnerSignIn from '@/components/OwnerSignIn';
 
 /**
  * Pending approvals, as the first viewport's one coloured region and its primary action.
@@ -176,6 +178,25 @@ export default function OverviewPage() {
   }, []);
 
   const status = useEventStream('/api/events/stream', onMessage);
+  const signedOut = status === 'signed-out';
+  // What the daemon stream delivered, as the render may use it: nothing while signed out, and
+  // nothing while the session is unverified (it just changed, or could not be checked), until the
+  // stream is live again.
+  const ownerHidden = ownerDataHidden(status);
+  const ownerSnap = ownerHidden ? null : snap;
+  const ownerPool = ownerHidden ? null : pool;
+
+  // Losing the owner session drops everything the daemon stream delivered under it, so the
+  // signed-out view cannot show it and the next session's first snapshot cannot merge the old
+  // session's activity back into the feed. The chain reads (float) are public and stay.
+  useEffect(() => {
+    if (!signedOut) return;
+    setSnap(null);
+    setPool(null);
+    setAdvances(null);
+    setActivity([]);
+    setDemo(false);
+  }, [signedOut]);
 
   // Poll the chain-read snapshot. Independent of the daemon stream, so it populates on the
   // public deploy too. A failed/unavailable read leaves the last value (or null → dashes),
@@ -207,25 +228,28 @@ export default function OverviewPage() {
   // Treasury + pool stats, sourced from the chain read (float), rendered identically whether or
   // not a daemon is connected. formatUsdc/formatBps dash any absent field, so a pending or
   // unavailable read shows a dash, never a wrong or fabricated value.
+  const poolCapacity = (
+    <PoolCapacity
+      tvlUsdc={float ? formatUsdc(float.totalAssetsUsdc) : null}
+      utilizationBps={float?.utilizationBps ?? null}
+      orgRateBps={float?.orgRateBps ?? null}
+      // formatUsdcExact returns the dash glyph for null, not null, so passing it straight
+      // through would render "— USDC" as if it were a value and lose the absent styling.
+      // feesAccruedUsdc IS null on the live endpoint today, so this is the real case.
+      feesAccruedUsdc={float?.feesAccruedUsdc ? formatUsdcExact(float.feesAccruedUsdc) : null}
+      reserveUsdc={float?.reserveUsdc ? formatUsdcExact(float.reserveUsdc) : null}
+    />
+  );
   const treasuryAndPool = (
     <>
-      <PoolCapacity
-        tvlUsdc={float ? formatUsdc(float.totalAssetsUsdc) : null}
-        utilizationBps={float?.utilizationBps ?? null}
-        orgRateBps={float?.orgRateBps ?? null}
-        // formatUsdcExact returns the dash glyph for null, not null, so passing it straight
-        // through would render "— USDC" as if it were a value and lose the absent styling.
-        // feesAccruedUsdc IS null on the live endpoint today, so this is the real case.
-        feesAccruedUsdc={float?.feesAccruedUsdc ? formatUsdcExact(float.feesAccruedUsdc) : null}
-        reserveUsdc={float?.reserveUsdc ? formatUsdcExact(float.reserveUsdc) : null}
-      />
+      {poolCapacity}
       {/* Pending approvals are the first viewport's single coloured region, and they carry its
           primary action: go and decide. The deciding itself stays on /approvals, because a
           second implementation of an irreversible money action is how two implementations
           drift. */}
       <PendingApprovals
-        count={snap?.pendingApprovals ?? null}
-        daemonConnected={snap?.daemonConnected !== false}
+        count={ownerSnap?.pendingApprovals ?? null}
+        daemonConnected={ownerSnap?.daemonConnected !== false}
       />
     </>
   );
@@ -238,14 +262,16 @@ export default function OverviewPage() {
   const rateHero = (
     <section className="rate-hero" aria-label="Advance rate, earned from delivery history">
       <ScoreRing
-        rateBps={pool?.orgRateBps ?? float?.orgRateBps ?? null}
-        jobPriceUsdc={snap?.activeJobs?.[0]?.priceUsdc ?? null}
+        rateBps={ownerPool?.orgRateBps ?? float?.orgRateBps ?? null}
+        jobPriceUsdc={ownerSnap?.activeJobs?.[0]?.priceUsdc ?? null}
       />
       <RateProgression points={float?.rateHistoryBps ?? null} />
     </section>
   );
 
-  if (!snap) {
+  // Signed out renders here even before the effect above has cleared the cache, so owner data is
+  // never painted alongside the sign-in prompt.
+  if (!ownerSnap) {
     return (
       <>
         <div className="page-header">
@@ -253,8 +279,16 @@ export default function OverviewPage() {
             <h1>Overview</h1>
           </div>
         </div>
-        {treasuryAndPool}
-        <div className="loading mt">Connecting to the daemon event stream…</div>
+        {/* Signed out or unverified: only the public chain read. The approvals count is owner data. */}
+        {ownerHidden ? poolCapacity : treasuryAndPool}
+        {signedOut ? (
+          // A daemon is connected but this visitor has no owner session: the feed is owner data.
+          <OwnerSignIn className="mt" />
+        ) : status === 'unverified' ? (
+          <div className="loading mt">Checking the owner session…</div>
+        ) : (
+          <div className="loading mt">Connecting to the daemon event stream…</div>
+        )}
       </>
     );
   }
@@ -263,7 +297,7 @@ export default function OverviewPage() {
   // Treasury and the pool stats above ARE shown — they are chain reads, verifiable from any
   // node. What needs the daemon is the agent feed, workforce and approvals; rather than
   // fabricate those, this says so and points at the rest of the verifiable evidence.
-  if (snap.daemonConnected === false) {
+  if (ownerSnap.daemonConnected === false) {
     return (
       <>
         <div className="page-header">
@@ -331,7 +365,7 @@ export default function OverviewPage() {
         <MoneyGraph
           latest={activity[0] ?? null}
           treasuryUsdc={float?.treasuryUsdc ?? null}
-          pool={pool}
+          pool={ownerPool}
           live={status === 'live'}
         />
       </div>
@@ -346,7 +380,7 @@ export default function OverviewPage() {
           <Card>
             <CardHeader title="Workforce" />
             <CardBody>
-              <WorkforceStrip agents={snap.workforce ?? []} />
+              <WorkforceStrip agents={ownerSnap.workforce ?? []} />
             </CardBody>
           </Card>
           <Card>
@@ -358,7 +392,7 @@ export default function OverviewPage() {
           <Card>
             <CardHeader title="Active jobs" />
             <CardBody>
-              <ActiveJobs jobs={snap.activeJobs ?? []} />
+              <ActiveJobs jobs={ownerSnap.activeJobs ?? []} />
             </CardBody>
           </Card>
         </div>

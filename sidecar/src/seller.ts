@@ -24,7 +24,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { verifyTypedData, type Address, type Hex } from 'viem';
+import { getAddress, isAddress, verifyTypedData, type Address, type Hex } from 'viem';
 import { releaseDecision } from './release-policy.js';
 import {
   settlementFor,
@@ -247,7 +247,40 @@ function authorizationShape(a: unknown): { ok: true } | { ok: false; reason: str
   for (const field of ['from', 'to', 'nonce'] as const) {
     if (typeof r[field] !== 'string') return { ok: false, reason: `${field} must be a string, got ${typeof r[field]}` };
   }
+  // The nonce is a bytes32 on chain and in the EIP-712 digest, and both read hex
+  // case-insensitively. Anything other than exactly 32 bytes of 0x-hex is not an EIP-3009 nonce;
+  // and the canonical form (see canonicalAuthorization) only works as a replay key if every
+  // accepted input has exactly one canonical spelling.
+  if (!NONCE_RE.test(r.nonce as string)) {
+    return { ok: false, reason: 'nonce must be a 32-byte 0x-prefixed hex string (0x + 64 hex characters)' };
+  }
+  for (const field of ['from', 'to'] as const) {
+    // Strict: a mixed-case address must carry a valid EIP-55 checksum, the same rule viem applies
+    // when it encodes the typed data, so this rejects up front what verification would throw on.
+    if (!isAddress(r[field] as string)) return { ok: false, reason: `${field} is not a valid 20-byte address` };
+  }
   return { ok: true };
+}
+
+/** Exactly 32 bytes of hex behind a lowercase `0x`. */
+const NONCE_RE = /^0x[0-9a-fA-F]{64}$/;
+
+/**
+ * Rewrites a shape-checked authorization IN PLACE to its one canonical spelling: the nonce in
+ * lowercase hex, `from`/`to` in EIP-55 checksum form.
+ *
+ * The replay and in-flight guard keys on the nonce STRING, but the signature and the chain treat
+ * it as bytes32, so `0xAB..` and `0xab..` are one authorization. Keyed raw, every re-casing of a
+ * spent nonce was a fresh key: the same signed payment delivered again, and k concurrent
+ * re-casings broadcast k times. Canonicalising once, before the claim, and mutating the payload
+ * itself means the claim, the release, the logs, the signature check, the facilitator's
+ * verify/settle and the receipt all see the same value, so no later step can reintroduce the raw
+ * one. The signed digest is unchanged: both encodings hash the same bytes.
+ */
+function canonicalAuthorization(a: PaymentPayload['payload']['authorization']): void {
+  a.nonce = a.nonce.toLowerCase();
+  a.from = getAddress(a.from);
+  a.to = getAddress(a.to);
 }
 
 async function verifyPayment(payment: PaymentPayload, resource: Resource, path: string): Promise<Verdict> {
@@ -415,7 +448,11 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // Node runs one request at a time between awaits, so a check and a claim in the SAME
   // synchronous block is atomic against concurrent requests. Split them with any await and it is
   // not, however early the check looks. This is the whole of the double-broadcast guard.
+  //
+  // Canonicalise FIRST, in the same synchronous block: the claim key must be the canonical nonce,
+  // or a re-cased copy of a spent authorization is a different key (replay and double broadcast).
   const auth = payment.payload.authorization;
+  canonicalAuthorization(auth);
   const claim = claimNonce(auth.nonce, path, auth.value, auth.from);
 
   if (claim.kind === 'in-flight') {

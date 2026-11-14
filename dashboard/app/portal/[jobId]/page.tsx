@@ -24,6 +24,17 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { formatUsdcExact } from '@/lib/format';
 import { OwnWalletPanel } from '@/components/OwnWalletPanel';
 import { passkeyConfig } from '@/lib/passkeyWallet';
+import {
+  isSettlementPaused,
+  parseAcceptance,
+  portalPlan,
+  portalView,
+  settlementFromAcceptResponse,
+  PORTAL_COPY,
+  type AcceptanceRead,
+  type PortalPlan,
+  type Settlement,
+} from '@/lib/portalSettlement';
 
 type Gap = { stage: string; cause: string };
 type Line = { kind: string; block: number; payload: Record<string, string> };
@@ -66,24 +77,51 @@ function PortalInner() {
   const jobId = String(useParams().jobId ?? '');
   const token = useSearchParams().get('token') ?? '';
 
-  const [stage, setStage] = useState<string | null>(null);
-  /** The job's on-chain id; the customer's own wallet needs it to settle. */
-  const [vaultJobId, setVaultJobId] = useState<string | null>(null);
-  const [accepted, setAccepted] = useState(false);
+  /** The daemon's status read: stage, accepted, the job's on-chain id, and (newer daemons) the
+   *  settlement. Accepted is not settled: lib/portalSettlement.ts decides what may be said. */
+  const [read, setRead] = useState<AcceptanceRead>({ stage: null, accepted: false, vaultJobId: null, settlement: null });
+  /** What this page's own last successful Accept reported, for a daemon whose read omits it. */
+  const [lastAccept, setLastAccept] = useState<Settlement | null>(null);
+  const [checking, setChecking] = useState(false);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
-  // A note is either the new state after a successful accept, or a failure. They must not look
-  // alike: .portal-note is success-green, so a 503 rendered as reassuring green text under the
-  // heading "Your deliverable is ready", telling a customer their settlement worked when it had
-  // not. The tone travels with the note so the two cannot be confused again.
+  // The note is a failed Accept, only. A success is told by the settlement view, never by a
+  // note: .portal-note is success-green, so a 503 once rendered as reassuring green text under the
+  // heading "Your deliverable is ready", and a state slug like "accepted pending chain" in the
+  // same green read as done when nothing had settled.
   const [note, setNote] = useState<string | null>(null);
-  const [noteTone, setNoteTone] = useState<'ok' | 'error'>('ok');
   const [busy, setBusy] = useState(false);
   const [authError, setAuthError] = useState(false);
   /** A failed status read is not "no status": it must not leave an Accept button looking ready. */
   const [statusUnavailable, setStatusUnavailable] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  /** The last Accept met the operator's pause (423 FROZEN). Cleared by a re-read or a success. */
+  const [paused, setPaused] = useState(false);
+  /** Self-custody only: the job's status as JobVault reports it. Null until read, or unreadable. */
+  const [chainStatus, setChainStatus] = useState<string | null>(null);
+
+  // SELF-CUSTODY MODE: with a Circle client key configured, the customer settles from their own
+  // passkey wallet and the daemon-custodial button is not offered at all. Two Accept buttons that
+  // settle through different keys would be a choice the customer cannot make well, and the
+  // custodial one would revert against a job whose customer is the customer's own wallet.
+  const selfCustody = passkeyConfig() !== null;
 
   const authHeaders = useCallback(() => ({ authorization: `Bearer ${token}` }), [token]);
+
+  /** The chain's own view of the job. In self-custody that, not the daemon's record, says whether
+   *  the customer's settlement happened (lib/portalSettlement.ts, portalPlan). */
+  const loadChain = useCallback(async (vaultJobId: string | null) => {
+    if (!vaultJobId) {
+      setChainStatus(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(vaultJobId)}`, { cache: 'no-store' });
+      const body = res.ok ? ((await res.json().catch(() => null)) as { status?: unknown } | null) : null;
+      setChainStatus(typeof body?.status === 'string' ? body.status : null);
+    } catch {
+      setChainStatus(null);
+    }
+  }, []);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -99,17 +137,16 @@ function PortalInner() {
         setStatusUnavailable(true);
         return;
       }
-      const body = await res.json().catch(() => ({}));
-      setStage(body.stage ?? null);
-      setVaultJobId(typeof body.vaultJobId === 'string' ? body.vaultJobId : null);
-      setAccepted(Boolean(body.accepted));
+      const next = parseAcceptance(await res.json().catch(() => ({})));
+      setRead(next);
       setStatusUnavailable(false);
+      if (selfCustody) await loadChain(next.vaultJobId);
     } catch {
       setStatusUnavailable(true);
     } finally {
       setLoaded(true);
     }
-  }, [jobId, authHeaders]);
+  }, [jobId, authHeaders, selfCustody, loadChain]);
 
   const loadReceipt = useCallback(async () => {
     try {
@@ -136,7 +173,6 @@ function PortalInner() {
   const accept = useCallback(async () => {
     setBusy(true);
     setNote(null);
-    setNoteTone('ok');
     try {
       const res = await fetch(`/api/customer/${encodeURIComponent(jobId)}/accept`, {
         method: 'POST',
@@ -145,23 +181,58 @@ function PortalInner() {
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        setNote(body.state ?? 'accepted');
-        setNoteTone('ok');
+        // The outcome is the settlement view below, announced by its own live region.
+        setPaused(false);
+        setLastAccept(settlementFromAcceptResponse(body));
         await loadStatus();
         await loadReceipt();
+      } else if (isSettlementPaused(res.status, body)) {
+        // The operator's pause: told by the settlement view, not as an error. Re-read, so a
+        // self-custody customer's own settlement on chain is still shown as what it is.
+        setPaused(true);
+        await loadStatus();
       } else {
         setNote(
           body?.error?.message ?? `The acceptance could not be recorded (error ${res.status}).`,
         );
-        setNoteTone('error');
       }
     } catch {
-      setNote('The acceptance could not be sent. Nothing was settled; you can try again.');
-      setNoteTone('error');
+      // The request may have reached the daemon even though its answer did not reach us, so this
+      // must not claim that nothing settled. Retrying is safe: the job settles at most once.
+      setNote('The acceptance could not be confirmed. Check again, or try once more: the job can only settle once.');
     } finally {
       setBusy(false);
     }
   }, [jobId, authHeaders, loadStatus, loadReceipt]);
+
+  /** The wallet panel's follow-up once its acceptDelivery transaction succeeded. The chain has
+   *  settled by then, whatever the daemon's Accept answers; when that POST fails, nothing else
+   *  re-reads this page's chain status, which would keep offering the wallet for a job the panel
+   *  already shows settled. So the chain is re-read either way. */
+  const acceptAfterWallet = useCallback(
+    async (vaultJobId: string) => {
+      try {
+        await accept();
+      } finally {
+        await loadChain(vaultJobId);
+      }
+    },
+    [accept, loadChain],
+  );
+
+  const checkAgain = useCallback(async () => {
+    setChecking(true);
+    setNote(null);
+    // The page cannot see the pause end; a re-read puts the way forward back, and an Accept that
+    // meets the pause again says so again.
+    setPaused(false);
+    try {
+      await loadStatus();
+      await loadReceipt();
+    } finally {
+      setChecking(false);
+    }
+  }, [loadStatus, loadReceipt]);
 
   if (!token) {
     return (
@@ -183,11 +254,30 @@ function PortalInner() {
   }
 
   const paid = invoice?.totals?.[CUSTOMER_SAFE.paid] ?? null;
-  // SELF-CUSTODY MODE: with a Circle client key configured, the customer settles from their own
-  // passkey wallet and the daemon-custodial button is not offered at all. Two Accept buttons that
-  // settle through different keys would be a choice the customer cannot make well, and the
-  // custodial one would revert against a job whose customer is the customer's own wallet.
-  const selfCustody = passkeyConfig() !== null;
+  const view = portalView(read, lastAccept);
+  // What is said and offered for every view, decided in lib/portalSettlement.ts (portalPlan).
+  const plan = portalPlan({ view, stage: read.stage, statusUnavailable, selfCustody, chainStatus, paused });
+
+  const acceptButton = (a: NonNullable<PortalPlan['accept']>) => (
+    <button
+      type="button"
+      className={a.primary ? 'portal-accept' : 'portal-secondary'}
+      disabled={busy || checking || !loaded}
+      aria-busy={busy || undefined}
+      onClick={() => void accept()}
+    >
+      {busy ? a.busy : a.label}
+    </button>
+  );
+  const walletJobId = read.vaultJobId;
+  const ownWallet = walletJobId ? (
+    <OwnWalletPanel vaultJobId={walletJobId} onAccepted={() => acceptAfterWallet(walletJobId)} />
+  ) : (
+    <p className="portal-body">
+      This delivery is not linked to its on-chain escrow yet, so it cannot be settled from your
+      wallet. Please ask the operator.
+    </p>
+  );
 
   return (
     <div className="portal-card">
@@ -196,59 +286,45 @@ function PortalInner() {
       <p className="portal-sub portal-jobid">Job {jobId}</p>
 
       <div className="portal-status">
-        {statusUnavailable ? (
-          <span className="status-badge">status unavailable</span>
-        ) : (
-          <span className={`status-badge ${accepted ? 'Accepted' : stage ? 'Delivered' : ''}`}>
-            {accepted ? 'Accepted' : (stage ?? 'checking…')}
-          </span>
-        )}
+        <span className={`status-badge ${plan.badge.tone}`}>{plan.badge.label}</span>
       </div>
 
-      {statusUnavailable ? (
-        <p className="portal-body">
-          We could not reach the operator’s system to check this delivery just now. Nothing has
-          been accepted or settled. Please refresh in a moment, or ask the operator for a fresh
-          link.
-        </p>
-      ) : !accepted && selfCustody ? (
-        vaultJobId ? (
-          <OwnWalletPanel vaultJobId={vaultJobId} onAccepted={accept} />
-        ) : (
-          <p className="portal-body">
-            This delivery is not linked to its on-chain escrow yet, so it cannot be settled from your
-            wallet. Please ask the operator.
-          </p>
-        )
-      ) : !accepted ? (
-        <>
-          <p className="portal-body">
-            Review is complete. Accepting releases your escrowed payment and settles the job on
-            chain. This cannot be undone.
-          </p>
-          <button
-            type="button"
-            className="portal-accept"
-            disabled={busy || !loaded}
-            aria-busy={busy || undefined}
-            onClick={() => void accept()}
-          >
-            {busy ? 'Settling…' : 'Accept & settle'}
-          </button>
-        </>
-      ) : (
-        <p className="portal-body portal-accepted">
-          Thank you — this delivery is accepted and settled.
-        </p>
-      )}
-
-      {/* The outcome of an irreversible money action has to be announced, not just painted. */}
-      <div aria-live="polite" role="status">
-        {note ? (
-          <p className={`portal-note${noteTone === 'error' ? ' is-error' : ''}`}>
-            {noteTone === 'error' ? note : note.replace(/-/g, ' ')}
+      {/* What happened to the money is announced, not just painted: one persistent live region
+          holds the status sentence, so a change of view (settling, not settled, settled) is read
+          out. The actions sit outside it. */}
+      <div role="status" aria-live="polite">
+        {plan.copy ? (
+          <p className={plan.copy === 'settled' ? 'portal-body portal-accepted' : 'portal-body'}>
+            {PORTAL_COPY[plan.copy]}
           </p>
         ) : null}
+      </div>
+
+      {/* Self-custody settles from the customer's own wallet; the custodial Accept would revert
+          against it. The panel offers the wallet's accept only while the chain still allows it,
+          and records the Accept with the daemon once its transaction succeeds. */}
+      {plan.wallet ? ownWallet : null}
+      {plan.accept?.primary ? acceptButton(plan.accept) : null}
+      {plan.checkAgain || (plan.accept && !plan.accept.primary) ? (
+        <div className="portal-wallet-actions portal-recheck">
+          {plan.checkAgain ? (
+            <button
+              type="button"
+              className={plan.checkAgain.primary ? 'portal-accept' : 'portal-secondary'}
+              disabled={checking || busy}
+              aria-busy={checking || undefined}
+              onClick={() => void checkAgain()}
+            >
+              {checking ? 'Checking…' : 'Check again'}
+            </button>
+          ) : null}
+          {plan.accept && !plan.accept.primary ? acceptButton(plan.accept) : null}
+        </div>
+      ) : null}
+
+      {/* A failed Accept is announced too, in the error register. */}
+      <div aria-live="polite" role="status">
+        {note ? <p className="portal-note is-error">{note}</p> : null}
       </div>
 
       {invoice ? (
