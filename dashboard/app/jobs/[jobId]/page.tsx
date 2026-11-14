@@ -142,8 +142,9 @@ function AcceptLink({
 
   // The gate, not this effect, is what stops a mint answering into a changed session: it hears the
   // stream's status synchronously, before React renders it. This only tidies the state, before
-  // paint. Blocked: drop the link. Unblocked again (a sign-in here or in another tab settled): a
-  // 401 from before no longer describes this visitor, so the prompt it raised goes away.
+  // paint. Blocked: drop the link. Unblocked again (a session change settled, or the stream was
+  // declared unavailable, where the prompt is shown anyway): a 401 from before the change no longer
+  // describes this visitor, so the prompt it raised goes away.
   useLayoutEffect(() => {
     if (blocked) {
       setLink(null);
@@ -168,7 +169,13 @@ function AcceptLink({
         headers: { 'content-type': 'application/json' },
         body: '{}',
       });
-      const body = (await res.json()) as { acceptToken?: string; error?: { message?: string } };
+      // A proxy in front of the dashboard can answer with an HTML error page: that is a failed mint
+      // with a status, not an unreachable API.
+      const body = (await res.json().catch(() => ({}))) as { acceptToken?: string; error?: { message?: string } };
+      // A 401 or an error from a mint that started under an earlier session says nothing about the
+      // visitor now: it must not raise the sign-in prompt, or an error, over a session that has
+      // since settled. Nothing was rotated, so it is dropped.
+      if (!res.ok && !current()) return;
       if (isOwnerLocked(res.status, body)) {
         setLocked(true);
         return;

@@ -21,7 +21,10 @@ const OPERATOR_SCAN_BUDGET_MS = 4_000;
 /** Deadline for each phase of operator-state reads (the grant delay, then every address). With
  *  the scan budget that is at most 5.5 s of operator work, inside CapitalControls' 6 s read
  *  timeout, so a stalled getter comes back as `unknown` beside the caps instead of as a
- *  whole-section error. */
+ *  whole-section error. The capital-control reads run first, under their own deadline
+ *  (loadGovernance's DEFAULT_CAP_READ_BUDGET_MS, 5 s): a stalled one ends the load as a 503 inside
+ *  that timeout, but caps that answer slowly plus a full operator pass can still outlast it, and
+ *  then the section shows its own timeout error. */
 const OPERATOR_READ_BUDGET_MS = 750;
 import { chainNetwork, clientSafeError, networkName, requireAddress } from '@/lib/network';
 

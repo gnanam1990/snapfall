@@ -242,6 +242,43 @@ function main() {
     rmSync(d9, { recursive: true, force: true });
   }
 
+  // 10. A write that has to create its directories makes them durable too: each new directory is an
+  //     entry in its parent, so every parent up to the one that already existed is synced, and a
+  //     retry after a failed sync still syncs them (its mkdir finds the directories already there).
+  if (process.platform !== 'win32') {
+    const root = join(tmpdir(), `snapfall-store-test-${randomBytes(4).toString('hex')}`);
+    const p10 = join(root, 'a', 'b', 'payments.json');
+    const log10: string[] = [];
+    let failParent = true;
+    const s10 = new PaymentStore(p10, recordingFs(log10, () => (failParent ? tmpdir() : null)));
+    let threw10 = false;
+    try {
+      s10.tombstone('pay_00000000000000b0');
+    } catch {
+      threw10 = true;
+    }
+    check('a write whose new-directory sync fails throws', threw10, log10.join(' | '), true);
+    failParent = false;
+    const from10 = log10.length;
+    s10.tombstone('pay_00000000000000b0');
+    const retry10 = log10.slice(from10);
+    check(
+      'the retry syncs every parent of a directory the store created, up to the one that existed',
+      [join(root, 'a'), root, tmpdir()].every((d) => retry10.includes(`fsync ${d}`)),
+      retry10.join(' | '),
+      true,
+    );
+    const log10b: string[] = [];
+    new PaymentStore(p10, recordingFs(log10b)).tombstone('pay_00000000000000b1');
+    check(
+      'once the directories exist, only the store directory is synced',
+      log10b.includes(`fsync ${join(root, 'a', 'b')}`) && !log10b.includes(`fsync ${join(root, 'a')}`),
+      log10b.join(' | '),
+      true,
+    );
+    rmSync(root, { recursive: true, force: true });
+  }
+
   console.log(
     failures === 0
       ? '\nPaymentStore green: atomic write, fail-closed load, restart survival, durable not-found tombstones.\n'

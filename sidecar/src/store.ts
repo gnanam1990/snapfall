@@ -25,7 +25,8 @@ import { dirname } from 'node:path';
 export interface StoreFs {
   existsSync(path: string): boolean;
   readFileSync(path: string, encoding: 'utf8'): string;
-  mkdirSync(path: string, options: { recursive: true }): unknown;
+  /** Returns the first directory it created, or undefined when every one already existed. */
+  mkdirSync(path: string, options: { recursive: true }): string | undefined;
   openSync(path: string, flags: string): number;
   writeSync(fd: number, buffer: Buffer, offset: number, length: number): number;
   fsyncSync(fd: number): void;
@@ -91,6 +92,9 @@ export class PaymentStore {
   /** True from the start of a write until one completes: memory holds something the file may not
    *  (a tombstone among it), so the next tombstone() call must write again before it returns. */
   private unflushed = false;
+  /** The top directory a persist() created whose new entries are not yet known to be on disk. Kept
+   *  across a failed write, since the retry's mkdir finds the directories already there. */
+  private createdUnsynced: string | null = null;
 
   constructor(
     private readonly path: string,
@@ -141,7 +145,8 @@ export class PaymentStore {
   private persist(): void {
     this.unflushed = true;
     const dir = dirname(this.path);
-    this.io.mkdirSync(dir, { recursive: true });
+    const created = this.io.mkdirSync(dir, { recursive: true }) ?? this.createdUnsynced;
+    this.createdUnsynced = created;
     // Atomic write: a crash mid-write leaves the OLD file intact, never a torn one.
     // rename() is atomic on the same filesystem, so a reader (or a restart) always sees
     // a complete document — the same posture as the Go daemon's memory files.
@@ -163,12 +168,25 @@ export class PaymentStore {
     }
     this.io.renameSync(tmp, this.path);
     this.syncDir(dir);
+    // A directory this write had to create is itself a new entry in its parent: sync each parent up
+    // to the one that already existed, or a power loss can drop the whole directory, file and all.
+    if (created !== null) {
+      for (let d = dir; ; d = dirname(d)) {
+        const parent = dirname(d);
+        if (parent === d) break;
+        this.syncDir(parent);
+        if (d === created) break;
+      }
+      this.createdUnsynced = null;
+    }
     this.unflushed = false;
   }
 
   /** fsync a directory, so a rename in it survives a power loss. Windows cannot open a directory
    *  for syncing (and NTFS journals the rename itself), so it is skipped there; anywhere else a
-   *  failure throws, and the caller treats the write as not done. */
+   *  failure throws, and the caller treats the write as not done. On macOS fsync reaches the drive
+   *  but not past its write cache (that takes F_FULLFSYNC, which node:fs does not expose), so a
+   *  power loss there can still lose the last writes; Linux is the durable deployment target. */
   private syncDir(dir: string): void {
     if (process.platform === 'win32') return;
     const fd = this.io.openSync(dir, 'r');
