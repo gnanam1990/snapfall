@@ -116,7 +116,7 @@ function ExpenseRows({ timeline, total }: { timeline: ActivityMessage[]; total: 
  * the visitor is the owner (`ownerHidden`: a sign-out here or in another tab, or a session that
  * could not be verified), not left on screen under the signed-out badge.
  */
-function AcceptLink({ jobId, ownerHidden }: { jobId: string; ownerHidden: boolean }) {
+function AcceptLink({ jobId, ownerHidden, signedOut }: { jobId: string; ownerHidden: boolean; signedOut: boolean }) {
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -137,6 +137,9 @@ function AcceptLink({ jobId, ownerHidden }: { jobId: string; ownerHidden: boolea
   }, [ownerHidden]);
 
   const mint = useCallback(async () => {
+    // Minting rotates the job's current link, so it never starts while owner data is hidden: the
+    // new link could not be shown, and the old one would already be dead.
+    if (ownerHiddenNow.current) return;
     const mine = ++generation.current;
     const current = () => generation.current === mine && !ownerHiddenNow.current;
     setBusy(true);
@@ -160,7 +163,12 @@ function AcceptLink({ jobId, ownerHidden }: { jobId: string; ownerHidden: boolea
         setError(body?.error?.message ?? `mint failed (${res.status})`);
         return;
       }
-      if (!current()) return; // owner data was hidden while this mint was in flight
+      if (!current()) {
+        // Owner data was hidden while this mint was in flight. The daemon already rotated the
+        // link, so say so rather than drop the result silently.
+        setError('owner data was hidden before the new link arrived; any earlier link no longer works, so mint again once signed in');
+        return;
+      }
       const url = `${window.location.origin}/portal/${encodeURIComponent(jobId)}?token=${encodeURIComponent(body.acceptToken)}`;
       setLink(url);
       try {
@@ -184,7 +192,7 @@ function AcceptLink({ jobId, ownerHidden }: { jobId: string; ownerHidden: boolea
     <div className="card mt">
       <div className="job-expense-head">
         <p className="card-title">Customer link</p>
-        <button type="button" className="activity-action" onClick={() => void mint()} disabled={busy}>
+        <button type="button" className="activity-action" onClick={() => void mint()} disabled={busy || ownerHidden}>
           {busy ? 'Minting…' : link ? 'Mint a new link' : 'Mint customer link'}
         </button>
       </div>
@@ -192,7 +200,9 @@ function AcceptLink({ jobId, ownerHidden }: { jobId: string; ownerHidden: boolea
         Shown once, and minting again rotates any link already issued for this job.
       </p>
       {error ? <p className="job-link-error">{error}</p> : null}
-      {locked ? <OwnerSignIn className="mt" onSignedIn={() => setLocked(false)} /> : null}
+      {/* Minting is off while owner data is hidden, so a signed-out owner signs in here rather
+          than through a mint's 401. */}
+      {locked || signedOut ? <OwnerSignIn className="mt" onSignedIn={() => setLocked(false)} /> : null}
       {/* Checked here too, so the render that first reports the change never paints the link
           before the effect above has cleared it. */}
       {link && !ownerHidden ? (
@@ -518,7 +528,7 @@ export default function JobDetailPage() {
       {/* timeline */}
       <ExpenseRows timeline={ownerTimeline} total={job?.onchainExpensesUsdc ?? null} />
 
-      <AcceptLink jobId={jobId} ownerHidden={ownerHidden} />
+      <AcceptLink jobId={jobId} ownerHidden={ownerHidden} signedOut={signedOut} />
 
       <div className="card mt">
         <p className="card-title">Timeline</p>

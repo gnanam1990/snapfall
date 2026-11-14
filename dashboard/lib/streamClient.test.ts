@@ -337,3 +337,24 @@ test('a fresh connection that drops before it ever opened is unverified, not rec
   assert.equal(ownerDataHidden(h.statuses.at(-1)!), true);
 });
 
+test('after a session change, a signed-in read for a failed fresh connection still hides owner data', async () => {
+  const h = harness(); // the session read answers signed in
+  h.sources[0].open();
+  h.client.sessionChanged(); // a sign-in elsewhere: a new session nobody has verified here
+  const from = h.statuses.length - 1;
+  h.sources[1].fail(); // the fresh connection fails before it ever opened
+  await h.settle();
+  for (const s of h.statuses.slice(from)) assert.equal(ownerDataHidden(s), true, `status ${s} showed owner data`);
+  h.advance(STREAM_RETRY_MS);
+  assert.equal(h.sources.length, 3, 'it retries');
+  h.sources[2].open();
+  assert.equal(h.statuses.at(-1), 'live', 'shown again once a connection passes the guard');
+});
+
+test('a verified stream the browser gave up on, with a signed-in read, rides it out as reconnecting', async () => {
+  const h = harness();
+  h.sources[0].open();
+  h.sources[0].fail(); // e.g. a 502 from a proxy: the session is still good
+  await h.settle();
+  assert.equal(h.statuses.at(-1), 'reconnecting');
+});

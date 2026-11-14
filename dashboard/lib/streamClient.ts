@@ -229,8 +229,11 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
       closeDraining();
       void readSessionBounded().then((session) => {
         if (disposed || es !== source) return;
-        const next = statusAfterClosed(session);
-        if (next !== 'reconnecting') verified = false;
+        const read = statusAfterClosed(session);
+        if (read !== 'reconnecting') verified = false;
+        // A signed-in read is not a pass through the guard: until a connection opens for this
+        // session, its data stays hidden.
+        const next = read === 'reconnecting' && !verified ? 'unverified' : read;
         onStatus(next);
         if (next === 'signed-out') return; // resumed by sessionChanged()
         retry = setTimer(() => {
