@@ -23,7 +23,7 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -57,6 +57,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** How many X-PAYMENT headers each path received: the "did a signature leave" ground truth. */
 const paid = new Map<string, number>();
+/** How many unpaid (402 probe) requests each path received: "the seller was not even asked". */
+const probed = new Map<string, number>();
 /** Paths whose 402 probe is held open until the test releases it, and tells the test it arrived. */
 const stalls = new Map<string, { gate: Promise<void>; onArrive: () => void }>();
 
@@ -138,6 +140,7 @@ async function fixture(req: IncomingMessage, res: ServerResponse) {
   const path = (req.url ?? '').split('?')[0] ?? '';
   const xp = req.headers['x-payment'];
   if (typeof xp !== 'string') {
+    probed.set(path, (probed.get(path) ?? 0) + 1);
     if (path === '/hang') return; // never answers; the sidecar's probe bound must cut it off
     const held = stalls.get(path);
     if (held) {
@@ -181,6 +184,32 @@ async function fixture(req: IncomingMessage, res: ServerResponse) {
       return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth) }, {
         'x-payment-response': b64(receiptFor(auth, { nonce: `0x${'99'.repeat(32)}` })),
       });
+    case '/text-v1hdr': // a non-JSON resource body; the receipt rides only in the v1 header
+      res.writeHead(200, { 'content-type': 'text/plain', 'x-payment-response': b64(receiptFor(auth)) });
+      return res.end('plain text, not json');
+    case '/empty-v1hdr': // an empty body; the receipt rides only in the v1 header
+      res.writeHead(200, { 'x-payment-response': b64(receiptFor(auth)) });
+      return res.end();
+    case '/v2meta-body': // control: a body receipt next to ordinary v2 settle metadata (not a receipt)
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth) }, {
+        'payment-response': b64({ success: true, transaction: `0x${'ab'.repeat(32)}`, network: NETWORK, payer: auth.from }),
+      });
+    case '/malformed-body-receipt': // a good header receipt, contradicted by a malformed body receipt
+      return json(res, 200, { data: { ok: true }, receipt: { ...receiptFor(auth), nonce: 123 } }, {
+        'x-payment-response': b64(receiptFor(auth)),
+      });
+    case '/string-body-receipt': // a good header receipt next to a body receipt that is not an object
+      return json(res, 200, { data: { ok: true }, receipt: 'paid' }, { 'x-payment-response': b64(receiptFor(auth)) });
+    case '/malformed-hdr-receipt': // a good body receipt next to a header receipt with a non-string settlement
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth) }, {
+        'x-payment-response': b64({ ...receiptFor(auth), settlement: 7 }),
+      });
+    case '/malformed-v2-receipt': // a good body receipt next to a v2 header that claims a receipt but lacks fields
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth) }, {
+        'payment-response': b64({ success: true, settlement: 'NOT_BROADCAST' }),
+      });
+    case '/undecodable-hdr': // a good body receipt next to an X-PAYMENT-RESPONSE that is not base64 JSON
+      return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth) }, { 'x-payment-response': '%%not-a-receipt%%' });
     default: // control (/receipt, /stall): the Snapfall seller shape
       return json(res, 200, { data: { ok: true }, receipt: receiptFor(auth) });
   }
@@ -293,6 +322,11 @@ for (const [path, shape] of [
   ['/wrong-payer', 'a 200 receipt naming a different payer'],
   ['/wrong-payee', 'a 200 receipt naming a different payee'],
   ['/conflict-hdr', 'a 200 whose receipt header contradicts the body on the nonce'],
+  ['/malformed-body-receipt', 'a 200 whose body receipt is malformed next to a good header receipt'],
+  ['/string-body-receipt', 'a 200 whose body receipt is a string next to a good header receipt'],
+  ['/malformed-hdr-receipt', 'a 200 whose header receipt is malformed next to a good body receipt'],
+  ['/malformed-v2-receipt', 'a 200 whose v2 header claims a receipt but is incomplete'],
+  ['/undecodable-hdr', 'a 200 whose X-PAYMENT-RESPONSE does not decode, next to a good body receipt'],
 ] as const) {
   test(`${shape} after X-PAYMENT is RECONCILING, never FAILED`, async () => {
     const intent = makeIntent(path);
@@ -318,6 +352,9 @@ for (const [path, shape] of [
   ['/receipt', 'a Snapfall receipt in the body'],
   ['/v1hdr', 'a receipt in the v1 X-PAYMENT-RESPONSE header'],
   ['/txhash', 'a receipt settled with a transaction hash'],
+  ['/text-v1hdr', 'a header receipt with a non-JSON body'],
+  ['/empty-v1hdr', 'a header receipt with an empty body'],
+  ['/v2meta-body', 'a body receipt next to ordinary v2 settle metadata'],
 ] as const) {
   test(`control: ${shape} is still DELIVERED`, async () => {
     const intent = makeIntent(path);
@@ -499,4 +536,86 @@ test('every non-canonical spelling of the price is refused by the probe, before 
   }
   // Control: the canonical price is not refused by this check.
   assert.equal((await probeChallenge(`${FIXTURE}/receipt-probe`, CHAIN_ID)).amount, PRICE);
+});
+
+// ── 4. a PAYMENT_NOT_FOUND is a promise: a pay that arrives after it never signs ──────────────
+//
+// The daemon releases its hold on PAYMENT_NOT_FOUND. A pay still in transit at that moment (sent,
+// not yet read by the sidecar) is neither recorded nor in flight, so status cannot see it. The
+// sidecar therefore tombstones every id it reports not found, durably, and refuses a later pay for
+// that id before anything is signed or the seller is even probed.
+
+interface StoredEntry {
+  kind?: string;
+  paymentId?: string;
+}
+const storedEntries = (): StoredEntry[] => JSON.parse(readFileSync(STORE_PATH, 'utf8')) as StoredEntry[];
+const tombstoned = (pid: string) =>
+  storedEntries().some((e) => e.kind === 'PAYMENT_NOT_FOUND_TOMBSTONE' && e.paymentId === pid);
+
+test('a pay that arrives after status answered PAYMENT_NOT_FOUND is refused pre-sign; the seller receives nothing', async () => {
+  const path = '/late-pay';
+  const intent = makeIntent(path);
+  const pid = paymentIdOf(intent);
+
+  const before = await status(pid);
+  assert.equal(before.status, 404);
+  assert.equal(before.json?.error?.code, 'PAYMENT_NOT_FOUND');
+  assert.ok(tombstoned(pid), 'the not-found answer went out without a durable fence behind it');
+
+  for (let i = 0; i < 2; i++) {
+    const r = await pay(intent);
+    assert.equal(r.status, 410, JSON.stringify(r.json));
+    assert.equal(r.json?.error?.code, 'APPROVAL_EXPIRED', 'the refusal must be a code the daemon classifies as pre-sign');
+    assert.equal(r.json?.error?.paymentId, null, 'no durable record exists, so the envelope carries no paymentId');
+  }
+  assert.equal(paid.get(path) ?? 0, 0, 'an authorization was sent for an id already reported not found');
+  assert.equal(probed.get(path) ?? 0, 0, 'the seller was contacted for a fenced id');
+
+  const after = await status(pid);
+  assert.equal(after.json?.error?.code, 'PAYMENT_NOT_FOUND', 'not-found must stay the truth: nothing was written or signed');
+});
+
+test('status and pay racing on one id: a not-found answer and a signature never coexist', async () => {
+  // Fired together, either the pay registers first (status says PAYMENT_IN_PROGRESS or reads the
+  // record) or the tombstone does (the pay is refused). The one forbidden outcome is a 404 on an id
+  // that was then signed.
+  for (let i = 0; i < 12; i++) {
+    const path = `/race-${i}`;
+    const intent = makeIntent(path);
+    const pid = paymentIdOf(intent);
+    let st: Awaited<ReturnType<typeof status>>;
+    let r: Awaited<ReturnType<typeof pay>>;
+    if (i % 2 === 0) [st, r] = await Promise.all([status(pid), pay(intent)]);
+    else [r, st] = await Promise.all([pay(intent), status(pid)]);
+    const notFound = st.json?.error?.code === 'PAYMENT_NOT_FOUND';
+    const signed = (paid.get(path) ?? 0) > 0;
+    assert.ok(!(notFound && signed), `race ${i}: status said not found and the pay still signed (${JSON.stringify(r.json)})`);
+    if (notFound) assert.equal(r.json?.error?.code, 'APPROVAL_EXPIRED', JSON.stringify(r.json));
+    else assert.equal(r.json?.state, 'DELIVERED', JSON.stringify(r.json));
+  }
+});
+
+test('a pay in flight is PAYMENT_IN_PROGRESS on status and is NOT fenced by it', async () => {
+  const held = stall('/stall-fence');
+  const intent = makeIntent('/stall-fence');
+  const pid = paymentIdOf(intent);
+  const pending = pay(intent);
+  await held.arrived;
+  const st = await status(pid);
+  assert.equal(st.status, 409, JSON.stringify(st.json));
+  assert.equal(st.json?.error?.code, 'PAYMENT_IN_PROGRESS');
+  assert.equal(tombstoned(pid), false, 'an in-flight id was tombstoned');
+  held.release();
+  const r = await pending;
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json?.state, 'DELIVERED');
+  stalls.delete('/stall-fence');
+});
+
+test('a status for an id no pay could produce is not found and leaves no tombstone', async () => {
+  const before = storedEntries().length;
+  const st = await status('not-a-payment-id');
+  assert.equal(st.json?.error?.code, 'PAYMENT_NOT_FOUND');
+  assert.equal(storedEntries().length, before, 'a malformed id grew the durable store');
 });

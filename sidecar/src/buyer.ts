@@ -493,43 +493,81 @@ export async function signAndSubmit(
     );
   }
 
-  // A parse failure AFTER the seller's 200 is post-submit: the authorization was signed
-  // and delivered, so the outcome is unknown, not a clean failure. Surface it as
-  // FACILITATOR_ERROR (may still settle; reconcile) rather than letting a raw
-  // SyntaxError escape (review fix).
-  let parsed: unknown;
+  // The body is read as text and parsed here, and a body that is not JSON (or not readable) is
+  // treated as ABSENT, not as a failure: a receipt may still arrive in a header, and every header
+  // and body candidate goes through the same validation below. With no usable receipt anywhere the
+  // outcome is still FACILITATOR_ERROR (post-submit, may still settle, reconcile), never a raw
+  // SyntaxError the service would mistake for something else.
+  let parsed: unknown = undefined;
+  let bodyUnreadable: string | null = null;
   try {
-    parsed = await paid.json();
+    const text = await paid.text();
+    parsed = JSON.parse(text);
   } catch (e) {
-    throw new PaymentFailed(
-      'FACILITATOR_ERROR',
-      `seller returned 200 but its body did not parse (${(e as Error).message}); ` +
-        `the signed authorization was submitted and may still settle — reconcile`,
-    );
+    bodyUnreadable = (e as Error).message;
   }
-  const body = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : null;
+  const body =
+    bodyUnreadable === null && typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
 
   // The receipt candidates, from every transport that carries one: the v1 X-PAYMENT-RESPONSE
-  // header (FR-X402-004 evidence chain), the v2 PAYMENT-RESPONSE header, and the body. Every
-  // receipt-shaped one is then validated below; the first is recorded only if all of them pass.
-  // A 200 with NONE of them -- a plain resource body, a null body, or a v2 settlement response
-  // that is not a Snapfall receipt -- is not a failure: the seller holds the authorization and
-  // may settle it, so it is FACILITATOR_ERROR (post-sign, reconcile), never a TypeError that the
-  // service would record as FAILED and the daemon would read as "release".
+  // header (FR-X402-004 evidence chain), the v2 PAYMENT-RESPONSE header, and the body's `receipt`.
+  //
+  // A transport that SUPPLIES a receipt must supply a well-formed one. A malformed one next to a
+  // good one is a contradiction, not something to skip in favour of the good one: the seller told
+  // us two different things about the same payment. So:
+  //   - body: a `receipt` that is present (not undefined/null) and not receipt-shaped is malformed.
+  //   - headers: a value that does not decode to a JSON object is malformed. One that decodes to an
+  //     object carrying none of the receipt-only fields (amount, payee, nonce, settlement) is an
+  //     ordinary x402 settle response ({success, transaction, network, payer}), which is metadata,
+  //     not a receipt, and is left out. One that carries any of them is a receipt and must be whole.
+  // Any malformed candidate fails the whole response: FACILITATOR_ERROR (post-sign, reconcile).
+  // A 200 with no receipt at all is FACILITATOR_ERROR too: the seller holds the authorization and
+  // may settle it, so it is never a TypeError the service would record as FAILED (release).
   const candidates: Array<{ source: string; value: unknown }> = [];
+  const malformed: string[] = [];
   for (const h of ['x-payment-response', 'payment-response']) {
     const raw = paid.headers.get(h);
-    if (raw) candidates.push({ source: `${h} header`, value: decodeBase64Json<unknown>(raw.trim()) });
+    if (raw === null) continue;
+    const decoded = decodeBase64Json<unknown>(raw.trim());
+    if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) {
+      malformed.push(`the ${h} header does not decode to a JSON object`);
+      continue;
+    }
+    if (!claimsReceipt(decoded)) continue; // x402 settle metadata, not a Snapfall receipt
+    candidates.push({ source: `${h} header`, value: decoded });
   }
-  if (body) candidates.push({ source: 'body', value: body.receipt });
-  const receipts = candidates.filter((c): c is { source: string; value: PurchaseResult['receipt'] } => isReceipt(c.value));
+  if (body && body.receipt !== undefined && body.receipt !== null) {
+    candidates.push({ source: 'body', value: body.receipt });
+  }
+  for (const c of candidates) {
+    if (!isReceipt(c.value)) {
+      malformed.push(`the receipt in its ${c.source} is malformed (amount, payer, payee, nonce and settlement must all be strings)`);
+    }
+  }
+  if (malformed.length > 0) {
+    throw new PaymentFailed(
+      'FACILITATOR_ERROR',
+      `seller returned 200 for ${intent.resource} but ${malformed.join('; ')}; ` +
+        'a supplied receipt that cannot be read is not overridden by another one — ' +
+        'the signed authorization was delivered and may still settle — reconcile',
+    );
+  }
+  const receipts = candidates as Array<{ source: string; value: PurchaseResult['receipt'] }>;
   if (receipts.length === 0) {
+    const bodyNote =
+      bodyUnreadable !== null
+        ? `body did not parse (${bodyUnreadable})`
+        : body === null
+          ? `body ${JSON.stringify(parsed)}`
+          : 'body has no receipt';
     throw new PaymentFailed(
       'FACILITATOR_ERROR',
       `seller returned 200 for ${intent.resource} without a usable payment receipt ` +
-        `(body ${body === null ? JSON.stringify(parsed) : 'has no receipt'}; ` +
-        `x-payment-response ${paid.headers.has('x-payment-response') ? 'unusable' : 'absent'}; ` +
-        `payment-response ${paid.headers.has('payment-response') ? 'unusable' : 'absent'}); ` +
+        `(${bodyNote}; ` +
+        `x-payment-response ${paid.headers.has('x-payment-response') ? 'carries no receipt' : 'absent'}; ` +
+        `payment-response ${paid.headers.has('payment-response') ? 'carries no receipt' : 'absent'}); ` +
         'the signed authorization was delivered and may still settle — reconcile',
     );
   }
@@ -567,6 +605,14 @@ export async function signAndSubmit(
     authorizationSignature: payment.payload.signature,
     amountPaid: BigInt(accept.amount),
   };
+}
+
+/** The fields only a Snapfall receipt carries. `payer` is left out: x402 settle responses carry it too. */
+const RECEIPT_ONLY_FIELDS = ['amount', 'payee', 'nonce', 'settlement'] as const;
+
+/** Whether a decoded header object presents itself as a receipt (and so must be a whole one). */
+function claimsReceipt(o: object): boolean {
+  return RECEIPT_ONLY_FIELDS.some((k) => Object.prototype.hasOwnProperty.call(o, k));
 }
 
 /** A receipt the H3 record can be built from: every field it reads is a string. */

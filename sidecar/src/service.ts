@@ -70,6 +70,9 @@ const inFlight = new Set<string>();
  */
 const inFlightIds = new Set<string>();
 
+/** The shape computePaymentId produces (H3 §4.1). */
+const PAYMENT_ID_RE = /^pay_[0-9a-f]{16}$/;
+
 const TERMINAL: ReadonlySet<PaymentState> = new Set(['SETTLED', 'FAILED', 'EXPIRED']);
 
 interface H3Receipt {
@@ -311,6 +314,24 @@ async function handlePay(body: unknown): Promise<Reply> {
       { retriable: true },
     );
   }
+  // ── Not-found fence: `status` already told the daemon this paymentId does not exist, and the
+  //    daemon released the hold on that answer. This pay was in transit when it was given (sent,
+  //    not yet read here, so neither recorded nor in flight). Signing it now would put a bearer
+  //    authorization behind a released hold, so it is refused, pre-sign, with no record written.
+  //    APPROVAL_EXPIRED because that is what happened to it: the approval stopped backing a hold
+  //    the moment its hold was released. The daemon reads the code as pre-sign, which is the truth.
+  //    This check, the in-flight registration below, and handleStatus's tombstone write are each
+  //    synchronous with nothing awaited, so a status and a pay for one id cannot interleave: either
+  //    the pay registers first (status answers PAYMENT_IN_PROGRESS) or the tombstone does (this). ──
+  if (store.isTombstoned(paymentId)) {
+    return errorReply(
+      410,
+      'APPROVAL_EXPIRED',
+      `status already reported ${paymentId} as PAYMENT_NOT_FOUND and its budget hold may have been released; ` +
+        'this approval can no longer be executed. Nothing was signed',
+      null,
+    );
+  }
   if (inFlight.has(intent.nonce)) {
     // No durable record yet (the holder is still pre-write-ahead), so carry null, consistent
     // with the envelope rule below. `status` on the precomputed paymentId answers the same
@@ -460,6 +481,12 @@ function handleStatus(paymentId: string): Reply {
       retriable: true,
     });
   }
+  // About to promise the daemon that nothing was or will be signed for this id, on which it releases
+  // the hold. Make the "will be" true first: a durable tombstone that any later pay for this id hits
+  // before signing (handlePay). Written in this same synchronous block as the two lookups above, so
+  // no pay can be accepted in between. Only a well-formed id can be the precomputed id of some pay,
+  // so only those are recorded; anything else is not found and can never be paid.
+  if (PAYMENT_ID_RE.test(paymentId)) store.tombstone(paymentId);
   return errorReply(404, 'PAYMENT_NOT_FOUND', `no payment record for ${paymentId}`);
 }
 
