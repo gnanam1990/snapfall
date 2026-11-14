@@ -27,6 +27,7 @@ import WorkforceStrip from '@/components/WorkforceStrip';
 import AdvancesTable from '@/components/AdvancesTable';
 import ActiveJobs from '@/components/ActiveJobs';
 import OwnerSignIn from '@/components/OwnerSignIn';
+import StreamUnavailable from '@/components/StreamUnavailable';
 
 /**
  * Pending approvals, as the first viewport's one coloured region and its primary action.
@@ -284,6 +285,8 @@ export default function OverviewPage() {
         {signedOut ? (
           // A daemon is connected but this visitor has no owner session: the feed is owner data.
           <OwnerSignIn className="mt" />
+        ) : status === 'unavailable' ? (
+          <StreamUnavailable className="mt" what="the agent feed, workforce and approvals" />
         ) : status === 'unverified' ? (
           <div className="loading mt">Checking the owner session…</div>
         ) : (

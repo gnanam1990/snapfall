@@ -16,11 +16,30 @@ import type { StreamMessage } from './types';
  *   owner. Reconnection continues, and owner data stays hidden until the stream is live again.
  * - 'signed-out': a daemon is connected but this visitor has no owner session, so the stream route
  *   answered 401 (or owner access is not configured). Pages show the sign-in prompt.
+ * - 'unavailable': no connection has opened for STREAM_UNAVAILABLE_MS since the page loaded or the
+ *   session last changed (the stream route keeps failing or never answers, say a daemon whose SSE is
+ *   broken, or a proxy that does not pass SSE), and the session read has not shown a sign-out.
+ *   Reconnection continues. Stream data stays hidden exactly as for 'unverified'; what changes is
+ *   that pages stop waiting on the stream: they say it is unavailable and offer the sign-in prompt,
+ *   and owner actions that the server checks on every request (minting a customer link) work again.
  */
-export type StreamStatus = 'connecting' | 'live' | 'reconnecting' | 'unverified' | 'signed-out';
+export type StreamStatus = 'connecting' | 'live' | 'reconnecting' | 'unverified' | 'signed-out' | 'unavailable';
 
 /** Whether a page must keep what the stream delivered under an owner session off the screen. */
 export function ownerDataHidden(status: StreamStatus): boolean {
+  return status === 'signed-out' || status === 'unverified' || status === 'unavailable';
+}
+
+/**
+ * Whether a page must refuse owner actions the server authorizes per request (a mint), and drop
+ * what one returned. Signed out, or the session just changed and nothing has settled it yet.
+ *
+ * Not 'unavailable': there the stream cannot say who the visitor is, but the action's own route
+ * can, so the request goes out and the owner guard answers it (a 401 brings up the sign-in
+ * prompt). Every session change passes through 'unverified' first, so whatever an action returned
+ * under one session is dropped before the next can show anything.
+ */
+export function ownerActionsBlocked(status: StreamStatus): boolean {
   return status === 'signed-out' || status === 'unverified';
 }
 
@@ -87,6 +106,10 @@ const CLOSED = 2;
 export const STREAM_RETRY_MS = 2000;
 /** How long a session read may take before it counts as unreadable ('unverified'). */
 export const SESSION_READ_TIMEOUT_MS = 5000;
+/** How long the stream may go without a connection that opens, since the page loaded or the session
+ *  last changed, before it is reported 'unavailable' rather than left 'unverified' (or 'connecting')
+ *  indefinitely. Long enough for a few rounds of fail, session read and retry. */
+export const STREAM_UNAVAILABLE_MS = 20_000;
 
 export interface StreamClientOptions {
   url: string;
@@ -109,6 +132,11 @@ export interface StreamClientOptions {
  *
  * `sessionChanged()` (a sign-in or sign-out in this tab or another) drops the connection, reports
  * 'unverified', and reconnects through the owner guard, which refuses it after a sign-out.
+ *
+ * UNAVAILABLE. If no connection opens for STREAM_UNAVAILABLE_MS after the page loads or the session
+ * changes, a status that would be 'connecting' or 'unverified' is reported 'unavailable' instead,
+ * until a connection opens or the session changes again. A session read that shows a sign-out
+ * still reports 'signed-out'.
  *
  * HANDOVER. The owner stream route closes a healthy stream every few minutes so the session is
  * checked again, and announces the close first (OWNER_WINDOW_EVENT). A plain reconnect would lose
@@ -135,6 +163,30 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
   /** Whether a connection has passed the owner guard since the last session change. Until one has,
    *  a drop must not read as 'reconnecting', which shows owner data again. */
   let verified = false;
+  /** The last status reported, as the page sees it. */
+  let reported: StreamStatus = 'connecting';
+  /** Set once no connection has opened for STREAM_UNAVAILABLE_MS; cleared by an open or a session change. */
+  let unavailable = false;
+  let unavailableTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const report = (status: StreamStatus) => {
+    reported = unavailable && (status === 'unverified' || status === 'connecting') ? 'unavailable' : status;
+    onStatus(reported);
+  };
+  /** Start the unavailable deadline, unless it is already running. */
+  const armUnavailable = () => {
+    if (unavailableTimer !== null) return;
+    unavailableTimer = setTimer(() => {
+      unavailableTimer = null;
+      if (disposed || verified) return;
+      unavailable = true;
+      if (reported === 'unverified' || reported === 'connecting') report(reported);
+    }, STREAM_UNAVAILABLE_MS);
+  };
+  const disarmUnavailable = () => {
+    if (unavailableTimer !== null) clearTimer(unavailableTimer);
+    unavailableTimer = null;
+  };
 
   /** The session read, bounded: a read that does not answer counts as unreadable ('unverified'). */
   const readSessionBounded = (): Promise<OwnerSessionStatus | null> =>
@@ -170,6 +222,7 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
     if (handover !== null) clearTimer(handover);
     retry = null;
     handover = null;
+    disarmUnavailable();
   };
 
   /** 'fresh' starts over, as on first load: the daemon replays its events from the start. 'handover'
@@ -189,7 +242,9 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
     source.onopen = () => {
       if (es !== source) return;
       verified = true;
-      onStatus('live');
+      unavailable = false;
+      disarmUnavailable();
+      report('live');
     };
     source.onmessage = (m) => {
       let msg: StreamMessage;
@@ -221,7 +276,7 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
       }
       if (es !== source) return; // superseded by a newer connection
       // Only a session this client has seen pass the guard may ride out a drop with its data shown.
-      onStatus(verified ? 'reconnecting' : 'unverified');
+      report(verified ? 'reconnecting' : 'unverified');
       if (source.readyState !== CLOSED) return;
       source.close();
       // A handover the guard refused: the old connection must not go on delivering into a page
@@ -234,8 +289,14 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
         // A signed-in read is not a pass through the guard: until a connection opens for this
         // session, its data stays hidden.
         const next = read === 'reconnecting' && !verified ? 'unverified' : read;
-        onStatus(next);
-        if (next === 'signed-out') return; // resumed by sessionChanged()
+        if (next === 'signed-out') {
+          disarmUnavailable();
+          report(next);
+          return; // resumed by sessionChanged()
+        }
+        // From here nothing has passed the guard for the current session until a connection opens.
+        if (!verified) armUnavailable();
+        report(next);
         retry = setTimer(() => {
           retry = null;
           connect('fresh');
@@ -244,6 +305,7 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
     };
   };
 
+  armUnavailable();
   connect('fresh');
   return {
     sessionChanged() {
@@ -252,7 +314,9 @@ export function createStreamClient(options: StreamClientOptions): { sessionChang
       // Whatever was shown belonged to the session before this change; until a connection passes
       // the guard with the new one, nobody has shown this visitor is the owner.
       verified = false;
-      onStatus('unverified');
+      unavailable = false;
+      report('unverified');
+      armUnavailable();
       connect('fresh');
     },
     dispose() {

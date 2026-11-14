@@ -81,6 +81,9 @@ export interface GovernanceConfig {
   /** Deadline for each phase of operator-state reads (OPERATOR_GRANT_DELAY, then the per-address
    *  allowedOperator/operatorGrantExecutableAt pairs). Default DEFAULT_OPERATOR_READ_BUDGET_MS. */
   operatorReadBudgetMs?: number;
+  /** Deadline for the capital-control reads (the caps, pause flags, admins and their timelocks).
+   *  Default DEFAULT_CAP_READ_BUDGET_MS. */
+  capReadBudgetMs?: number;
 }
 
 export interface PendingAdmin {
@@ -258,8 +261,35 @@ export const DEFAULT_OPERATOR_SCAN_BUDGET_MS = 2_500;
  *  already read until the browser gives up on the whole section. */
 export const DEFAULT_OPERATOR_READ_BUDGET_MS = 1_500;
 
+/** Default deadline for the capital-control reads. They are the view itself (a failure is a 503),
+ *  so this is longer than the operator budget; it exists so a stalled getter ends the load with an
+ *  error instead of holding it until the browser gives up. */
+export const DEFAULT_CAP_READ_BUDGET_MS = 5_000;
+
 /** Thrown into a bounded operator-state read whose deadline passed. */
 class OperatorReadTimeout extends Error {}
+
+/** Thrown into a capital-control read whose deadline passed. */
+class CapReadTimeout extends Error {}
+
+/**
+ * One deadline, and one fate, for a group of reads. The signal aborts when the deadline passes,
+ * when `fail` is called (one read failed, so the rest are not worth waiting for), or at `done`
+ * (whatever is still in flight once the group's result is decided must not run on unbounded).
+ */
+function boundedPhase(budgetMs: number, timeout: () => Error) {
+  const call = new AbortController();
+  const timer = setTimeout(() => call.abort(timeout()), budgetMs);
+  const stop = (reason: unknown) => {
+    clearTimeout(timer);
+    if (!call.signal.aborted) call.abort(reason);
+  };
+  return {
+    signal: call.signal,
+    fail: (error: unknown) => stop(error),
+    done: () => stop(new Error('reads finished')),
+  };
+}
 
 interface RPCLog {
   topics: string[];
@@ -476,17 +506,7 @@ async function loadOperatorAllowlist(
   // done() also aborts whatever is still in flight. An address whose one getter failed is settled
   // as unknown without waiting for its pair, so the pair can still be pending when every address
   // has settled; clearing the deadline alone would leave it running after this load returns.
-  const phase = () => {
-    const call = new AbortController();
-    const timer = setTimeout(() => call.abort(new OperatorReadTimeout(`no answer within ${budgetMs} ms`)), budgetMs);
-    return {
-      signal: call.signal,
-      done: () => {
-        clearTimeout(timer);
-        if (!call.signal.aborted) call.abort(new Error('operator-state reads finished'));
-      },
-    };
-  };
+  const phase = () => boundedPhase(budgetMs, () => new OperatorReadTimeout(`no answer within ${budgetMs} ms`));
   const at = (data: string, label: string, signal: AbortSignal) =>
     untilAborted(rpc<string>('eth_call', [{ to: pool, data }, head], { signal }), signal).then((raw) => word(raw, label));
 
@@ -600,47 +620,72 @@ export async function loadGovernance(config: GovernanceConfig, rpc: RPCTransport
   const head = block.number;
   const now = BigInt(block.timestamp);
 
-  const call = (to: string, selector: string, label: string) =>
-    rpc<string>('eth_call', [{ to, data: selector }, head]).then((raw) => word(raw, label));
+  // Every capital-control read shares one deadline and one fate, like the operator-state reads.
+  // The transport adds no deadline of its own, so a getter that never answers would hold this load
+  // until the browser gave up; and Promise.all settles on the first failure without stopping the
+  // rest, so the failed group's other reads would run on after the 503 went out. A failure aborts
+  // its siblings, the deadline aborts everything, and done() stops whatever is still in flight.
+  const capBudgetMs = config.capReadBudgetMs ?? DEFAULT_CAP_READ_BUDGET_MS;
+  const caps = boundedPhase(
+    capBudgetMs,
+    () => new CapReadTimeout(`the RPC did not answer the capital-control reads within ${capBudgetMs} ms`),
+  );
+  const read = <T>(to: string, selector: string, parse: (raw: string) => T): Promise<T> =>
+    untilAborted(rpc<string>('eth_call', [{ to, data: selector }, head], { signal: caps.signal }), caps.signal)
+      .then(parse)
+      .catch((error: unknown) => {
+        caps.fail(error);
+        throw error;
+      });
+  const call = (to: string, selector: string, label: string) => read(to, selector, (raw) => word(raw, label));
+  const admin = (to: string, selector: string, label: string) => read(to, selector, (raw) => addressOf(raw, label));
 
-  // The newest getter decides support. A deployment without it predates the controls.
+  let maxTotalExposure: bigint, maxAdvance: bigint, totalOutstanding: bigint, totalWrittenOff: bigint, poolPaused: bigint;
+  let pendingMaxTotalExposure: bigint, pendingMaxAdvance: bigint, capRaiseExecutableAt: bigint;
+  let poolAdmin: string, poolPendingAdmin: string;
+  let vaultPaused: bigint, maxJobPayment: bigint, vaultAdmin: string, vaultPendingAdmin: string, vaultAcceptableAt: bigint;
   let adminTransferAcceptableAt: bigint;
   try {
-    adminTransferAcceptableAt = await call(pool, SELECTOR.adminTransferAcceptableAt, 'adminTransferAcceptableAt');
-  } catch (error) {
-    if (!isMissingFunction(error)) throw error;
-    return {
-      status: 'unsupported',
-      chainId: config.chainId,
-      reason:
-        'These contracts predate on-chain capital controls: FloatPool has no adminTransferAcceptableAt(). ' +
-        'The caps, loss budget and timelocks exist only on a deployment of the current contracts.',
-    };
-  }
+    // The newest getter decides support. A deployment without it predates the controls.
+    try {
+      adminTransferAcceptableAt = await call(pool, SELECTOR.adminTransferAcceptableAt, 'adminTransferAcceptableAt');
+    } catch (error) {
+      if (!isMissingFunction(error)) throw error;
+      return {
+        status: 'unsupported',
+        chainId: config.chainId,
+        reason:
+          'These contracts predate on-chain capital controls: FloatPool has no adminTransferAcceptableAt(). ' +
+          'The caps, loss budget and timelocks exist only on a deployment of the current contracts.',
+      };
+    }
 
-  const [maxTotalExposure, maxAdvance, totalOutstanding, totalWrittenOff, poolPaused] = await Promise.all([
-    call(pool, SELECTOR.maxTotalExposure, 'maxTotalExposure'),
-    call(pool, SELECTOR.maxAdvance, 'maxAdvance'),
-    call(pool, SELECTOR.totalOutstanding, 'totalOutstanding'),
-    call(pool, SELECTOR.totalWrittenOff, 'totalWrittenOff'),
-    call(pool, SELECTOR.paused, 'paused'),
-  ]);
-  const [pendingMaxTotalExposure, pendingMaxAdvance, capRaiseExecutableAt] = await Promise.all([
-    call(pool, SELECTOR.pendingMaxTotalExposure, 'pendingMaxTotalExposure'),
-    call(pool, SELECTOR.pendingMaxAdvance, 'pendingMaxAdvance'),
-    call(pool, SELECTOR.capRaiseExecutableAt, 'capRaiseExecutableAt'),
-  ]);
-  const [poolAdmin, poolPendingAdmin] = await Promise.all([
-    rpc<string>('eth_call', [{ to: pool, data: SELECTOR.admin }, head]).then((r) => addressOf(r, 'admin')),
-    rpc<string>('eth_call', [{ to: pool, data: SELECTOR.pendingAdmin }, head]).then((r) => addressOf(r, 'pendingAdmin')),
-  ]);
-  const [vaultPaused, maxJobPayment, vaultAdmin, vaultPendingAdmin, vaultAcceptableAt] = await Promise.all([
-    call(vault, SELECTOR.paused, 'vault paused'),
-    call(vault, SELECTOR.maxJobPayment, 'maxJobPayment'),
-    rpc<string>('eth_call', [{ to: vault, data: SELECTOR.admin }, head]).then((r) => addressOf(r, 'vault admin')),
-    rpc<string>('eth_call', [{ to: vault, data: SELECTOR.pendingAdmin }, head]).then((r) => addressOf(r, 'vault pendingAdmin')),
-    call(vault, SELECTOR.adminTransferAcceptableAt, 'vault adminTransferAcceptableAt'),
-  ]);
+    [maxTotalExposure, maxAdvance, totalOutstanding, totalWrittenOff, poolPaused] = await Promise.all([
+      call(pool, SELECTOR.maxTotalExposure, 'maxTotalExposure'),
+      call(pool, SELECTOR.maxAdvance, 'maxAdvance'),
+      call(pool, SELECTOR.totalOutstanding, 'totalOutstanding'),
+      call(pool, SELECTOR.totalWrittenOff, 'totalWrittenOff'),
+      call(pool, SELECTOR.paused, 'paused'),
+    ]);
+    [pendingMaxTotalExposure, pendingMaxAdvance, capRaiseExecutableAt] = await Promise.all([
+      call(pool, SELECTOR.pendingMaxTotalExposure, 'pendingMaxTotalExposure'),
+      call(pool, SELECTOR.pendingMaxAdvance, 'pendingMaxAdvance'),
+      call(pool, SELECTOR.capRaiseExecutableAt, 'capRaiseExecutableAt'),
+    ]);
+    [poolAdmin, poolPendingAdmin] = await Promise.all([
+      admin(pool, SELECTOR.admin, 'admin'),
+      admin(pool, SELECTOR.pendingAdmin, 'pendingAdmin'),
+    ]);
+    [vaultPaused, maxJobPayment, vaultAdmin, vaultPendingAdmin, vaultAcceptableAt] = await Promise.all([
+      call(vault, SELECTOR.paused, 'vault paused'),
+      call(vault, SELECTOR.maxJobPayment, 'maxJobPayment'),
+      admin(vault, SELECTOR.admin, 'vault admin'),
+      admin(vault, SELECTOR.pendingAdmin, 'vault pendingAdmin'),
+      call(vault, SELECTOR.adminTransferAcceptableAt, 'vault adminTransferAcceptableAt'),
+    ]);
+  } finally {
+    caps.done();
+  }
 
   const operatorAllowlist = await loadOperatorAllowlist(config, rpc, pool, head, now);
 

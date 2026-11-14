@@ -5,16 +5,56 @@
  *   npm run store:test
  */
 
+import * as fs from 'node:fs';
 import { writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { PaymentStore, type PaymentRecord } from './store.js';
+import { PaymentStore, type PaymentRecord, type StoreFs } from './store.js';
+
+/** node:fs with every call logged, and an optional failure injected into one fsync target. */
+function recordingFs(log: string[], failFsyncOf?: () => string | null): StoreFs {
+  const paths = new Map<number, string>();
+  return {
+    existsSync: (p) => fs.existsSync(p),
+    readFileSync: (p, e) => fs.readFileSync(p, e),
+    mkdirSync: (p, o) => fs.mkdirSync(p, o),
+    openSync: (p, f) => {
+      const fd = fs.openSync(p, f);
+      paths.set(fd, p);
+      log.push(`open ${p} ${f}`);
+      return fd;
+    },
+    writeSync: (fd, b, o, l) => {
+      log.push(`write ${paths.get(fd)}`);
+      return fs.writeSync(fd, b, o, l);
+    },
+    fsyncSync: (fd) => {
+      const p = paths.get(fd)!;
+      if (failFsyncOf?.() === p) {
+        log.push(`fsync ${p} FAILED`);
+        throw Object.assign(new Error(`EIO: fsync ${p}`), { code: 'EIO' });
+      }
+      log.push(`fsync ${p}`);
+      fs.fsyncSync(fd);
+    },
+    closeSync: (fd) => {
+      log.push(`close ${paths.get(fd)}`);
+      paths.delete(fd);
+      fs.closeSync(fd);
+    },
+    renameSync: (a, b) => {
+      log.push(`rename ${a} -> ${b}`);
+      fs.renameSync(a, b);
+    },
+  };
+}
 
 let failures = 0;
-function check(label: string, ok: boolean, detail = '') {
+function check(label: string, ok: boolean, detail = '', failOnlyDetail = false) {
   if (!ok) failures++;
-  console.log(`  [${ok ? 'PASS' : 'FAIL'}] ${label}${detail ? ` — ${detail}` : ''}`);
+  const shown = failOnlyDetail && ok ? '' : detail;
+  console.log(`  [${ok ? 'PASS' : 'FAIL'}] ${label}${shown ? ` — ${shown}` : ''}`);
 }
 
 function tmpPath(): string {
@@ -144,6 +184,63 @@ function main() {
   check('a repeat once the disk recovers succeeds', !throws(() => s7.tombstone('pay_00000000000000a7')));
   check('and the tombstone survives a restart', new PaymentStore(p7).isTombstoned('pay_00000000000000a7'));
   rmSync(p7, { force: true });
+
+  // 8. Durable, not just atomic: the temp file's data is synced before the rename, and the directory
+  //    after it, so a power loss after the 404 went out cannot lose a tombstone.
+  const p8 = tmpPath();
+  const d8 = dirname(p8);
+  const log8: string[] = [];
+  const s8 = new PaymentStore(p8, recordingFs(log8));
+  s8.tombstone('pay_00000000000000a8');
+  const at = (entry: string) => log8.indexOf(entry);
+  check(
+    'the temp file is written, fsynced, then closed before the rename',
+    at(`write ${p8}.tmp`) >= 0 &&
+      at(`write ${p8}.tmp`) < at(`fsync ${p8}.tmp`) &&
+      at(`fsync ${p8}.tmp`) < at(`close ${p8}.tmp`) &&
+      at(`close ${p8}.tmp`) < at(`rename ${p8}.tmp -> ${p8}`),
+    log8.join(' | '),
+    true,
+  );
+  if (process.platform !== 'win32') {
+    check(
+      'the directory is fsynced after the rename',
+      at(`rename ${p8}.tmp -> ${p8}`) >= 0 && at(`rename ${p8}.tmp -> ${p8}`) < at(`fsync ${d8}`),
+      log8.join(' | '),
+      true,
+    );
+  }
+  check('the synced tombstone reloads', new PaymentStore(p8).isTombstoned('pay_00000000000000a8'));
+  rmSync(d8, { recursive: true, force: true });
+
+  // 9. A rename the disk would not confirm is a failed write: the tombstone call throws (the 404
+  //    becomes a 500 and the daemon keeps its hold), and a repeat writes again rather than
+  //    returning early on the in-memory entry.
+  if (process.platform !== 'win32') {
+    const p9 = tmpPath();
+    const d9 = dirname(p9);
+    let failDir = true;
+    const log9: string[] = [];
+    const s9 = new PaymentStore(p9, recordingFs(log9, () => (failDir ? d9 : null)));
+    let threw = false;
+    try {
+      s9.tombstone('pay_00000000000000a9');
+    } catch {
+      threw = true;
+    }
+    check('a tombstone whose directory fsync fails throws', threw, log9.join(' | '), true);
+    check('the id is still refused in this process', s9.isTombstoned('pay_00000000000000a9'));
+    failDir = false;
+    const before = log9.length;
+    s9.tombstone('pay_00000000000000a9');
+    check(
+      'a repeat after the failed sync writes and syncs again',
+      log9.slice(before).includes(`fsync ${d9}`),
+      log9.slice(before).join(' | '),
+      true,
+    );
+    rmSync(d9, { recursive: true, force: true });
+  }
 
   console.log(
     failures === 0

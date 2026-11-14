@@ -6,10 +6,12 @@ import type { OwnerSessionStatus } from './ownerSessionClient';
 import {
   SESSION_READ_TIMEOUT_MS,
   STREAM_RETRY_MS,
+  STREAM_UNAVAILABLE_MS,
   createFrameDedup,
   createStreamClient,
   frameKey,
   handoverDelay,
+  ownerActionsBlocked,
   ownerDataHidden,
   resumeUrl,
   statusAfterClosed,
@@ -17,6 +19,7 @@ import {
   type StreamStatus,
 } from './streamClient';
 import type { StreamMessage } from './types';
+import { createOwnerActionGate } from './ownerActionGate';
 
 /** A scriptable EventSource: the test plays the server. */
 class FakeSource implements EventSourceLike {
@@ -62,7 +65,10 @@ class FakeSource implements EventSourceLike {
   }
 }
 
-function harness(session: OwnerSessionStatus | null = { ownerApi: true, accessConfigured: true, signedIn: true }) {
+function harness(
+  session: OwnerSessionStatus | null = { ownerApi: true, accessConfigured: true, signedIn: true },
+  observe?: (status: StreamStatus) => void,
+) {
   const sources: FakeSource[] = [];
   const delivered: StreamMessage[] = [];
   const statuses: StreamStatus[] = [];
@@ -73,7 +79,10 @@ function harness(session: OwnerSessionStatus | null = { ownerApi: true, accessCo
   const client = createStreamClient({
     url: '/api/events/stream',
     onMessage: (m) => delivered.push(m),
-    onStatus: (s) => statuses.push(s),
+    onStatus: (s) => {
+      statuses.push(s);
+      observe?.(s);
+    },
     open: (u) => {
       const s = new FakeSource(u);
       sources.push(s);
@@ -357,4 +366,159 @@ test('a verified stream the browser gave up on, with a signed-in read, rides it 
   h.sources[0].fail(); // e.g. a 502 from a proxy: the session is still good
   await h.settle();
   assert.equal(h.statuses.at(-1), 'reconnecting');
+});
+
+/** Fail the newest connection the way a broken stream route does, then let the session read answer
+ *  and the retry timer run, `rounds` times. Returns the time that took. */
+async function failRounds(h: ReturnType<typeof harness>, rounds: number): Promise<number> {
+  let spent = 0;
+  for (let i = 0; i < rounds; i++) {
+    h.sources.at(-1)!.fail();
+    await h.settle();
+    h.advance(STREAM_RETRY_MS);
+    spent += STREAM_RETRY_MS;
+  }
+  return spent;
+}
+
+test('owner actions are blocked only while signed out or unverified; unavailable hides data but allows them', () => {
+  assert.equal(ownerDataHidden('unavailable'), true, 'stream data stays hidden: nothing verified this visitor');
+  assert.equal(ownerActionsBlocked('unavailable'), false, 'the action route checks the session itself');
+  assert.equal(ownerActionsBlocked('unverified'), true);
+  assert.equal(ownerActionsBlocked('signed-out'), true);
+  for (const s of ['connecting', 'live', 'reconnecting'] as const) assert.equal(ownerActionsBlocked(s), false, s);
+});
+
+test('a stream route that keeps failing after a session change is reported unavailable, not unverified forever', async () => {
+  const h = harness(); // the session read answers signed in: the stream route alone is broken
+  h.sources[0].open();
+  h.client.sessionChanged();
+  assert.equal(h.statuses.at(-1), 'unverified');
+  const spent = await failRounds(h, 3);
+  assert.ok(spent < STREAM_UNAVAILABLE_MS, 'a few failed rounds are still only unverified');
+  assert.equal(h.statuses.at(-1), 'unverified');
+  h.advance(STREAM_UNAVAILABLE_MS - spent);
+  assert.equal(h.statuses.at(-1), 'unavailable');
+  assert.equal(ownerDataHidden(h.statuses.at(-1)!), true, 'fails closed: stream data stays hidden');
+  const before = h.sources.length;
+  await failRounds(h, 2);
+  assert.ok(h.sources.length > before, 'reconnection continues');
+  assert.equal(h.statuses.at(-1), 'unavailable', 'later failures do not fall back to an endless unverified');
+  h.sources.at(-1)!.open();
+  assert.equal(h.statuses.at(-1), 'live', 'a connection that opens ends it');
+});
+
+test('unavailable also covers an unreadable session check, and a later sign-out read still says signed-out', async () => {
+  const h = harness(null); // /api/owner/session keeps failing too
+  h.sources[0].fail();
+  await h.settle();
+  assert.equal(h.statuses.at(-1), 'unverified');
+  h.advance(STREAM_UNAVAILABLE_MS);
+  assert.equal(h.statuses.at(-1), 'unavailable', 'the page can now offer the sign-in prompt');
+  h.state.session = { ownerApi: true, accessConfigured: true, signedIn: false };
+  await failRounds(h, 1);
+  assert.equal(h.statuses.at(-1), 'signed-out', 'a read that shows a sign-out is reported as one');
+  assert.equal(h.pending(), 0, 'signed-out waits for a session change, with no timer left running');
+});
+
+test('a first connection that never answers is reported unavailable', () => {
+  const h = harness();
+  assert.equal(h.statuses.length, 0, 'still connecting');
+  h.advance(STREAM_UNAVAILABLE_MS);
+  assert.equal(h.statuses.at(-1), 'unavailable');
+  h.sources[0].open();
+  assert.equal(h.statuses.at(-1), 'live');
+});
+
+test('a session change from unavailable passes through unverified, so actions are blocked before anything else', async () => {
+  const h = harness();
+  h.sources[0].fail();
+  await h.settle();
+  h.advance(STREAM_UNAVAILABLE_MS);
+  assert.equal(h.statuses.at(-1), 'unavailable');
+  h.client.sessionChanged(); // a sign-out in another tab
+  assert.equal(h.statuses.at(-1), 'unverified', 'reported synchronously, before any reconnect');
+  assert.equal(ownerActionsBlocked(h.statuses.at(-1)!), true);
+  // The deadline starts again for the new session.
+  await failRounds(h, 1);
+  assert.equal(h.statuses.at(-1), 'unverified');
+  h.advance(STREAM_UNAVAILABLE_MS);
+  assert.equal(h.statuses.at(-1), 'unavailable');
+});
+
+test('a verified stream never becomes unavailable while it rides out drops', async () => {
+  const h = harness();
+  h.sources[0].open();
+  h.sources[0].drop();
+  h.advance(STREAM_UNAVAILABLE_MS * 2);
+  assert.equal(h.statuses.at(-1), 'reconnecting');
+  h.sources[0].fail(); // a 502 from a proxy, with a signed-in read
+  await h.settle();
+  h.advance(STREAM_UNAVAILABLE_MS * 2);
+  assert.ok(!h.statuses.includes('unavailable'), h.statuses.join(','));
+});
+
+test('dispose cancels the unavailable deadline', () => {
+  const h = harness();
+  h.client.dispose();
+  assert.equal(h.pending(), 0);
+});
+
+// ── The owner-action gate (lib/ownerActionGate), fed by the stream client as useEventStream feeds it.
+
+test('a mint in flight is fenced the moment the session changes, with no render in between', () => {
+  const gate = createOwnerActionGate();
+  const h = harness(undefined, gate.observe);
+  h.sources[0].open();
+  const current = gate.begin();
+  assert.ok(current, 'a live owner may mint');
+  assert.equal(current(), true);
+  h.client.sessionChanged(); // a sign-out in another tab, while the mint is in flight
+  // The page's old fence was a React effect, run only after the commit that hid owner data; a
+  // response landing before it still stored the link and copied it. The gate needs no commit.
+  assert.equal(current(), false, 'the response that lands next must not be stored or copied');
+  assert.equal(gate.begin(), null, 'and no new mint may start while the session is unsettled');
+});
+
+test('a session change that settles before the response arrives still voids the earlier mint', () => {
+  const gate = createOwnerActionGate();
+  const h = harness(undefined, gate.observe);
+  h.sources[0].open();
+  const current = gate.begin()!;
+  h.client.sessionChanged(); // signed out and back in elsewhere: a different session
+  h.sources[1].open(); // the new session passes the guard before the old mint answers
+  assert.equal(h.statuses.at(-1), 'live');
+  assert.equal(current(), false, 'a link minted under the old session is not shown under the new one');
+  assert.ok(gate.begin(), 'the new session may mint');
+});
+
+test('a signed-out stream blocks minting; an unavailable one lets the mint route decide', async () => {
+  const gate = createOwnerActionGate();
+  const h = harness({ ownerApi: true, accessConfigured: true, signedIn: false }, gate.observe);
+  h.sources[0].fail();
+  await h.settle();
+  assert.equal(h.statuses.at(-1), 'signed-out');
+  assert.equal(gate.begin(), null);
+
+  const g2 = createOwnerActionGate();
+  const h2 = harness(null, g2.observe); // stream and session read both broken
+  h2.sources[0].fail();
+  await h2.settle();
+  assert.equal(g2.begin(), null, 'unverified: blocked');
+  h2.advance(STREAM_UNAVAILABLE_MS);
+  assert.equal(h2.statuses.at(-1), 'unavailable');
+  const current = g2.begin();
+  assert.ok(current, 'unavailable: the mint goes out and its route checks the session');
+  h2.client.sessionChanged();
+  assert.equal(current!(), false, 'a session change from unavailable still voids it');
+});
+
+test('a newer mint supersedes an older one still in flight', () => {
+  const gate = createOwnerActionGate();
+  const h = harness(undefined, gate.observe);
+  h.sources[0].open();
+  const first = gate.begin()!;
+  const second = gate.begin()!;
+  assert.equal(first(), false);
+  assert.equal(second(), true);
 });
