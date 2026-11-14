@@ -13,7 +13,7 @@
  *   - the H2 event stream supplies the live timeline, filtered to this job.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import type { StreamMessage } from '@/lib/types';
@@ -123,13 +123,22 @@ function AcceptLink({ jobId, ownerHidden }: { jobId: string; ownerHidden: boolea
   const [copied, setCopied] = useState(false);
   const [locked, setLocked] = useState(false);
 
+  // Each mint takes a generation; hiding owner data moves it on. A mint that answers after the
+  // visitor stopped being known as the owner must neither store the credential nor copy it.
+  const generation = useRef(0);
+  const ownerHiddenNow = useRef(ownerHidden);
+
   useEffect(() => {
+    ownerHiddenNow.current = ownerHidden;
     if (!ownerHidden) return;
+    generation.current += 1;
     setLink(null);
     setCopied(false);
   }, [ownerHidden]);
 
   const mint = useCallback(async () => {
+    const mine = ++generation.current;
+    const current = () => generation.current === mine && !ownerHiddenNow.current;
     setBusy(true);
     setError(null);
     setCopied(false);
@@ -151,10 +160,12 @@ function AcceptLink({ jobId, ownerHidden }: { jobId: string; ownerHidden: boolea
         setError(body?.error?.message ?? `mint failed (${res.status})`);
         return;
       }
+      if (!current()) return; // owner data was hidden while this mint was in flight
       const url = `${window.location.origin}/portal/${encodeURIComponent(jobId)}?token=${encodeURIComponent(body.acceptToken)}`;
       setLink(url);
       try {
         await navigator.clipboard.writeText(url);
+        if (!current()) return;
         setCopied(true);
       } catch {
         // Clipboard access is denied outside a secure context or without permission. The link is

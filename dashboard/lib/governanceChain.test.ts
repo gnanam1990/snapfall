@@ -42,6 +42,9 @@ interface OperatorFake {
   /** Addresses whose allowedOperator/operatorGrantExecutableAt reads never answer and ignore the
    *  abort signal, like an RPC that accepted the request and stalled. */
   stalled?: string[];
+  /** Addresses whose allowedOperator read fails at once while their operatorGrantExecutableAt
+   *  read never answers (and ignores the abort signal). */
+  failThenStall?: string[];
   /** Make the OPERATOR_GRANT_DELAY read never answer, ignoring the abort signal. */
   delayStalls?: boolean;
   /** Abort signals the operator-state reads were given. */
@@ -98,6 +101,12 @@ function fakeRPC(
       }
       const who = '0x' + data.slice(-40);
       if ((op.stalled ?? []).some((a) => a.toLowerCase() === who)) return never();
+      if ((op.failThenStall ?? []).some((a) => a.toLowerCase() === who)) {
+        if (data.startsWith(OS.allowedOperator)) {
+          throw new RPCError('Arc RPC eth_call HTTP 503', 503, undefined, 'unavailable');
+        }
+        return never();
+      }
       if ((op.unreadable ?? []).some((a) => a.toLowerCase() === who)) {
         throw new RPCError('Arc RPC eth_call HTTP 503: https://rpc.example/v2/fake-key', 503, undefined, 'unavailable');
       }
@@ -571,6 +580,41 @@ test('a stalled operator-state read is unknown after the deadline, and the caps 
   assert.equal(rogue?.allowed, null, 'a read that timed out is unknown, never "not allowed"');
   assert.match(rogue?.unknown ?? '', /did not answer within 40 ms at block 100/);
   assert.ok(signals.some((s) => s.aborted), 'the stalled request was told to stop');
+});
+
+test('a read still pending when every address has settled is told to stop, not left running', async () => {
+  // ROGUE's allowedOperator fails at once, so ROGUE settles as unknown while its
+  // operatorGrantExecutableAt is still waiting. Everything else answers immediately, so the load
+  // finishes long before the deadline; that pending read must be aborted, not orphaned.
+  reset();
+  const signals: AbortSignal[] = [];
+  const g = await loadGovernance(
+    {
+      ...config,
+      operatorAddress: TREASURY,
+      operatorDiscovery: { startBlock: 0, chunkBlocks: 1000 },
+      operatorReadBudgetMs: 60_000,
+    },
+    fakeRPC(basePool, baseVault, {
+      operators: {
+        allowed: [TREASURY],
+        logs: [
+          [10, OT.allowed, TREASURY],
+          [20, OT.allowed, ROGUE],
+        ],
+        failThenStall: [ROGUE],
+        signals,
+      },
+    }),
+  );
+  assert.ok(g.status === 'ok' && g.operatorAllowlist.status === 'ok');
+  if (g.status !== 'ok' || g.operatorAllowlist.status !== 'ok') return;
+  assert.deepEqual(g.operatorAllowlist.unknown, [ROGUE.toLowerCase()]);
+  assert.ok(signals.length >= 5, `every operator read carried a signal (${signals.length})`);
+  assert.ok(
+    signals.every((s) => s.aborted),
+    'a read still pending when loadGovernance returned was not aborted, so it runs on with no deadline',
+  );
 });
 
 test('a stalled OPERATOR_GRANT_DELAY read leaves the allowlist unavailable after the deadline, and the caps shown', async () => {

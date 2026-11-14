@@ -62,6 +62,9 @@ const TOMBSTONE_KIND: NotFoundTombstone['kind'] = 'PAYMENT_NOT_FOUND_TOMBSTONE';
 export class PaymentStore {
   private byNonce = new Map<string, PaymentRecord>();
   private tombstones = new Map<string, NotFoundTombstone>();
+  /** True from the start of a write until one completes: memory holds something the file may not
+   *  (a tombstone among it), so the next tombstone() call must write again before it returns. */
+  private unflushed = false;
 
   constructor(private readonly path: string) {
     this.load();
@@ -107,6 +110,7 @@ export class PaymentStore {
   }
 
   private persist(): void {
+    this.unflushed = true;
     mkdirSync(dirname(this.path), { recursive: true });
     // Atomic write: a crash mid-write leaves the OLD file intact, never a torn one.
     // rename() is atomic on the same filesystem, so a reader (or a restart) always sees
@@ -114,6 +118,7 @@ export class PaymentStore {
     const tmp = `${this.path}.tmp`;
     writeFileSync(tmp, JSON.stringify([...this.byNonce.values(), ...this.tombstones.values()], null, 2));
     renameSync(tmp, this.path);
+    this.unflushed = false;
   }
 
   getByNonce(nonce: string): PaymentRecord | undefined {
@@ -143,10 +148,17 @@ export class PaymentStore {
    * The in-memory entry is set BEFORE the write. If the write throws, the caller's 404 never goes
    * out (it becomes a 500, on which the daemon keeps the hold), and this process still refuses the
    * id: both failure directions refuse to sign rather than risk a release behind a signature.
+   *
+   * A repeat call returns early only once the tombstone is on disk. After a failed write the entry
+   * is in memory alone, and returning there would let the next status answer 404 (the daemon
+   * releases its hold) with nothing on disk to refuse a delayed pay after a restart. So it writes
+   * again, and throws again if the disk still refuses.
    */
   tombstone(paymentId: string, at: string = new Date().toISOString()): void {
-    if (this.tombstones.has(paymentId)) return;
-    this.tombstones.set(paymentId, { kind: TOMBSTONE_KIND, paymentId, reportedAt: at });
+    if (this.tombstones.has(paymentId) && !this.unflushed) return;
+    if (!this.tombstones.has(paymentId)) {
+      this.tombstones.set(paymentId, { kind: TOMBSTONE_KIND, paymentId, reportedAt: at });
+    }
     this.persist();
   }
 }

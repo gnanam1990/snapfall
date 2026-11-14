@@ -473,10 +473,19 @@ async function loadOperatorAllowlist(
   // that accepts the request and never answers would otherwise hold this load, and with it the
   // caps already read, past the browser's own timeout. untilAborted ends the wait even when a
   // transport ignores the signal.
+  // done() also aborts whatever is still in flight. An address whose one getter failed is settled
+  // as unknown without waiting for its pair, so the pair can still be pending when every address
+  // has settled; clearing the deadline alone would leave it running after this load returns.
   const phase = () => {
     const call = new AbortController();
     const timer = setTimeout(() => call.abort(new OperatorReadTimeout(`no answer within ${budgetMs} ms`)), budgetMs);
-    return { signal: call.signal, done: () => clearTimeout(timer) };
+    return {
+      signal: call.signal,
+      done: () => {
+        clearTimeout(timer);
+        if (!call.signal.aborted) call.abort(new Error('operator-state reads finished'));
+      },
+    };
   };
   const at = (data: string, label: string, signal: AbortSignal) =>
     untilAborted(rpc<string>('eth_call', [{ to: pool, data }, head], { signal }), signal).then((raw) => word(raw, label));
