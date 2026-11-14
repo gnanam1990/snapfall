@@ -221,13 +221,20 @@ test('self-custody reads the chain: Accepted is settled on chain with a re-read,
 
   // Open: the wallet, unless the chain shows it settled and the daemon never heard the Accept;
   // then recording it (the POST accept, which submits nothing on a settled job) is the way forward.
+  // The re-read stays beside the wallet: when a wallet settlement's Accept record fails, the page's
+  // chain status is stale and only a re-read finds the settlement.
   assert.deepEqual(plan({ view: 'open', selfCustody: true, chainStatus: 'Delivered' }), {
     copy: null,
     badge: { label: 'accepted', tone: 'Delivered' },
     wallet: true,
     accept: null,
-    checkAgain: null,
+    checkAgain: { primary: false },
   });
+  for (const chainStatus of [null, 'Delivered', 'Funded']) {
+    assert.ok(plan({ view: 'open', selfCustody: true, chainStatus }).checkAgain, `${chainStatus}: a re-read is offered`);
+  }
+  // ...and the re-read then finds it: the stale-Delivered page, re-read as Accepted, records it.
+  assert.equal(plan({ view: 'open', selfCustody: true, chainStatus: 'Accepted' }).accept?.label, 'Record my acceptance');
   const unrecorded = plan({ view: 'open', selfCustody: true, chainStatus: 'Accepted' });
   assert.equal(unrecorded.copy, 'settledOnChainUnrecorded');
   assert.deepEqual(unrecorded.accept, { label: 'Record my acceptance', busy: 'Recording…', primary: true });

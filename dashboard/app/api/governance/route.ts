@@ -18,6 +18,11 @@ import { loadGovernance } from '@/lib/governanceChain';
 
 /** This route's share of a load spent extending the operator-event scan. */
 const OPERATOR_SCAN_BUDGET_MS = 4_000;
+/** Deadline for each phase of operator-state reads (the grant delay, then every address). With
+ *  the scan budget that is at most 5.5 s of operator work, inside CapitalControls' 6 s read
+ *  timeout, so a stalled getter comes back as `unknown` beside the caps instead of as a
+ *  whole-section error. */
+const OPERATOR_READ_BUDGET_MS = 750;
 import { chainNetwork, clientSafeError, networkName, requireAddress } from '@/lib/network';
 
 export const dynamic = 'force-dynamic';
@@ -38,6 +43,7 @@ export async function GET(): Promise<Response> {
           chunkBlocks: process.env.SNAPFALL_FLOAT_SCAN_CHUNK ? Number(process.env.SNAPFALL_FLOAT_SCAN_CHUNK) : undefined,
           budgetMs: OPERATOR_SCAN_BUDGET_MS,
         },
+        operatorReadBudgetMs: OPERATOR_READ_BUDGET_MS,
       },
       createRPCTransport(net.rpcUrl),
     );

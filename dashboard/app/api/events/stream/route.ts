@@ -20,10 +20,20 @@
  * it (lib/ownerStream): it ends cleanly when that session expires, or after
  * OWNER_STREAM_REVERIFY_MS, whichever is first, and the browser's reconnect must pass the guard
  * again. A stream never outlives its session, and a sign-out stops it within that interval.
+ *
+ * A re-verify close is announced at the start of the stream (OWNER_WINDOW_EVENT), so the client can
+ * open its replacement before this one ends and lose no chain event across the handover; the
+ * replacement's daemon resume point arrives as a query parameter (lib/ownerStream).
  */
 
 import { ownerApiBase, ownerAuthHeaders, requireOwnerRequest } from '@/lib/ownerApi';
-import { ownerStreamCloseAt, streamUntil } from '@/lib/ownerStream';
+import {
+  ownerStreamCloseAt,
+  ownerStreamHandoverIn,
+  ownerStreamResumeId,
+  ownerWindowFrame,
+  streamUntil,
+} from '@/lib/ownerStream';
 import type { OverviewSnapshot } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -59,7 +69,7 @@ async function daemonStream(req: Request): Promise<Response | null> {
   const now = Date.now();
 
   const headers = ownerAuthHeaders(gate.grant, { accept: 'text/event-stream' });
-  const lastEventId = req.headers.get('last-event-id');
+  const lastEventId = ownerStreamResumeId(req);
   if (lastEventId) headers.set('last-event-id', lastEventId);
 
   // Armed before the upstream fetch, so a daemon slow to answer cannot stretch the window either.
@@ -81,11 +91,19 @@ async function daemonStream(req: Request): Promise<Response | null> {
       await upstream.body?.cancel().catch(() => {});
       return new Response('Owner API event stream unavailable', { status: 502 });
     }
+    const handoverIn = ownerStreamHandoverIn(gate.grant.sessionExpiresAt, now);
+    const preamble =
+      handoverIn === null ? undefined : new TextEncoder().encode(ownerWindowFrame(handoverIn - (Date.now() - now)));
     return new Response(
-      streamUntil(upstream.body, stop.signal, () => {
-        release();
-        stop.abort(); // end the upstream connection with the downstream one
-      }),
+      streamUntil(
+        upstream.body,
+        stop.signal,
+        () => {
+          release();
+          stop.abort(); // end the upstream connection with the downstream one
+        },
+        preamble,
+      ),
       {
         status: upstream.status,
         headers: {

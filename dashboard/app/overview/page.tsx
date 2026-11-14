@@ -16,6 +16,7 @@ function payloadString(payload: unknown, key: string): string | null {
 }
 import { formatUsdc, formatUsdcExact, formatBps } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import { ownerDataHidden } from '@/lib/streamClient';
 import { networkLabel } from '@/lib/network';
 import PoolCapacity from '@/components/PoolCapacity';
 import MoneyGraph from '@/components/MoneyGraph';
@@ -178,9 +179,12 @@ export default function OverviewPage() {
 
   const status = useEventStream('/api/events/stream', onMessage);
   const signedOut = status === 'signed-out';
-  // What the daemon stream delivered, as the render may use it: nothing while signed out.
-  const ownerSnap = signedOut ? null : snap;
-  const ownerPool = signedOut ? null : pool;
+  // What the daemon stream delivered, as the render may use it: nothing while signed out, and
+  // nothing while the session is unverified (it just changed, or could not be checked), until the
+  // stream is live again.
+  const ownerHidden = ownerDataHidden(status);
+  const ownerSnap = ownerHidden ? null : snap;
+  const ownerPool = ownerHidden ? null : pool;
 
   // Losing the owner session drops everything the daemon stream delivered under it, so the
   // signed-out view cannot show it and the next session's first snapshot cannot merge the old
@@ -275,11 +279,13 @@ export default function OverviewPage() {
             <h1>Overview</h1>
           </div>
         </div>
-        {/* Signed out: only the public chain read. The approvals count is owner data. */}
-        {signedOut ? poolCapacity : treasuryAndPool}
+        {/* Signed out or unverified: only the public chain read. The approvals count is owner data. */}
+        {ownerHidden ? poolCapacity : treasuryAndPool}
         {signedOut ? (
           // A daemon is connected but this visitor has no owner session: the feed is owner data.
           <OwnerSignIn className="mt" />
+        ) : status === 'unverified' ? (
+          <div className="loading mt">Checking the owner session…</div>
         ) : (
           <div className="loading mt">Connecting to the daemon event stream…</div>
         )}

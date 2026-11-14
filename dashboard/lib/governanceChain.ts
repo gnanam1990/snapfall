@@ -78,6 +78,9 @@ export interface GovernanceConfig {
   /** Find every other operator the admin ever granted or queued, from FloatPool's logs. Omitted,
    *  only the configured operator is checked, and the snapshot says so. */
   operatorDiscovery?: OperatorDiscoveryOptions;
+  /** Deadline for each phase of operator-state reads (OPERATOR_GRANT_DELAY, then the per-address
+   *  allowedOperator/operatorGrantExecutableAt pairs). Default DEFAULT_OPERATOR_READ_BUDGET_MS. */
+  operatorReadBudgetMs?: number;
 }
 
 export interface PendingAdmin {
@@ -249,6 +252,14 @@ const OPERATOR_SCAN_PENDING = operatorGlobals.__snapfallOperatorScanPending;
 
 /** Default share of one load spent scanning, so the caps view never waits on a cold scan. */
 export const DEFAULT_OPERATOR_SCAN_BUDGET_MS = 2_500;
+
+/** Default deadline for each phase of operator-state reads. A getter that has not answered by then
+ *  is unknown (or the allowlist unavailable), so one stalled eth_call cannot hold the caps that are
+ *  already read until the browser gives up on the whole section. */
+export const DEFAULT_OPERATOR_READ_BUDGET_MS = 1_500;
+
+/** Thrown into a bounded operator-state read whose deadline passed. */
+class OperatorReadTimeout extends Error {}
 
 interface RPCLog {
   topics: string[];
@@ -457,14 +468,31 @@ async function loadOperatorAllowlist(
   head: string,
   now: bigint,
 ): Promise<OperatorAllowlist> {
-  const at = (data: string, label: string) =>
-    rpc<string>('eth_call', [{ to: pool, data }, head]).then((raw) => word(raw, label));
+  const budgetMs = config.operatorReadBudgetMs ?? DEFAULT_OPERATOR_READ_BUDGET_MS;
+  // Every operator-state read is bounded. The transport adds no deadline of its own, so an RPC
+  // that accepts the request and never answers would otherwise hold this load, and with it the
+  // caps already read, past the browser's own timeout. untilAborted ends the wait even when a
+  // transport ignores the signal.
+  const phase = () => {
+    const call = new AbortController();
+    const timer = setTimeout(() => call.abort(new OperatorReadTimeout(`no answer within ${budgetMs} ms`)), budgetMs);
+    return { signal: call.signal, done: () => clearTimeout(timer) };
+  };
+  const at = (data: string, label: string, signal: AbortSignal) =>
+    untilAborted(rpc<string>('eth_call', [{ to: pool, data }, head], { signal }), signal).then((raw) => word(raw, label));
 
   // The newest getter decides support, as for the capital controls as a whole.
   let grantDelay: bigint;
+  const delayPhase = phase();
   try {
-    grantDelay = await at(OPERATOR_SELECTOR.OPERATOR_GRANT_DELAY, 'OPERATOR_GRANT_DELAY');
+    grantDelay = await at(OPERATOR_SELECTOR.OPERATOR_GRANT_DELAY, 'OPERATOR_GRANT_DELAY', delayPhase.signal);
   } catch (error) {
+    if (error instanceof OperatorReadTimeout) {
+      return {
+        status: 'unavailable',
+        reason: `the RPC did not answer the OPERATOR_GRANT_DELAY() read within ${budgetMs} ms; the operator allowlist was not read`,
+      };
+    }
     if (!isMissingFunction(error)) {
       // A transient failure of one getter is not a reason to lose the caps view (a 503 on the
       // public route); the message is not passed on, since it can echo the RPC URL and its key.
@@ -477,6 +505,8 @@ async function loadOperatorAllowlist(
         'restrict who may draw advances and there are no operator grants to watch. Only a deployment of the ' +
         'current contracts has them.',
     };
+  } finally {
+    delayPhase.done();
   }
 
   const configured = config.operatorAddress?.trim()
@@ -493,24 +523,30 @@ async function loadOperatorAllowlist(
     discovery = { status: 'off', reason: 'operator-event discovery is off; only the configured operator was checked' };
   }
 
+  // One deadline for every address, started after the scan (which has its own budget).
+  const statePhase = phase();
   const operators = await Promise.all(
     [...candidates].sort().map(async (address): Promise<OperatorEntry> => {
       let allowed: bigint;
       let executableAt: bigint;
       try {
         [allowed, executableAt] = await Promise.all([
-          at(encodeAddressArg(OPERATOR_SELECTOR.allowedOperator, address), 'allowedOperator'),
-          at(encodeAddressArg(OPERATOR_SELECTOR.operatorGrantExecutableAt, address), 'operatorGrantExecutableAt'),
+          at(encodeAddressArg(OPERATOR_SELECTOR.allowedOperator, address), 'allowedOperator', statePhase.signal),
+          at(encodeAddressArg(OPERATOR_SELECTOR.operatorGrantExecutableAt, address), 'operatorGrantExecutableAt', statePhase.signal),
         ]);
-      } catch {
-        // One address that will not read is unknown, never "not allowed", and never a 503 for
-        // every other address and the caps.
+      } catch (error) {
+        // One address that will not read (or not in time) is unknown, never "not allowed", and
+        // never a 503 for every other address and the caps.
+        const block = Number(BigInt(head));
         return {
           address,
           allowed: null,
           configured: address === configured,
           pendingGrant: null,
-          unknown: `allowedOperator/operatorGrantExecutableAt could not be read at block ${Number(BigInt(head))}`,
+          unknown:
+            error instanceof OperatorReadTimeout
+              ? `allowedOperator/operatorGrantExecutableAt did not answer within ${budgetMs} ms at block ${block}`
+              : `allowedOperator/operatorGrantExecutableAt could not be read at block ${block}`,
         };
       }
       return {
@@ -520,7 +556,7 @@ async function loadOperatorAllowlist(
         pendingGrant: executableAt === 0n ? null : { executableAt: iso(executableAt), executable: now >= executableAt },
       };
     }),
-  );
+  ).finally(statePhase.done);
   const shown = operators.filter((o) => o.allowed || o.pendingGrant || o.configured || o.unknown);
   const pendingGrants = shown
     .filter((o) => o.pendingGrant)

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatBps, formatUsdcExact, isSafeExplorerUrl, relativeTime } from '@/lib/format';
 import { rateProvenance, mayClaimOnChain } from '@/lib/rateProvenance';
 import { useEventStream } from '@/lib/useEventStream';
+import { ownerDataHidden } from '@/lib/streamClient';
 import { networkLabel } from '@/lib/network';
 import Badge from '@/components/Badge';
 import type {
@@ -376,8 +377,11 @@ export default function FloatPage() {
     setH2Pool(null);
     setH2Advances(null);
   }, [signedOut]);
-  const ownerPool = signedOut ? null : h2Pool;
-  const ownerAdvances = signedOut ? null : h2Advances;
+  // Hidden, not dropped, while the session is unverified (it just changed, or could not be
+  // checked): shown again once the stream is live.
+  const ownerHidden = ownerDataHidden(streamStatus);
+  const ownerPool = ownerHidden ? null : h2Pool;
+  const ownerAdvances = ownerHidden ? null : h2Advances;
 
   useEffect(() => {
     void refresh();

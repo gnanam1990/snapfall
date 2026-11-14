@@ -39,7 +39,16 @@ interface OperatorFake {
   unreadable?: string[];
   /** Make the OPERATOR_GRANT_DELAY read fail with a non-revert RPC error. */
   delayFails?: boolean;
+  /** Addresses whose allowedOperator/operatorGrantExecutableAt reads never answer and ignore the
+   *  abort signal, like an RPC that accepted the request and stalled. */
+  stalled?: string[];
+  /** Make the OPERATOR_GRANT_DELAY read never answer, ignoring the abort signal. */
+  delayStalls?: boolean;
+  /** Abort signals the operator-state reads were given. */
+  signals?: AbortSignal[];
 }
+
+const never = () => new Promise<never>(() => {});
 
 const missing = () => new RPCError('Arc RPC eth_call failed: execution reverted', 200, 3, 'execution reverted');
 
@@ -52,7 +61,7 @@ function fakeRPC(
   const byVault = new Map<string, string>(Object.entries(vault).map(([k, v]) => [S[k as keyof typeof S], v as string]));
   const head = '0x' + (opts.head ?? 100).toString(16);
   const op = opts.operators;
-  return (async (method: string, params: unknown[]) => {
+  return (async (method: string, params: unknown[], options?: { signal?: AbortSignal }) => {
     if (method === 'eth_chainId') return '0x' + (opts.chainId ?? 5042).toString(16);
     if (method === 'eth_getBlockByNumber') return { number: head, timestamp: '0x' + NOW.toString(16) };
     if (method === 'eth_getLogs') {
@@ -81,11 +90,14 @@ function fakeRPC(
     if (opts.missing) throw missing();
     if (to === POOL && Object.values(OS).some((sel) => data.startsWith(sel))) {
       if (!op) throw missing();
+      if (options?.signal) op.signals?.push(options.signal);
       if (data === OS.OPERATOR_GRANT_DELAY) {
+        if (op.delayStalls) return never();
         if (op.delayFails) throw new RPCError('Arc RPC eth_call HTTP 503: https://rpc.example/v2/fake-key', 503, undefined, 'unavailable');
         return w(op.delay ?? 172_800n);
       }
       const who = '0x' + data.slice(-40);
+      if ((op.stalled ?? []).some((a) => a.toLowerCase() === who)) return never();
       if ((op.unreadable ?? []).some((a) => a.toLowerCase() === who)) {
         throw new RPCError('Arc RPC eth_call HTTP 503: https://rpc.example/v2/fake-key', 503, undefined, 'unavailable');
       }
@@ -522,4 +534,59 @@ test('an OPERATOR_GRANT_DELAY read that fails (not a revert) leaves the allowlis
   assert.equal(g.lossBudget.ceiling, '50000000');
   assert.equal(g.operatorAllowlist.status, 'unavailable');
   assert.doesNotMatch(g.operatorAllowlist.status === 'unavailable' ? g.operatorAllowlist.reason : '', /rpc\.example|fake-key/);
+});
+
+test('a stalled operator-state read is unknown after the deadline, and the caps and other operators still read', async () => {
+  reset();
+  const signals: AbortSignal[] = [];
+  const started = Date.now();
+  const g = await loadGovernance(
+    {
+      ...config,
+      operatorAddress: TREASURY,
+      operatorDiscovery: { startBlock: 0, chunkBlocks: 1000 },
+      operatorReadBudgetMs: 40,
+    },
+    fakeRPC(basePool, baseVault, {
+      operators: {
+        allowed: [TREASURY, ROGUE],
+        logs: [
+          [10, OT.allowed, TREASURY],
+          [20, OT.allowed, ROGUE],
+        ],
+        stalled: [ROGUE],
+        signals,
+      },
+    }),
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 1_000, `the stalled read did not hold the load (${elapsed}ms)`);
+  assert.ok(g.status === 'ok' && g.operatorAllowlist.status === 'ok');
+  if (g.status !== 'ok' || g.operatorAllowlist.status !== 'ok') return;
+  assert.equal(g.lossBudget.ceiling, '50000000', 'the caps already read are returned');
+  const a = g.operatorAllowlist;
+  assert.deepEqual(a.allowed, [TREASURY.toLowerCase()]);
+  assert.deepEqual(a.unknown, [ROGUE.toLowerCase()]);
+  const rogue = a.operators.find((o) => o.address === ROGUE.toLowerCase());
+  assert.equal(rogue?.allowed, null, 'a read that timed out is unknown, never "not allowed"');
+  assert.match(rogue?.unknown ?? '', /did not answer within 40 ms at block 100/);
+  assert.ok(signals.some((s) => s.aborted), 'the stalled request was told to stop');
+});
+
+test('a stalled OPERATOR_GRANT_DELAY read leaves the allowlist unavailable after the deadline, and the caps shown', async () => {
+  reset();
+  const started = Date.now();
+  const g = await loadGovernance(
+    { ...config, operatorAddress: TREASURY, operatorReadBudgetMs: 40 },
+    fakeRPC(basePool, baseVault, { operators: { allowed: [TREASURY], delayStalls: true } }),
+  );
+  assert.ok(Date.now() - started < 1_000);
+  assert.ok(g.status === 'ok');
+  if (g.status !== 'ok') return;
+  assert.equal(g.lossBudget.ceiling, '50000000');
+  assert.equal(g.operatorAllowlist.status, 'unavailable');
+  assert.match(
+    g.operatorAllowlist.status === 'unavailable' ? g.operatorAllowlist.reason : '',
+    /did not answer the OPERATOR_GRANT_DELAY\(\) read within 40 ms/,
+  );
 });

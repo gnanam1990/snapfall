@@ -205,6 +205,21 @@ function PortalInner() {
     }
   }, [jobId, authHeaders, loadStatus, loadReceipt]);
 
+  /** The wallet panel's follow-up once its acceptDelivery transaction succeeded. The chain has
+   *  settled by then, whatever the daemon's Accept answers; when that POST fails, nothing else
+   *  re-reads this page's chain status, which would keep offering the wallet for a job the panel
+   *  already shows settled. So the chain is re-read either way. */
+  const acceptAfterWallet = useCallback(
+    async (vaultJobId: string) => {
+      try {
+        await accept();
+      } finally {
+        await loadChain(vaultJobId);
+      }
+    },
+    [accept, loadChain],
+  );
+
   const checkAgain = useCallback(async () => {
     setChecking(true);
     setNote(null);
@@ -254,8 +269,9 @@ function PortalInner() {
       {busy ? a.busy : a.label}
     </button>
   );
-  const ownWallet = read.vaultJobId ? (
-    <OwnWalletPanel vaultJobId={read.vaultJobId} onAccepted={accept} />
+  const walletJobId = read.vaultJobId;
+  const ownWallet = walletJobId ? (
+    <OwnWalletPanel vaultJobId={walletJobId} onAccepted={() => acceptAfterWallet(walletJobId)} />
   ) : (
     <p className="portal-body">
       This delivery is not linked to its on-chain escrow yet, so it cannot be settled from your

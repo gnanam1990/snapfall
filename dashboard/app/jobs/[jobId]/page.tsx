@@ -21,6 +21,7 @@ import type { ActivityMessage } from '@/lib/activity';
 import { humanizeStreamEvent } from '@/lib/activity';
 import { formatUsdcExact, formatBps, relativeTime } from '@/lib/format';
 import { useEventStream } from '@/lib/useEventStream';
+import { ownerDataHidden } from '@/lib/streamClient';
 import { isOwnerLocked } from '@/lib/ownerSessionClient';
 import OwnerSignIn from '@/components/OwnerSignIn';
 import type { JobSnapshot } from '@/lib/jobChain';
@@ -109,13 +110,24 @@ function ExpenseRows({ timeline, total }: { timeline: ActivityMessage[]; total: 
  *
  * The token is shown ONCE and rotates any prior credential (the daemon says so in its response),
  * so this deliberately renders the full link for copying rather than storing it anywhere.
+ *
+ * The link is a per-job credential that opens the customer's acceptance route with no owner
+ * session, so it is owner data like the timeline: it is forgotten the moment the page stops knowing
+ * the visitor is the owner (`ownerHidden`: a sign-out here or in another tab, or a session that
+ * could not be verified), not left on screen under the signed-out badge.
  */
-function AcceptLink({ jobId }: { jobId: string }) {
+function AcceptLink({ jobId, ownerHidden }: { jobId: string; ownerHidden: boolean }) {
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [locked, setLocked] = useState(false);
+
+  useEffect(() => {
+    if (!ownerHidden) return;
+    setLink(null);
+    setCopied(false);
+  }, [ownerHidden]);
 
   const mint = useCallback(async () => {
     setBusy(true);
@@ -170,7 +182,9 @@ function AcceptLink({ jobId }: { jobId: string }) {
       </p>
       {error ? <p className="job-link-error">{error}</p> : null}
       {locked ? <OwnerSignIn className="mt" onSignedIn={() => setLocked(false)} /> : null}
-      {link ? (
+      {/* Checked here too, so the render that first reports the change never paints the link
+          before the effect above has cleared it. */}
+      {link && !ownerHidden ? (
         <p className="job-link mono">
           {link}
           {copied ? <span className="job-link-copied">copied</span> : null}
@@ -230,12 +244,15 @@ export default function JobDetailPage() {
   );
   const status = useEventStream('/api/events/stream', onMessage);
   // The timeline is daemon events streamed under the owner session. When the session ends it is
-  // dropped, not just hidden, so a later session's feed starts clean. The chain read stays.
+  // dropped, not just hidden, so a later session's feed starts clean. While the session is
+  // unverified (it just changed, or could not be checked) it is hidden until the stream is live
+  // again. The chain read stays.
   const signedOut = status === 'signed-out';
+  const ownerHidden = ownerDataHidden(status);
   useEffect(() => {
     if (signedOut) setTimeline([]);
   }, [signedOut]);
-  const ownerTimeline = signedOut ? [] : timeline;
+  const ownerTimeline = ownerHidden ? [] : timeline;
 
   const stageIndex = useMemo(
     () => (job?.status ? HAPPY_PATH.indexOf(job.status as (typeof HAPPY_PATH)[number]) : -1),
@@ -308,6 +325,8 @@ export default function JobDetailPage() {
           <span className="badge-live">live · chain-read on every event</span>
         ) : status === 'signed-out' ? (
           <span className="badge-live badge-reconnecting">chain read · owner signed out</span>
+        ) : status === 'unverified' ? (
+          <span className="badge-live badge-reconnecting">chain read · checking owner session…</span>
         ) : (
           <span className="badge-live badge-reconnecting">reconnecting…</span>
         )}
@@ -488,7 +507,7 @@ export default function JobDetailPage() {
       {/* timeline */}
       <ExpenseRows timeline={ownerTimeline} total={job?.onchainExpensesUsdc ?? null} />
 
-      <AcceptLink jobId={jobId} />
+      <AcceptLink jobId={jobId} ownerHidden={ownerHidden} />
 
       <div className="card mt">
         <p className="card-title">Timeline</p>

@@ -237,7 +237,9 @@ export function portalPlan(input: PortalPlanInput): PortalPlan {
   if (view === 'open') {
     // The pause is checked before anything is claimed, so nothing was accepted.
     if (paused) return { copy: 'paused', badge: plain('Paused'), wallet: false, accept: null, checkAgain: { primary: true } };
-    if (selfCustody) return { copy: null, badge, wallet: true, accept: null, checkAgain: null };
+    // The re-read stays available beside the wallet: a settlement made from it whose Accept record
+    // then failed (or one made elsewhere) is only found by reading the chain again.
+    if (selfCustody) return { copy: null, badge, wallet: true, accept: null, checkAgain: { primary: false } };
     return { copy: 'open', badge, wallet: false, accept: { label: 'Accept & settle', busy: 'Settling…', primary: true }, checkAgain: null };
   }
 

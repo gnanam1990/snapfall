@@ -21,6 +21,7 @@ import {
   safeEqual,
   verifySessionValue,
 } from './ownerSession';
+import { OWNER_STREAM_REVERIFY_MS, parseOwnerWindow } from './ownerStream';
 import * as sessionRoute from '../app/api/owner/session/route';
 import { GET as customerAcceptance } from '../app/api/customer/[jobId]/acceptance/route';
 
@@ -552,6 +553,7 @@ test('the owner event stream ends when the session that opened it expires, and r
       const text = await res.text(); // resolves only when the proxied stream ends
       const elapsed = Date.now() - opened;
       assert.match(text, /"snapshot"/, 'owner events flowed while the session was valid');
+      assert.doesNotMatch(text, /owner-window/, 'a stream ending with its session announces no handover');
       assert.ok(elapsed >= 100 && elapsed < 2_000, `the stream ended at the session expiry (${elapsed}ms)`);
       assert.equal(upstreamCancelled, true, 'the daemon stream was cancelled');
       assert.equal(upstreamSignal?.aborted, true, 'the daemon connection was aborted');
@@ -560,6 +562,45 @@ test('the owner event stream ends when the session that opened it expires, and r
       const again = await stream(ownerRequest('GET', { cookie }));
       assert.equal(again.status, 401);
       assert.equal(await errorCode(again), 'OWNER_SIGN_IN_REQUIRED');
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+});
+
+test('a re-verify close is announced before any owner event, and a handover resumes daemon events', async () => {
+  const { GET: stream } = await import('../app/api/events/stream/route');
+  await withEnv(CONFIGURED, async () => {
+    const previous = globalThis.fetch;
+    const resumedFrom: Array<string | null> = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      resumedFrom.push(new Headers(init?.headers).get('last-event-id'));
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('data: {"kind":"snapshot"}\n\n'));
+        },
+      });
+      return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+    }) as typeof fetch;
+    const firstFrames = async (res: Response) => {
+      const reader = res.body!.getReader();
+      let text = '';
+      while (!text.includes('"snapshot"')) text += new TextDecoder().decode((await reader.read()).value);
+      await reader.cancel(); // also clears the route's window timer
+      return text;
+    };
+    const url = (q: string) => `${ORIGIN}/api/events/stream${q}`;
+    try {
+      const cookie = sessionCookieHeader(); // a fresh session: the re-verify interval closes first
+      const text = await firstFrames(await stream(ownerRequest('GET', { cookie, url: url('?lastEventId=41') })));
+      const [announce] = text.split('\n\n');
+      assert.match(announce, /^event: owner-window\ndata: /, 'the window comes before the snapshot');
+      const closesIn = parseOwnerWindow(announce.split('data: ')[1]);
+      assert.ok(closesIn !== null && closesIn > OWNER_STREAM_REVERIFY_MS - 5_000, `announced ${closesIn}`);
+      assert.equal(resumedFrom[0], '41', 'the handover resume point reaches the daemon as Last-Event-ID');
+
+      await firstFrames(await stream(ownerRequest('GET', { cookie, url: url('?lastEventId=1%0d%0aX-Injected:%201') })));
+      assert.equal(resumedFrom[1], null, 'a non-numeric resume point is dropped, not forwarded');
     } finally {
       globalThis.fetch = previous;
     }
