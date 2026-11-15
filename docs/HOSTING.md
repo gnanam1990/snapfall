@@ -41,6 +41,18 @@ Check billing/spend settings before deployment; free compute does not remove all
 References: [Blueprint specification](https://render.com/docs/blueprint-spec),
 [free-service limits](https://render.com/docs/free), [pricing](https://render.com/pricing).
 
+### Render: the daemon as a private service (testnet)
+
+`daemon/Dockerfile` (build context `daemon/`) runs the same keyless daemon as a local
+`go run ./cmd/snapfall`: no signer keys, no `-deployment`. Create it as a Render **Private
+Service** (never a public web service), on a paid plan with a persistent disk mounted at
+`/var/data` (the database and job memory live there; without a disk every restart is empty).
+Set `SNAPFALL_OWNER_TOKEN` (Render "Generate", shared with the dashboard through an
+environment group) and `SNAPFALL_OWNER_ALLOWED_HOSTS` to the service's internal hostname.
+The dashboard then needs `SNAPFALL_OWNER_API_URL=http://<internal-host>:4010/api/v1`, the same
+token, and its own `SNAPFALL_DASHBOARD_OWNER_SECRET`; free instances cannot use the private
+network, so the dashboard must be on a paid plan too. Never put a mainnet key on this host.
+
 ## Runtime configuration
 
 No signer keys are required to serve the public dashboard. The committed Arc testnet

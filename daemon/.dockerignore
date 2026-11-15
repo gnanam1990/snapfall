@@ -1,0 +1,8 @@
+# Local state and build output never go into the image.
+snapfall
+snapfall.db
+snapfall.db-*
+*.db
+memory/
+*.log
+.env*
