@@ -14,7 +14,8 @@
  * block, which is small for a recent deployment.
  */
 
-import { promises as fs } from 'node:fs';
+import { constants as fsc, promises as fs } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -29,7 +30,11 @@ export interface StoreConfig {
   addresses: string[];
   startBlock: number;
   rpc: RPCTransport;
-  /** Directory for the bootstrap cache; os.tmpdir() by default. Null disables it. */
+  /**
+   * Directory for the bootstrap cache. By default a per-user directory under os.tmpdir(), created
+   * 0700. Whichever it is, the cache is used only while the directory and file are owned by this
+   * process's user and nobody else can write to them. Null disables it.
+   */
   cacheDir?: string | null;
   fetchImpl?: typeof fetch;
 }
@@ -50,38 +55,98 @@ export class HistoryStore {
 
   constructor(private readonly config: StoreConfig) {}
 
-  private cacheFile(): string | null {
-    if (this.config.cacheDir === null) return null;
+  private cacheName(): string {
     const key = `${this.config.network}-${this.config.addresses.map((a) => a.toLowerCase().slice(2, 10)).join('-')}`;
-    return path.join(this.config.cacheDir ?? os.tmpdir(), `snapfall-history-${key}.json`);
+    return `snapfall-history-${key}.json`;
   }
 
-  private async readCache(): Promise<State | null> {
-    const file = this.cacheFile();
-    if (!file) return null;
+  /**
+   * The cache directory, or null when it cannot be trusted. /tmp is shared on Linux, so a file
+   * there could have been planted by another local user; only a directory this user owns, that
+   * no one else can write to and that is not a symlink, is used.
+   */
+  private async cacheDir(): Promise<string | null> {
+    if (this.config.cacheDir === null) return null;
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    const dir = this.config.cacheDir ?? path.join(os.tmpdir(), `snapfall-history-${uid ?? 'user'}`);
     try {
-      const raw = JSON.parse(await fs.readFile(file, 'utf8')) as State & { savedAt: number };
-      if (Date.now() - raw.savedAt > CACHE_MAX_AGE_MS || !Array.isArray(raw.logs)) return null;
-      return { logs: raw.logs, through: raw.through, source: raw.source };
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      const st = await fs.lstat(dir);
+      if (!st.isDirectory() || st.isSymbolicLink()) return null;
+      if (uid !== null && st.uid !== uid) return null;
+      if (st.mode & 0o022) return null;
+      return dir;
     } catch {
       return null;
     }
   }
 
-  private async writeCache(state: State): Promise<void> {
-    const file = this.cacheFile();
-    if (!file) return;
+  private async readCache(): Promise<State | null> {
+    const dir = await this.cacheDir();
+    if (!dir) return null;
+    let fh: fs.FileHandle | undefined;
     try {
-      await fs.writeFile(file, JSON.stringify({ ...state, savedAt: Date.now() }));
+      // O_NOFOLLOW: a symlink planted in place of the file is refused, not followed.
+      fh = await fs.open(path.join(dir, this.cacheName()), fsc.O_RDONLY | (fsc.O_NOFOLLOW ?? 0));
+      const st = await fh.stat();
+      const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+      if (!st.isFile() || (uid !== null && st.uid !== uid) || st.mode & 0o022) return null;
+      return this.validCache(JSON.parse(await fh.readFile('utf8')));
     } catch {
+      return null;
+    } finally {
+      await fh?.close().catch(() => undefined);
+    }
+  }
+
+  /** The cached state only if every field has the shape this store writes and every log is ours. */
+  private validCache(raw: unknown): State | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.savedAt !== 'number' || !Number.isFinite(r.savedAt)) return null;
+    const age = Date.now() - r.savedAt;
+    if (age < 0 || age > CACHE_MAX_AGE_MS) return null;
+    if (r.source !== 'explorer' && r.source !== 'rpc') return null;
+    const through = r.through;
+    if (!Number.isSafeInteger(through) || (through as number) < this.config.startBlock) return null;
+    if (!Array.isArray(r.logs)) return null;
+    const ours = new Set(this.config.addresses.map((a) => a.toLowerCase()));
+    const hex = /^0x[0-9a-fA-F]*$/;
+    const hash = /^0x[0-9a-fA-F]{64}$/;
+    for (const l of r.logs as unknown[]) {
+      if (!l || typeof l !== 'object') return null;
+      const g = l as Record<string, unknown>;
+      if (typeof g.address !== 'string' || !ours.has(g.address.toLowerCase())) return null;
+      if (!Array.isArray(g.topics) || !g.topics.every((t) => typeof t === 'string' && hash.test(t))) return null;
+      if (typeof g.data !== 'string' || !hex.test(g.data)) return null;
+      if (typeof g.txHash !== 'string' || !hash.test(g.txHash)) return null;
+      if (!Number.isSafeInteger(g.blockNumber) || (g.blockNumber as number) < this.config.startBlock || (g.blockNumber as number) > (through as number)) return null;
+      if (!Number.isSafeInteger(g.logIndex) || (g.logIndex as number) < 0) return null;
+      if (g.timestamp !== null && (typeof g.timestamp !== 'number' || !Number.isFinite(g.timestamp))) return null;
+    }
+    return { logs: r.logs as RawLog[], through: through as number, source: r.source };
+  }
+
+  private async writeCache(state: State): Promise<void> {
+    const dir = await this.cacheDir();
+    if (!dir) return;
+    const file = path.join(dir, this.cacheName());
+    const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      // Private to this user, written whole then renamed into place.
+      await fs.writeFile(tmp, JSON.stringify({ ...state, savedAt: Date.now() }), { mode: 0o600, flag: 'wx' });
+      await fs.rename(tmp, file);
+    } catch {
+      await fs.rm(tmp, { force: true }).catch(() => undefined);
       /* a read-only filesystem only costs the next cold start an explorer call */
     }
   }
 
   private async bootstrap(signal?: AbortSignal): Promise<State> {
-    const cached = await this.readCache();
-    if (cached) return cached;
     const { explorerApi, addresses, startBlock, rpc, fetchImpl } = this.config;
+    const cached = await this.readCache();
+    // A cache that claims blocks the chain has not reached yet would stop the tail; drop it.
+    if (cached && cached.through <= (await rpcHead(rpc))) return cached;
     if (explorerApi) {
       const head = await rpcHead(rpc);
       let logs: RawLog[] = [];

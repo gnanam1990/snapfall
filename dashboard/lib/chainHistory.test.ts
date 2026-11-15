@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { encodeAbiParameters, encodeEventTopics, type Hex } from 'viem';
@@ -169,4 +169,30 @@ test('the store bootstraps once from the explorer, then only tails the RPC', asy
   const again = new HistoryStore({ network: 'arc-testnet', explorerUrl: 'x', explorerApi: 'https://e/api', addresses: [VAULT, POOL], startBlock: 0, rpc, cacheDir, fetchImpl: fake });
   await again.refresh();
   assert.equal(explorerCalls, 2);
+
+  // A cache that is not provably ours is ignored and the store bootstraps again.
+  const [name] = readdirSync(cacheDir).filter((f) => f.endsWith('.json'));
+  const file = path.join(cacheDir, name);
+  const good = readFileSync(file, 'utf8');
+  const fresh = () => new HistoryStore({ network: 'arc-testnet', explorerUrl: 'x', explorerApi: 'https://e/api', addresses: [VAULT, POOL], startBlock: 0, rpc, cacheDir, fetchImpl: fake });
+  const plant = (body: string, mode = 0o600) => { rmSync(file, { force: true }); writeFileSync(file, body, { mode }); chmodSync(file, mode); };
+  let calls = explorerCalls;
+
+  const foreign = JSON.parse(good);
+  foreign.logs[0].address = '0x000000000000000000000000000000000000dead';
+  plant(JSON.stringify(foreign));
+  await fresh().refresh();
+  assert.equal(explorerCalls, calls += 2, 'a log from another contract voids the cache');
+
+  plant(good, 0o666);
+  await fresh().refresh();
+  assert.equal(explorerCalls, calls += 2, 'a cache others can write is not trusted');
+
+  const ahead = JSON.parse(good);
+  ahead.through = head + 1_000_000;
+  plant(JSON.stringify(ahead));
+  await fresh().refresh();
+  assert.equal(explorerCalls, calls += 2, 'a cache past the chain head is dropped');
+
+  assert.equal(statSync(file).mode & 0o777, 0o600, 'the rewritten cache is private');
 });
