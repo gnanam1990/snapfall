@@ -39,6 +39,7 @@ import (
 	"github.com/gnanam1990/snapfall/daemon/internal/policy"
 	"github.com/gnanam1990/snapfall/daemon/internal/purchasing"
 	"github.com/gnanam1990/snapfall/daemon/internal/qa"
+	"github.com/gnanam1990/snapfall/daemon/internal/sanctions"
 	"github.com/gnanam1990/snapfall/daemon/internal/store"
 	"github.com/gnanam1990/snapfall/daemon/internal/supervisor"
 	"github.com/gnanam1990/snapfall/daemon/internal/telegram"
@@ -1004,7 +1005,19 @@ func wireBrain(ctx context.Context, log *slog.Logger, st *store.Store, dbPath, o
 	// purchase is to ask Funding for a quote (H3 §7 step 1).
 	payer := wirePayer(ctx, log, fund, chainID)
 
-	br.SetPurchaser(purchasing.New(life, st, fund, led, purchasing.RealClock{}, orgID, 5*time.Minute))
+	purchaser := purchasing.New(life, st, fund, led, purchasing.RealClock{}, orgID, 5*time.Minute)
+	// Payee sanctions screening: every quoted payTo is checked against the Chainalysis
+	// sanctions oracle before intake, and a listed or unscreenable payee is refused. On by
+	// default over a public Ethereum RPC (no key); SNAPFALL_SANCTIONS_RPC overrides the
+	// endpoint, and "off" disables it, which the startup log says plainly.
+	if rpc := strings.TrimSpace(os.Getenv("SNAPFALL_SANCTIONS_RPC")); strings.EqualFold(rpc, "off") {
+		log.Warn("payee sanctions screening is OFF (SNAPFALL_SANCTIONS_RPC=off): quoted payees are paid unscreened")
+	} else {
+		oracle := sanctions.NewOracle(rpc)
+		purchaser.SetPayeeScreen(oracle)
+		log.Info("payee sanctions screening on", "provider", oracle.Provider(), "contract", oracle.Contract)
+	}
+	br.SetPurchaser(purchaser)
 
 	// G12 Billing: the read-side invoice formatter over the shared store's chain rows, on the
 	// deployment's chain (arc-testnet 5042002 when none is configured). Brain alone holds the

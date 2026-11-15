@@ -96,9 +96,9 @@ const NOT_PROVEN = [
       'docs/spine-runs/ logs four automated runs from 7 Aug 2026: two failed at funding, one at the agent spend, and the best (a 0.6 reduced-scale run) is UNVERIFIED because its x402 purchase was never broadcast. The x402 leg settled on its own the next day (8 Aug), but no single run has yet gone from funding to settlement with a PASS verdict.',
   },
   {
-    claim: 'Compliance screening is a labelled stub.',
+    claim: 'Only payee addresses are screened, and no live purchase has been screened yet.',
     detail:
-      'The worker returns decision "not-screened" with stub: true and names no provider. It fabricates no screening result.',
+      'Before every purchase the daemon checks the payee address against the Chainalysis sanctions oracle (a public, read-only contract on Ethereum mainnet) and refuses a listed or unscreenable payee. Screening the company under review is still a labelled stub: the report says "not-screened" with stub: true.',
   },
   {
     claim: 'Discovery is a local ranker, not the Circle Agent Marketplace.',

@@ -53,6 +53,11 @@ The dashboard then needs `SNAPFALL_OWNER_API_URL=http://<internal-host>:4010/api
 token, and its own `SNAPFALL_DASHBOARD_OWNER_SECRET`; free instances cannot use the private
 network, so the dashboard must be on a paid plan too. Never put a mainnet key on this host.
 
+Before every purchase the daemon screens the quoted payee address against the Chainalysis
+sanctions oracle on Ethereum mainnet (read-only, no key) through a public RPC. A listed payee
+is refused, and so is one that cannot be screened. `SNAPFALL_SANCTIONS_RPC` sets another
+Ethereum RPC; `SNAPFALL_SANCTIONS_RPC=off` disables screening, and the daemon logs a warning.
+
 ## Runtime configuration
 
 No signer keys are required to serve the public dashboard. The committed Arc testnet
