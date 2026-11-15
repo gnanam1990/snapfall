@@ -91,9 +91,9 @@ const NOT_PROVEN = [
       'On Arc testnet one has: on 4 Nov 2026 a 0.04 USDC purchase was signed by the Circle treasury wallet and settled by the Circle relayer wallet (transaction 0x63731fac…5264201). Nothing has been bought on mainnet.',
   },
   {
-    claim: 'No end-to-end run has been logged.',
+    claim: 'No full end-to-end run has passed.',
     detail:
-      'docs/spine-runs/ contains only .gitkeep. Nothing in this product claims a recorded full-spine run.',
+      'docs/spine-runs/ logs four automated runs from 7 Aug 2026: two failed at funding, one at the agent spend, and the best (a 0.6 reduced-scale run) is UNVERIFIED because its x402 purchase was never broadcast. The x402 leg settled on its own the next day (8 Aug), but no single run has yet gone from funding to settlement with a PASS verdict.',
   },
   {
     claim: 'Compliance screening is a labelled stub.',
