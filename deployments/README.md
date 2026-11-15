@@ -43,7 +43,28 @@ the compiler's artifact (`forge inspect <Contract> abi --json`), and
 `contracts/test/IndexerAbi.t.sol` fails if an entry drifts from the compiled contract or the set
 of events changes. Transaction-writing callers must use compiler-generated full ABIs.
 
-## Deployed — Arc testnet, 23 Jul 2026 (block 53268443)
+## Deployed — Arc testnet, 15 Nov 2026 (block 72420303) — current
+
+The audited source with capital controls, deployed with `scripts/redeploy-testnet` from the
+fresh deployer `0x158771bCEF1F91Af732CeC9117D6D14cFb958Bf8`, which is admin of both contracts
+and the one allowed operator. Caps: `maxTotalExposure` 50.00, `maxAdvance` 10.00,
+`maxJobPayment` 25.00 USDC. The services and dashboard read this set from `arc-testnet.json`.
+
+| Contract | Address | Deploy tx block |
+|---|---|---|
+| AuditAnchor | `0x929bA0CFE0EE582949EEB0aA5c512f1EaB421519` | 72420303 |
+| JobVault | `0x449A7308A10312b9bb0E21B62064a8080eb10bD1` | 72420304 |
+| FloatPool | `0x4780C2E47a7eE3f9F88Bd83aace58fb32c4586bE` | 72420304 |
+
+Verified on-chain after the broadcast: code at all three addresses, `JobVault.floatPool()` and
+`FloatPool.jobVault()` point at each other, both admins are the deployer, the three caps read
+back as set, `allowedOperator(deployer)` is true, neither contract is paused, `usdc()` is
+`0x3600…0000`.
+
+## Superseded — Arc testnet, 23 Jul 2026 (block 53268443)
+
+The original set, before the capital controls and the security-audit fixes. Its history stays
+on chain and its links below still resolve; nothing reads it any more.
 
 | Contract | Address | Deploy tx block |
 |---|---|---|

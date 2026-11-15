@@ -28,12 +28,12 @@ func TestLoad_CommittedDeployArtifactResolvesWithoutEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the committed deploy artifact must load with no contract env: %v", err)
 	}
-	if d.Contracts.JobVault.Address != strings.ToLower("0xF3830D7C3B8ca873bB0b277c0e179999e3d52681") &&
-		d.Contracts.JobVault.Address != "0xF3830D7C3B8ca873bB0b277c0e179999e3d52681" {
+	if d.Contracts.JobVault.Address != strings.ToLower("0x449A7308A10312b9bb0E21B62064a8080eb10bD1") &&
+		d.Contracts.JobVault.Address != "0x449A7308A10312b9bb0E21B62064a8080eb10bD1" {
 		t.Fatalf("jobVault address: %s", d.Contracts.JobVault.Address)
 	}
-	if d.Network.StartBlock != 53268443 {
-		t.Fatalf("startBlock %d, want the deployment block 53268443", d.Network.StartBlock)
+	if d.Network.StartBlock != 72420303 {
+		t.Fatalf("startBlock %d, want the deployment block 72420303", d.Network.StartBlock)
 	}
 
 	// Env still wins over the committed value.

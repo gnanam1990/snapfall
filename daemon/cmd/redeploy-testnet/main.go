@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -88,15 +89,22 @@ func run(ctx context.Context, deploymentPath, contractsRoot, account string) (ru
 		return fmt.Errorf("resolving deployment sender: %w", err)
 	}
 
+	// Forge resolves the script path against its working directory, not --root (forge 1.x),
+	// and this command runs from daemon/. Anchor both to the absolute project root.
+	root, err := filepath.Abs(contractsRoot)
+	if err != nil {
+		return fmt.Errorf("resolving contracts root: %w", err)
+	}
 	command := exec.CommandContext(
 		ctx,
-		"forge", "script", "script/Deploy.s.sol:Deploy",
-		"--root", contractsRoot,
+		"forge", "script", filepath.Join(root, "script", "Deploy.s.sol")+":Deploy",
+		"--root", root,
 		"--rpc-url", deployment.Network.RPCURL,
 		"--account", account,
 		"--sender", sender,
 		"--broadcast",
 	)
+	command.Dir = root
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr

@@ -13,7 +13,7 @@ test('unset SNAPFALL_NETWORK is testnet, read exactly as the routes did before',
   assert.equal(net.chainId, 5042002);
   assert.equal(net.rpcUrl, deploymentFor('arc-testnet').network.rpcUrl);
   assert.equal(net.hasPrivateRpc, false);
-  assert.equal(requireAddress('floatPool', {}, 'arc-testnet'), '0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5');
+  assert.equal(requireAddress('floatPool', {}, 'arc-testnet'), '0x4780C2E47a7eE3f9F88Bd83aace58fb32c4586bE');
 });
 
 test('a typo in SNAPFALL_NETWORK fails instead of quietly meaning testnet', () => {

@@ -68,7 +68,7 @@ export default function OverviewPage() {
               'Reading the chain…'
             )}
           </p>
-          {t ? <p className="hero-sub">Customers paid {usdc(t.settledVolumeUsdc)} USDC. Every time, the pool was repaid before the operator, in the same transaction.</p> : null}
+          {t && t.settled ? <p className="hero-sub">Customers paid {usdc(t.settledVolumeUsdc)} USDC. Every time, the pool was repaid before the operator, in the same transaction.</p> : null}
           <dl className="hero-figs">
             <div><dt>Open jobs</dt><dd>{t ? t.active : '—'}</dd></div>
             <div><dt>Jobs ever</dt><dd>{t ? t.jobs : '—'}</dd></div>
