@@ -110,9 +110,9 @@ const CONFIG = [
     secret: false,
   },
   {
-    name: 'SNAPFALL_DEMO_STREAM',
+    name: 'SNAPFALL_EXPLORER_API',
     enables:
-      'Replays a scripted fixture instead of a live daemon. Surfaces label it "demo replay" when on, and it is stripped from the deployed artifact.',
+      'The explorer logs API the job and activity history is read from. Arc testnet uses its public explorer by default; without one, history is scanned from the RPC.',
     secret: false,
   },
   {

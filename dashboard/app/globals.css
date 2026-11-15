@@ -1,1755 +1,604 @@
-/* ══ The ledger ══
+/* ══ Snapfall ══
  *
- * This interface is a ledger kept by a careful operator, not a drawing of a machine. Money here
- * is evidence: every figure names its source, every state its reason, and nothing is asserted
- * that cannot be read back from the chain. Type, hairlines and tabular digits do the work.
+ * A snowfall over deep water. Every page opens on a navy band that carries its title, the one
+ * sentence that matters and, on the overview, a waterfall chart of where the customers' money
+ * fell: back to the pool first, then to the operator. Below the band the page is calm glacier
+ * grey (light) or deep navy (dark), and content sits on plain surfaces.
  *
- * Three rules are enforced at the token layer so no component can reintroduce them by accident:
+ * Two series colours carry meaning everywhere: aqua is money going back into the pool, sand is
+ * what the operator keeps. Both pairs were run through the dataviz validator:
+ *   light on #FFFFFF: #0E9C8F / #C9861A  — all checks pass
+ *   navy  on #0B1E36: #1A9E90 / #BE8424  — all checks pass (CVD ΔE 12.7)
  *
- *   NO DEPTH.    --shadow and --shadow-lg are `none`. Separation is a hairline or a fill step,
- *                never a shadow.
- *   NO GLOW.     Every *-glow token resolves to transparent. The names survive because
- *                components still reference them.
- *   NO GRADIENT. No gradient declaration colours anything; the CTA stops are one hex, so even a
- *                reintroduced one renders flat.
- *
- * Colour is semantic only: green is settled/flowing, red is refused/alarm, amber is waiting on
- * a human, and the iris accent marks the live, verifiable element — a link out to evidence, a
- * focus ring, the process in motion. Nothing is coloured for decoration.
- *
- * ── Contrast ──
- *
- * Every ratio below was computed from these hex values by WCAG 2.x relative luminance, not
- * eyeballed. Text tokens are checked against the lightest surface they can land on in each
- * theme: --panel-3 in dark, --panel in light. The muted ramp has about one step of headroom at
- * 4.5:1 before --muted and --muted-2 collapse into one grey, so there is no room for a third
- * muted token: --muted-2 sits at the floor and --muted a clear step above it.
+ * Legacy owner surfaces (approvals, workforce, settings, audit, job detail, portal) keep their
+ * markup; their tokens are re-pointed here and their page header becomes the same band.
  */
 
 :root {
   color-scheme: dark;
-
-  /* ── surfaces ──
-     Neutral graphite, one step apart. Panels lift from the ground by a fill step and a
-     hairline, never by a shadow. */
-  --bg: #0e0f11;
-  --bg-2: #131518;
-  /* The page glow is gone; the name resolves to the ground so any consumer draws nothing. */
-  --bg-glow-top: #0e0f11;
-  --well: #0a0b0d;
-  --well-2: #07080a;
-  --panel: #15181c;
-  --panel-2: #1a1e23;
-  --panel-3: #20252b;
-  --panel-a: rgba(21, 24, 28, 0.97);
-  --panel-b: rgba(16, 18, 21, 0.97);
-  --scrim: rgba(14, 15, 17, 0.76);
-  --inset: rgba(0, 0, 0, 0.28);
-  --inset-2: rgba(0, 0, 0, 0.16);
-  --hover: rgba(255, 255, 255, 0.045);
-
-  /* ── lines ──
-     --border carries the structure; --border-2 is the firmer edge on meters, inputs and
-     controls. */
-  --border: #282d33;
-  --border-2: #383e46;
-  --border-3: #2f343b;
-
-  /* ── lettering ──
-     Ratios against --panel-3 #20252b, the lightest dark surface text can land on. */
-  --text: #ecedef;      /* 13.17 */
-  --text-2: #b9bdc4;    /*  8.18 */
-  --muted: #a2a7ae;     /*  6.37 */
-  --muted-2: #90959d;   /*  5.12 panel-3 · 5.56 panel-2 · 5.91 panel · 6.37 bg */
-  --color-muted: var(--muted);
-  --n: var(--text);
-
-  /* ── state: the only colour in the system ── */
-  --pos: #83c795;             /* settled · flowing — 7.77 on panel-3 */
-  --pos-bg: #15251b;
-  --pos-bg-strong: #1a2f22;
-  --pos-border: #2a4a35;
-  --pos-border-strong: #38604a;
-  --pos-glow: transparent;
-
-  --neg: #dc8a83;             /* refused · alarm — 5.88 on panel-3 */
-  --neg-bg: #2a1816;
-  --neg-border: #4d2925;
-  --on-neg: #1a0f0e;
-
-  --warn: #d3a65c;            /* waiting on a human — 6.89 on panel-3 */
-  --warn-bg: #261e10;
-  --warn-border: #4a3719;
-
-  /* The live, verifiable element: links out to evidence, the focus ring, money in motion.
-     An iris, deliberately not the crypto-dashboard cyan and not the old drafting teal. */
-  --accent: #9b98e8;          /* 5.92 on panel-3 */
-  --accent-bright: #b7b5f0;   /* 8.00 on panel-3 */
-  --accent-dim: #6f6cb4;
-  --accent-bg: #1b1a2e;
-  --accent-border: #35335c;
-  --accent-wash: rgba(155, 152, 232, 0.10);
-  --accent-glow-2: transparent;
-  --accent-glow-3: transparent;
-  --on-accent: #14132a;       /* 6.96 on --accent */
-
-  /* Both stops identical: belt and braces, since no gradient declaration remains anywhere. */
-  --cta-from: #9b98e8;
-  --cta-to: #9b98e8;
-  --cta-glow: transparent;
-
-  /* --sky is the focus family, mapped onto the accent so focus reads as "the live element". */
-  --sky: #9b98e8;
-  --sky-bright: #b7b5f0;
-  --sky-bg: #1b1a2e;
-  --sky-border: #35335c;
-  --sky-border-strong: #4a4780;
-  --sky-wash: rgba(155, 152, 232, 0.10);
-
-  --violet: #b493d6;          /* a distinct actor hue in the feed, nothing more — 5.94 on panel-3 */
-  --tick: rgba(162, 167, 174, 0.42);
-  --pipe-accent: var(--accent);
-  --actor-color: var(--muted);
-
-  /* Focus owes 3:1 against the field it sits on. 55% clears it here; light needs a different
-     figure entirely, so this cannot be one shared alpha. */
-  --focus-wash: color-mix(in srgb, var(--sky) 55%, transparent);
-  --avatar-tint: 14%;
-  --avatar-tint-base: var(--bg-2);
-
-  /* Panels and meters. Small controls use --radius-sm. */
-  --radius: 10px;
-  --radius-sm: 7px;
-
-  /* Flat. Separation is a hairline or a fill step. */
-  --shadow: none;
-  --shadow-lg: none;
+  --page: #020617;
+  --band: #0b1120;
+  --band-ink: #f8fafc;
+  --band-ink-2: #94a3b8;
+  --band-line: #1e293b;
+  --band-pool: #3b82f6;
+  --band-op: #d97706;
+  --surface: #0e1223;
+  --surface-2: #131a2e;
+  --line: #1e293b;
+  --line-2: #334155;
+  --ink: #f8fafc;
+  --ink-2: #cbd5e1;
+  --muted: #94a3b8;
+  --accent: #22c55e;
+  --accent-ink: #052e16;
+  --accent-soft: rgba(34, 197, 94, 0.12);
+  --pool: #3b82f6;
+  --operator: #d97706;
+  --good: #22c55e;
+  --good-soft: rgba(34, 197, 94, 0.12);
+  --wait: #fbbf24;
+  --wait-soft: rgba(251, 191, 36, 0.12);
+  --bad: #f87171;
+  --bad-soft: rgba(248, 113, 113, 0.12);
+  --radius: 20px;
+  --radius-sm: 10px;
+  --focus: 0 0 0 3px rgba(34, 197, 94, 0.45);
+  --font: var(--font-sans), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --display: var(--font-mono), ui-monospace, monospace;
+  --mono: var(--font-mono), ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
-/* ══ Day ledger ══
- *
- * The same ledger under daylight. Not an inversion: the ground is a soft neutral rather than
- * white, because pure white under hairlines reads as a spreadsheet, and the ink is a soft
- * near-black rather than #000. Ratios against --panel #ffffff, the lightest light surface.
- */
 :root[data-theme='light'] {
   color-scheme: light;
+  --page: #f5f5f7;
+  --band: #0f172a;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --line: #e2e8f0;
+  --line-2: #cbd5e1;
+  --ink: #0f172a;
+  --ink-2: #334155;
+  --muted: #64748b;
+  --accent: #15803d;
+  --accent-ink: #ffffff;
+  --accent-soft: #dcfce7;
+  --pool: #2563eb;
+  --operator: #b45309;
+  --good: #15803d;
+  --good-soft: #dcfce7;
+  --wait: #a16207;
+  --wait-soft: #fef9c3;
+  --bad: #b91c1c;
+  --bad-soft: #fee2e2;
+  --focus: 0 0 0 3px rgba(21, 128, 61, 0.35);
+}
 
-  --bg: #f5f5f2;
-  --bg-2: #fafaf8;
-  --bg-glow-top: #f5f5f2;
-  --well: #ebebe7;
-  --well-2: #e4e4df;
-  --panel: #ffffff;
-  --panel-2: #f7f7f4;
-  --panel-3: #efefeb;
-  --panel-a: rgba(255, 255, 255, 0.97);
-  --panel-b: rgba(247, 247, 244, 0.97);
-  --scrim: rgba(255, 255, 255, 0.8);
-  --inset: rgba(22, 23, 26, 0.05);
-  --inset-2: rgba(22, 23, 26, 0.03);
-  --hover: rgba(22, 23, 26, 0.045);
-
-  --border: #e1e1dc;
-  --border-2: #c9c9c2;
-  --border-3: #d5d5cf;
-
-  --text: #16171a;      /* 17.92 */
-  --text-2: #404349;    /*  9.92 */
-  --muted: #5e6269;     /*  6.13 panel · 4.80 well-2 */
-  /* Measured, not mirrored by eye. It does not clear 4.5 on --well-2 (3.96), so --muted-2 must
-     not be used on that surface; --muted is the token there, at 4.80. Darkening it further
-     collapses it into --muted — the ramp has no room, which is why the rule exists. */
-  --muted-2: #6b6f76;   /*  5.05 panel · 4.70 panel-2 · 4.62 bg */
+/* Legacy token bridge (legacy.css reads these names). */
+:root, :root[data-theme='light'] {
+  --bg: var(--page);
+  --bg-2: var(--surface-2);
+  --well: var(--surface-2);
+  --well-2: var(--page);
+  --panel: var(--surface);
+  --panel-2: var(--surface-2);
+  --panel-3: var(--surface-2);
+  --panel-a: var(--surface);
+  --panel-b: var(--surface-2);
+  --scrim: color-mix(in srgb, var(--page) 80%, transparent);
+  --inset: color-mix(in srgb, var(--ink) 5%, transparent);
+  --inset-2: color-mix(in srgb, var(--ink) 3%, transparent);
+  --hover: color-mix(in srgb, var(--accent) 8%, transparent);
+  --border: var(--line);
+  --border-2: var(--line-2);
+  --border-3: var(--line-2);
+  --text: var(--ink);
+  --text-2: var(--ink-2);
+  --muted-2: var(--muted);
   --color-muted: var(--muted);
-  --n: var(--text);
-
-  --pos: #2c7546;      /* 4.79 on --pos-bg · 5.61 on --panel · 5.23 on --panel-2 */
-  --pos-bg: #e4f0e7;
-  --pos-bg-strong: #d7e8dc;
-  --pos-border: #b7d3bf;
-  --pos-border-strong: #92b89e;
-  --pos-glow: transparent;
-
-  --neg: #a83c34;       /* 5.09 on --neg-bg · 6.25 on --panel */
-  --neg-bg: #f6e4e1;
-  --neg-border: #e0bcb6;
-  --on-neg: #ffffff;    /* 6.25 on --neg */
-
-  --warn: #87590f;      /* 5.17 on --warn-bg · 6.06 on --panel */
-  --warn-bg: #f7ecd7;
-  --warn-border: #e0c795;
-
-  --accent: #4c44b0;    /* 6.34 on --accent-bg · 7.61 on --panel */
-  --accent-bright: #3d37a0;
-  --accent-dim: #7c76c4;
-  --accent-bg: #eae9f7;
-  --accent-border: #c5c2e6;
-  --accent-wash: rgba(76, 68, 176, 0.08);
-  --accent-glow-2: transparent;
-  --accent-glow-3: transparent;
-  --on-accent: #ffffff; /* 7.61 on --accent */
-
-  --cta-from: #4c44b0;
-  --cta-to: #4c44b0;
-  --cta-glow: transparent;
-
-  --sky: #4c44b0;
-  --sky-bright: #3d37a0;
-  --sky-bg: #eae9f7;
-  --sky-border: #c5c2e6;
-  --sky-border-strong: #9d99d6;
-  --sky-wash: rgba(76, 68, 176, 0.08);
-
-  --violet: #6d5a9e;    /* 5.82 on --panel */
-  --tick: rgba(64, 67, 73, 0.34);
+  --n: var(--ink);
+  --pos: var(--good);
+  --pos-bg: var(--good-soft);
+  --pos-bg-strong: var(--good-soft);
+  --pos-border: color-mix(in srgb, var(--good) 35%, transparent);
+  --pos-border-strong: color-mix(in srgb, var(--good) 55%, transparent);
+  --neg: var(--bad);
+  --neg-bg: var(--bad-soft);
+  --neg-border: color-mix(in srgb, var(--bad) 35%, transparent);
+  --on-neg: var(--accent-ink);
+  --warn: var(--wait);
+  --warn-bg: var(--wait-soft);
+  --warn-border: color-mix(in srgb, var(--wait) 35%, transparent);
+  --accent-bright: var(--accent);
+  --accent-dim: var(--muted);
+  --accent-bg: var(--accent-soft);
+  --accent-border: color-mix(in srgb, var(--accent) 35%, transparent);
+  --accent-wash: var(--accent-soft);
+  --on-accent: var(--accent-ink);
+  --cta-from: var(--accent);
+  --cta-to: var(--accent);
+  --sky: var(--accent);
+  --sky-bright: var(--accent);
+  --sky-bg: var(--accent-soft);
+  --sky-border: color-mix(in srgb, var(--accent) 35%, transparent);
+  --sky-border-strong: var(--accent);
+  --sky-wash: var(--accent-soft);
+  --focus-wash: color-mix(in srgb, var(--accent) 60%, transparent);
+  --violet: var(--pool);
+  --tick: var(--line-2);
   --pipe-accent: var(--accent);
   --actor-color: var(--muted);
-
-  /* Light needs a heavier mix than dark to clear 3:1 on the same composited field: 70% against
-     55%. One shared alpha fixes one theme and fails the other. */
-  --focus-wash: color-mix(in srgb, var(--sky) 70%, transparent);
   --avatar-tint: 12%;
-  --avatar-tint-base: var(--panel);
-
-  --radius: 10px;
-  --radius-sm: 7px;
+  --avatar-tint-base: var(--surface);
   --shadow: none;
   --shadow-lg: none;
 }
 
-
+/* ── base ── */
 * { box-sizing: border-box; }
-html, body { padding: 0; margin: 0; }
+html, body { margin: 0; padding: 0; }
 body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--page);
   -webkit-font-smoothing: antialiased;
-  font-size: 14px;
-  line-height: 1.45;
+  font-feature-settings: 'tnum' 1;
 }
 a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: none; box-shadow: var(--focus); border-radius: 6px; }
+.mono, code { font-family: var(--mono); font-size: 0.9em; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.link { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.link:hover { text-decoration-thickness: 2px; }
+.wrap { width: 100%; max-width: 1200px; margin: 0 auto; padding: 0 40px; }
 
-.app { display: grid; grid-template-columns: 224px 1fr; min-height: 100vh; }
+/* ── top bar (lives on the band colour) ── */
+.top { position: sticky; top: 0; z-index: 20; background: var(--band); color: var(--band-ink); border-bottom: 1px solid var(--band-line); }
+.top-inner { display: flex; align-items: center; gap: 28px; height: 60px; }
+.top-brand { display: flex; align-items: center; gap: 10px; flex: none; color: var(--band-ink); }
+.top-brand svg { color: var(--accent); }
+.top-name { font-family: var(--display); font-size: 19px; font-weight: 700; letter-spacing: -0.02em; }
+.top-nav { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.top-nav::-webkit-scrollbar { display: none; }
+.top-sep { width: 1px; height: 18px; background: var(--band-line); margin: 0 10px; flex: none; }
+.top-link { position: relative; padding: 8px 12px; border-radius: 8px; color: var(--band-ink-2); font-size: 14px; font-weight: 500; white-space: nowrap; }
+.top-link:hover { color: var(--band-ink); background: rgba(255, 255, 255, 0.06); }
+.top-link.is-active { color: var(--band-ink); }
+.top-link.is-active::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: -11px; height: 3px; border-radius: 3px 3px 0 0; background: var(--accent); }
+.top-side { display: flex; align-items: center; gap: 12px; flex: none; font-size: 13px; color: var(--band-ink-2); }
+.top .theme-toggle { border-color: var(--band-line); background: transparent; color: var(--band-ink-2); }
+.top .theme-toggle:hover { color: var(--band-ink); }
 
-/* ── sidebar ── */
-.sidebar {
-  border-right: 1px solid var(--border);
-  background: var(--bg);
-  padding: 20px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-}
-.brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 20px; }
-/* The mark inherits currentColor, so the accent comes from the theme rather than the asset. */
-.brand > svg { color: var(--accent); flex: none; display: block; }
-.brand-name { font-weight: 650; letter-spacing: -0.01em; font-size: 15px; }
-/* Text-only navigation: the destination names are short and unambiguous, so no glyph earns its
-   place beside them. Active is a fill step plus weight, not a coloured marker. */
-.nav-link {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 7px 10px; border-radius: var(--radius-sm); color: var(--muted);
-  font-size: 13.5px; font-weight: 500; transition: background 0.12s, color 0.12s;
-}
-.nav-link:hover { background: var(--hover); color: var(--text); }
-.nav-link.active { background: var(--panel-2); color: var(--text); font-weight: 600; }
-.sidebar-foot { margin-top: auto; padding: 14px 10px 2px; color: var(--muted-2); font-size: 11.5px; line-height: 1.5; min-width: 0; overflow-wrap: anywhere; border-top: 1px solid var(--border); }
-.sidebar-net { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
-.sidebar-net-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pos); flex: none; }
+.main { min-width: 0; width: 100%; max-width: none; padding: 0; }
+.shell-bare .main { padding: 0; }
 
-/* ── main ── */
-.main { width: 100%; min-width: 0; padding: 28px 32px 64px; max-width: 1180px; }
-/* A steady dot, not a pulse: liveness is stated by the word and the dot's hue, and motion on a
-   ledger is reserved for money actually moving (the graph below). */
-.badge-live { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
-.badge-live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--pos); }
-.badge-reconnecting::before { background: var(--warn); }
+/* ── the band: page title, the sentence, the headline chart ── */
+.band { background: var(--band); color: var(--band-ink); padding: 40px 0 44px; border-bottom: 1px solid var(--band-line); }
+.band-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 48px; align-items: end; }
+.band-grid.is-single { grid-template-columns: minmax(0, 1fr); }
+.band h1 { margin: 0; font-family: var(--display); font-size: 15px; font-weight: 600; letter-spacing: 0.01em; color: var(--accent); }
+.band-lede { margin: 12px 0 0; max-width: 24ch; font-family: var(--display); font-size: clamp(30px, 4vw, 46px); line-height: 1.1; font-weight: 700; letter-spacing: -0.035em; color: var(--band-ink); }
+.band-lede.is-long { max-width: 30ch; font-size: clamp(26px, 3.2vw, 38px); }
+.band-sub { margin: 16px 0 0; max-width: 58ch; color: var(--band-ink-2); font-size: 15.5px; }
+.band-meta { margin-top: 18px; font-size: 13px; color: var(--band-ink-2); display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.band-meta .is-bad { color: #ff8f8a; }
+.band-figs { display: flex; flex-wrap: wrap; gap: 14px 40px; margin: 26px 0 0; padding: 0; }
+.band-figs div { min-width: 0; }
+.band-figs dt { font-size: 13px; color: var(--band-ink-2); }
+.band-figs dd { margin: 2px 0 0; font-family: var(--display); font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: var(--band-ink); white-space: nowrap; }
+.band-figs dd small { font-family: var(--font); font-size: 13px; font-weight: 400; color: var(--band-ink-2); margin-left: 5px; }
+.band-panel { background: rgba(255, 255, 255, 0.04); border: 1px solid var(--band-line); border-radius: var(--radius); padding: 20px 22px 16px; }
+.band-panel h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--band-ink); }
+.band-panel p { margin: 3px 0 0; font-size: 13px; color: var(--band-ink-2); }
 
-/* ── cards & grid ── */
-.grid { display: grid; gap: 16px; }
-.cols-2 { grid-template-columns: 1.4fr 1fr; }
-.activity-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.75fr); gap: 16px; align-items: start; }
-@media (max-width: 900px) {
-  .cols-2, .activity-layout { grid-template-columns: 1fr; }
-  .app { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; }
-}
-.card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px 20px;
-  box-shadow: var(--shadow);
-}
-.card-title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); margin: 0 0 12px; }
+/* waterfall chart in the band */
+.wf { display: block; width: 100%; height: auto; margin-top: 12px; }
+.wf-grid { stroke: var(--band-line); stroke-width: 1; }
+.wf-axis { fill: var(--band-ink-2); font-size: 12px; font-family: var(--font); }
+.wf-val { fill: var(--band-ink); font-size: 13px; font-weight: 600; font-family: var(--font); }
+.wf-total { fill: var(--line-2); }
+.wf-pool { fill: var(--band-pool); }
+.wf-op { fill: var(--band-op); }
+.wf-link { stroke: var(--band-ink-2); stroke-width: 1; opacity: 0.5; }
+.wf-bar { transform-box: fill-box; transform-origin: bottom; animation: wf-rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.wf-bar.is-drop { transform-origin: top; }
+@keyframes wf-rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 
-/* ── figure sub-line and unit, shared by the older surfaces ── */
-.stat-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.u { color: var(--muted); font-weight: 500; font-size: 0.62em; }
+/* ── content ── */
+.content { padding-top: 40px; padding-bottom: 96px; }
+.section { margin-top: 48px; }
+.section:first-child { margin-top: 0; }
+.section-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 8px 20px; margin-bottom: 14px; }
+.section-head h2 { margin: 0; font-family: var(--display); font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
+.section-head p { margin: 4px 0 0; font-size: 14px; color: var(--muted); max-width: 64ch; }
+.section-link { font-size: 14px; font-weight: 500; color: var(--accent); white-space: nowrap; }
+.section-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.split { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 40px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.panel-pad { padding: 22px 24px; }
+.empty { padding: 28px 24px; color: var(--muted); }
+.notice { padding: 14px 18px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--wait) 45%, transparent); background: var(--wait-soft); color: var(--ink); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 20px; }
+.notice p { margin: 0; font-size: 14px; }
+.band .notice { color: var(--band-ink); margin-top: 18px; }
 
-/* ── team activity ── */
-.activity {
-  overflow: hidden;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-}
-.activity-head {
-  min-height: 52px;
-  padding: 8px 20px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  border-bottom: 1px solid var(--border);
-}
-.activity-heading { display: flex; align-items: center; gap: 10px; }
-.activity-heading h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
-.activity-live { display: inline-flex; align-items: center; gap: 6px; color: var(--pos); font-size: 11.5px; font-weight: 600; }
-.activity-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
-.activity-live.is-waiting { color: var(--warn); }
-.activity-filters { display: flex; gap: 2px; flex-wrap: wrap; justify-content: flex-end; }
-.activity-filter {
-  appearance: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  padding: 5px 10px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.activity-filter:hover { color: var(--text); background: var(--hover); }
-.activity-filter.is-active { color: var(--text); background: var(--panel-2); border-color: var(--border); }
-.activity-filter:focus-visible, .activity-action:focus-visible {
-  outline: 2px solid var(--sky);
-  outline-offset: 2px;
-}
-.activity-list { list-style: none; padding: 0; margin: 0; }
-.activity-item {
-  --actor-color: var(--accent);
+/* ── buttons ── */
+.btn { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink); font-size: 14px; font-weight: 500; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn-accent { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn-accent:hover { filter: brightness(1.08); }
 
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) minmax(126px, auto);
-  gap: 12px;
-  padding: 15px 20px;
-  border-top: 1px solid var(--border);
-}
-.activity-item:first-child { border-top: 0; }
-.activity-item.tone-worker { --actor-color: var(--sky); }
-.activity-item.tone-funding { --actor-color: var(--pos); }
-.activity-item.tone-owner { --actor-color: var(--neg); }
-.activity-item.tone-qa { --actor-color: var(--violet); }
-/* The initials chip: a rounded square in the actor's tint. The tint is authored per theme rather
-   than derived: mixing the actor hue into --bg-2 pulls a light plate TOWARD the glyph and fails
-   AA, so light mixes into --panel instead (--avatar-tint-base), which is why that token differs
-   between themes. */
-.activity-avatar {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--actor-color) var(--avatar-tint), var(--avatar-tint-base));
-  color: var(--actor-color);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-}
-.activity-copy { min-width: 0; }
-.activity-identity { display: flex; align-items: baseline; gap: 8px; }
-.activity-identity strong { font-size: 13.5px; font-weight: 600; }
-.activity-identity span { color: var(--muted); font-size: 12px; }
-.activity-copy p { margin: 4px 0 0; color: var(--text-2); font-size: 13.5px; line-height: 1.55; overflow-wrap: anywhere; }
-.activity-meta { min-width: 126px; color: var(--muted); text-align: right; font-size: 12px; }
-.activity-meta time { font-variant-numeric: tabular-nums; }
-.activity-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-top: 7px; }
-.activity-job {
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  font-size: 11px;
-  white-space: nowrap;
-}
-.activity-tags strong { color: var(--text); font-variant-numeric: tabular-nums; font-size: 12px; }
-.activity-tags a { color: var(--accent); }
-.activity-tags a:hover { text-decoration: underline; }
-/* Demo-replay explorer marker: deliberately NOT a link and visibly muted/italic so it can
-   never be mistaken for a real "verify on explorer" affordance. */
-.activity-explorer-placeholder { color: var(--muted-2); font-size: 11px; font-style: italic; cursor: default; }
-.disconnected-links { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.disconnected-links li { color: var(--muted); line-height: 1.5; }
-.disconnected-links a { color: var(--accent); }
-.disconnected-links a:hover { text-decoration: underline; }
-.activity-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.activity-action {
-  display: inline-flex;
-  min-height: 32px;
-  align-items: center;
-  justify-content: center;
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--panel-2);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-.activity-action:hover { color: var(--text); border-color: var(--border-2); }
-.activity-action.approve { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
-.activity-action.reject { color: var(--neg); border-color: var(--neg-border); background: var(--neg-bg); }
-.activity-action.alternative { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
-.activity-empty { min-height: 160px; display: grid; place-items: center; color: var(--muted); }
-@media (max-width: 640px) {
-  .activity-head { align-items: flex-start; flex-direction: column; }
-  .activity-filters { justify-content: flex-start; }
-  .activity-item { grid-template-columns: 34px minmax(0, 1fr); }
-  .activity-identity { align-items: flex-start; flex-direction: column; gap: 0; }
-  .activity-meta { grid-column: 2; display: flex; align-items: center; justify-content: space-between; text-align: left; }
-  .activity-tags { flex-direction: row; flex-wrap: wrap; align-items: center; margin-top: 0; }
-}
+/* ── state text ── */
+.state { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--ink-2); white-space: nowrap; }
+.state::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); flex: none; }
+.state.is-good { color: var(--good); }
+.state.is-good::before { background: var(--good); }
+.state.is-wait { color: var(--wait); }
+.state.is-wait::before { background: var(--wait); }
+.state.is-live { color: var(--accent); }
+.state.is-live::before { background: var(--accent); }
+.state.is-bad { color: var(--bad); }
+.state.is-bad::before { background: var(--bad); }
 
-/* ── workforce strip ── */
-.agents { display: flex; flex-wrap: wrap; gap: 8px; }
-.agent { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--panel-2); border-radius: var(--radius-sm); padding: 6px 11px; }
-.agent .adot { width: 7px; height: 7px; border-radius: 50%; }
-.agent .arole { font-weight: 600; font-size: 13px; }
-.agent .astat { color: var(--muted); font-size: 12px; }
+/* ── settlements: each job split to scale ── */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 13.5px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.band .legend { color: var(--band-ink-2); margin-top: 12px; }
+.fall { list-style: none; margin: 0; padding: 4px 0; }
+.fall-row { display: grid; grid-template-columns: 80px minmax(0, 1fr) 170px; align-items: center; gap: 20px; padding: 12px 24px; }
+.fall-row + .fall-row { border-top: 1px solid var(--line); }
+.fall-when { font-size: 13px; color: var(--muted); }
+.fall-track { display: block; height: 14px; }
+.fall-bar { display: flex; gap: 2px; height: 100%; min-width: 6px; transform-origin: left center; animation: fall-in 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: calc(var(--i, 0) * 60ms); }
+.fall-bar > span { display: block; height: 100%; min-width: 3px; }
+.fall-bar > span:first-child { border-radius: 7px 0 0 7px; }
+.fall-bar > span:last-child { border-radius: 0 7px 7px 0; }
+.fall-bar > span:only-child { border-radius: 7px; }
+.fall-pool { background: var(--pool); }
+.fall-op { background: var(--operator); }
+.fall-amt { text-align: right; font-size: 14px; }
+.fall-amt strong { font-weight: 600; }
+.fall-amt small { display: block; font-size: 12.5px; color: var(--muted); }
+.fall-row:hover { background: var(--surface-2); }
+@keyframes fall-in { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
-/* ── table ── */
-table.t { width: 100%; border-collapse: collapse; }
-.t th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 0 0 8px; }
-.t td { padding: 10px 0; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
-.mono { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12.5px; color: var(--muted); }
-.empty { color: var(--muted); padding: 8px 0; }
+/* ── tables ── */
+.table-wrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+.table th { text-align: left; font-weight: 500; font-size: 13px; color: var(--muted); padding: 13px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 14px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.table tbody tr:last-child td { border-bottom: 0; }
+.table th:first-child, .table td:first-child { padding-left: 24px; }
+.table th:last-child, .table td:last-child { padding-right: 24px; }
+.table .r { text-align: right; }
+.table tbody tr.is-link { cursor: pointer; }
+.table tbody tr.is-link:hover { background: var(--surface-2); }
+.table td a { color: var(--accent); }
+.table td a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.table td a.addr { color: var(--ink-2); }
+.cell-sub { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; }
+.amount { font-weight: 600; white-space: nowrap; }
+.amount small { font-weight: 400; font-size: 12.5px; color: var(--muted); margin-left: 4px; }
+.addr { font-family: var(--mono); font-size: 13px; color: var(--ink-2); }
+.addr:hover { color: var(--accent); }
 
-/* ── badges: state as a dot plus a label, one hue per state, no fills ──
-   The dot inherits currentcolor, so each state is a single declaration and the marker cannot
-   drift from the text. The kind names are the contract's state names. */
-.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--muted); white-space: nowrap; }
-.badge::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentcolor; }
-.badge.Funded, .badge.Accepted, .badge.Repaid { color: var(--pos); }
-.badge.InProgress, .badge.Delivered, .badge.DeliveryReady { color: var(--sky); }
-.badge.Issued { color: var(--accent); }
-.badge.Failed, .badge.Refunded, .badge.Cancelled, .badge.WrittenOff { color: var(--neg); }
-.badge.AwaitingFunding { color: var(--warn); }
-.badge.Draft { color: var(--muted-2); }
+/* ── job steps ── */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.step { display: flex; flex-direction: column; gap: 8px; }
+.step-bar { height: 6px; border-radius: 3px; background: var(--line); }
+.step.is-done .step-bar { background: var(--pool); }
+.step.is-now .step-bar { background: var(--accent); opacity: 0.55; }
+.step-name { font-size: 13.5px; color: var(--muted); line-height: 1.3; }
+.step.is-done .step-name { color: var(--ink-2); }
+.step.is-now .step-name { color: var(--ink); font-weight: 600; }
+.steps-mini { display: inline-grid; grid-template-columns: repeat(5, 14px); gap: 3px; vertical-align: middle; }
+.steps-mini span { height: 5px; border-radius: 3px; background: var(--line); }
+.steps-mini span.on { background: var(--pool); }
+.steps-mini span.now { background: var(--accent); opacity: 0.55; }
 
-.loading { color: var(--muted); padding: 60px 0; text-align: center; }
-.mt { margin-top: 16px; }
+/* ── meter ── */
+.meter { position: relative; height: 12px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line); }
+.meter-fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--pool); }
+.meter-cap { position: absolute; top: -6px; bottom: -6px; width: 2px; border-radius: 1px; background: var(--ink-2); }
+.meter-labels { position: relative; height: 20px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+.meter-labels span { position: absolute; white-space: nowrap; }
 
-/* ── Float: authoritative capital view ──
- *
- * The same ledger register as the Overview: the capital panel reuses the .pool meter classes
- * verbatim, so the same figure is drawn the same way everywhere it appears. Sections are flat
- * panels with quiet headings; every figure names its source or says which absence it is.
- */
-.float-page { min-width: 0; display: grid; gap: 16px; }
-.float-live-meta { display: grid; justify-items: end; gap: 5px; }
-.float-live-meta small { color: var(--muted-2); font-variant-numeric: tabular-nums; }
-/* A stale read is stated, not boxed: one warn-coloured line. */
-.float-stale { margin: 0; color: var(--warn); font-size: 12px; }
+/* ── figures ── */
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 18px 28px; margin: 22px 0 0; }
+.figs dt { font-size: 13.5px; color: var(--muted); }
+.figs dd { margin: 2px 0 0; font-family: var(--display); font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+.figs dd small { font-family: var(--font); font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 4px; }
 
-.float-proof-link { color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
-.float-proof-link:hover { color: var(--accent-bright); }
-.float-proof-link:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+/* ── activity ── */
+.feed { list-style: none; margin: 0; padding: 0; }
+.feed-day { padding: 18px 24px 6px; font-size: 13.5px; font-weight: 600; color: var(--ink-2); }
+.feed-day:first-child { padding-top: 14px; }
+.feed-item { display: grid; grid-template-columns: 80px minmax(0, 1fr) auto; gap: 14px; align-items: baseline; padding: 12px 24px; border-top: 1px solid var(--line); }
+.feed-day + .feed-item { border-top: 0; }
+.feed-time { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.feed-text { font-size: 14.5px; }
+.feed-meta { display: block; margin-top: 2px; font-size: 13px; color: var(--muted); }
+.feed-meta a { color: var(--accent); }
+.feed-meta a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.feed-meta > * + * { margin-left: 12px; }
+.feed-item .amount { text-align: right; }
+.feed-item.is-good .amount { color: var(--good); }
 
-.float-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-.float-metric {
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-}
-.float-metric p { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-.float-metric strong { display: block; margin-top: 8px; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
-/* An absent figure states itself at the muted floor, tabular off, in the figure's own slot. */
-.float-metric strong.is-absent { color: var(--muted-2); font-variant-numeric: normal; font-weight: 500; font-size: 14px; }
-.float-metric small { display: block; margin-top: 4px; color: var(--muted-2); font-size: 11px; line-height: 1.45; }
+/* ── rate chart ── */
+.chart { display: block; width: 100%; height: auto; }
+.chart-grid { stroke: var(--line); stroke-width: 1; }
+.chart-axis { fill: var(--muted); font-size: 12px; font-family: var(--font); }
+.chart-line { fill: none; stroke: var(--pool); stroke-width: 2.5; stroke-linejoin: round; }
+.chart-area { fill: var(--pool); opacity: 0.1; }
+.chart-dot { fill: var(--surface); stroke: var(--pool); stroke-width: 2; }
+.chart-hit { fill: transparent; }
+.chart-tip { font-size: 12.5px; fill: var(--ink); font-family: var(--font); font-weight: 600; }
 
-/* The accounting caveat: a plain note at the muted floor, not a boxed callout. */
-.float-accounting-note { margin: 0; color: var(--muted-2); font-size: 11.5px; line-height: 1.55; }
+/* ── tabs ── */
+.tabs { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); }
+.tab { border: 0; background: none; padding: 7px 16px; border-radius: 999px; color: var(--muted); font-size: 14px; font-weight: 500; cursor: pointer; }
+.tab:hover { color: var(--ink); }
+.tab.is-on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.tab-n { margin-left: 6px; opacity: 0.75; font-weight: 400; }
 
-.float-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
-.float-section-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
-.float-section-sub { margin: 4px 0 0; font-size: 12px; color: var(--muted-2); line-height: 1.5; }
-.float-muted { max-width: 360px; color: var(--muted-2); font-size: 11.5px; text-align: right; }
-
-.rate-engine, .float-advances, .loss-waterfall {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-  padding: 20px 22px;
-}
-.rate-engine-grid { display: grid; grid-template-columns: 240px 1fr; gap: 18px; margin-top: 18px; align-items: start; }
-.rate-current {
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--panel-2);
-}
-.rate-current > span { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-.rate-current > strong { display: block; margin: 8px 0 10px; font-size: 32px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.rate-current > strong.is-absent { font-size: 14px; color: var(--muted-2); font-weight: 500; }
-/* The delta is a state claim, so it is one hue and no box: pos when history lifted the rate,
-   neg when it cut it, muted when there is no rate to speak of. */
-.rate-delta { margin: 0; color: var(--pos); font-size: 12px; font-weight: 600; }
-.rate-delta.is-negative { color: var(--neg); }
-.rate-delta.is-absent { color: var(--muted-2); font-weight: 500; }
-.rate-scale-note { margin: 12px 0 0; font-size: 11px; color: var(--muted-2); }
-
-.rate-derivation { min-width: 0; }
-/* The derivation as one line of arithmetic: figures tabular, operators muted, no boxes. */
-.rate-equation { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
-.rate-term { display: grid; gap: 3px; justify-items: start; min-width: 88px; }
-.rate-term strong { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.rate-term strong.is-absent { color: var(--muted-2); font-variant-numeric: normal; font-weight: 500; }
-.rate-term span { color: var(--muted); font-size: 11px; }
-.rate-term.result strong { font-weight: 650; }
-.rate-operator { color: var(--muted-2); font-size: 18px; padding-top: 8px; }
-
-/* The rate plotted where it sits between the protocol floor and cap. The track's ends ARE the
-   bounds, so the only standing tick is the base rate; the marker is the current figure. */
-.rate-scale { margin-top: 22px; padding: 0 24px; }
-.rate-track { position: relative; height: 10px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--border); margin-top: 24px; }
-.rate-tick { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--border-2); }
-.rate-marker { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent); }
-.rate-marker-fig {
-  position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-  margin-bottom: 7px; color: var(--accent); font-size: 12px; font-weight: 600;
-  font-variant-numeric: tabular-nums; white-space: nowrap;
-}
-.rate-scale-labels { position: relative; margin-top: 7px; height: 16px; font-size: 11px; color: var(--muted-2); }
-.rate-scale-labels span { position: absolute; white-space: nowrap; }
-
-.rate-proof-note { margin: 18px 0 0; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.55; }
-.rate-proof-note > span { color: var(--pos); font-weight: 700; margin-right: 2px; }
-/* No check mark in this state, so the note drops to the muted floor. */
-.rate-proof-note.is-absent { color: var(--muted-2); }
-
-.float-advance-summary { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.float-advance-summary span { margin: 0 5px; color: var(--muted-2); }
-.float-advance-summary strong { color: var(--text); font-weight: 600; }
-.float-table-wrap { overflow-x: auto; margin-top: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.float-table { width: 100%; min-width: 880px; border-collapse: collapse; }
-.float-table th {
-  padding: 10px 14px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-align: left;
-  text-transform: uppercase;
-}
-.float-table td {
-  padding: 11px 14px;
-  border-top: 1px solid var(--border);
-  color: var(--text-2);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.float-table td a { color: var(--accent); font-weight: 600; }
-.float-table td a:hover { text-decoration: underline; text-underline-offset: 3px; }
-/* A cell the history scan did not fill is not a zero: muted, tabular off. */
-.float-table .is-absent { color: var(--muted-2); font-variant-numeric: normal; }
-.float-empty {
-  margin-top: 16px;
-  padding: 22px;
-  display: grid;
-  justify-items: center;
-  gap: 4px;
-  border: 1px dashed var(--border-2);
-  border-radius: var(--radius);
-  color: var(--muted);
-  text-align: center;
-}
-.float-empty strong { color: var(--text); font-weight: 600; }
-.float-empty span { font-size: 12px; }
-
-/* The loss waterfall as a schedule. The order is the evidence, so it is numbered, and the
-   amounts are tabular. No connecting line: the numerals carry the sequence. */
-.loss-waterfall .float-section-head > strong { font-size: 12.5px; font-weight: 600; }
-.loss-waterfall .is-clear { color: var(--pos); }
-.loss-waterfall .has-loss { color: var(--neg); }
-.loss-stages { margin: 14px 0 0; padding: 0; list-style: none; }
-.loss-stages li { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
-.loss-stages li > span { color: var(--muted-2); font-size: 12px; font-variant-numeric: tabular-nums; }
-.loss-stages li strong { font-size: 13px; font-weight: 600; }
-.loss-stages li small { margin-left: auto; color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-
-.float-error {
-  padding: 22px;
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  border: 1px solid var(--neg-border);
-  border-radius: var(--radius);
-  background: var(--panel);
-  color: var(--muted);
-  text-align: center;
-}
-.float-error strong { color: var(--neg); font-size: 14px; }
-.float-error button {
-  margin-top: 6px;
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--panel-2);
-  color: var(--text-2);
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.float-error button:hover { border-color: var(--border-2); color: var(--text); }
-.float-error button:disabled { cursor: wait; opacity: 0.65; }
-
-@media (max-width: 1060px) {
-  .rate-engine-grid { grid-template-columns: 1fr; }
-}
-@media (max-width: 760px) {
-  .float-metrics { grid-template-columns: 1fr; }
-}
-@media (max-width: 560px) {
-  .main { padding: 26px 18px 60px; }
-  .float-section-head { flex-direction: column; }
-  .float-live-meta { justify-items: start; }
-  .float-muted { text-align: left; }
-}
-
-/* ── V9 customer portal (full-bleed magic-link surface, no owner chrome) ── */
-.portal-shell {
-  position: fixed; inset: 0; z-index: 50; overflow-y: auto;
-  display: flex; align-items: flex-start; justify-content: center;
-  padding: 8vh 20px 60px; background: var(--bg);
-}
-.portal-card {
-  width: 100%; max-width: 520px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 34px 34px 30px;
-}
-.portal-brand { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 14px; font-weight: 600; }
-.portal-title { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
-.portal-sub { color: var(--muted); margin: 6px 0 0; font-size: 13.5px; }
-.portal-status { margin: 20px 0; }
-.portal-body { color: var(--text); line-height: 1.55; margin: 0 0 20px; }
-.portal-accepted { color: var(--pos); }
-/* Deliberately still --accent-dim, unlike .badge.Issued and .job-chip.is-open. Here the border
-   sits on a solid --accent fill rather than a tint, and --accent-dim is the DARKER of the two
-   there: 6.52:1 dark / 4.62:1 light against the fill, where --accent-border would drop it to
-   4.18:1 / 3.64:1. Swapping it would weaken the primary CTA's edge, not fix it. */
-.portal-accept {
-  width: 100%; min-height: 46px; border-radius: var(--radius); border: 1px solid var(--accent-dim);
-  background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 700; font-size: 15px; cursor: pointer;
-}
-.portal-accept:disabled { opacity: 0.6; cursor: default; }
-.portal-note { margin: 16px 0 0; color: var(--pos); font-size: 13.5px; text-transform: capitalize; }
-/* A failed accept is not a success. The base rule is success-green and capitalizing, which is
-   right for a state slug ("accepted") and wrong for an error message: it made a 503 read as
-   confirmation, and capitalize mangles real message text. */
-.portal-note.is-error { color: var(--neg); text-transform: none; }
-.portal-receipt { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border); }
-.portal-total { margin: 14px 0 0; font-size: 15px; display: flex; justify-content: space-between; }
-.portal-gaps { list-style: none; padding: 0; margin: 14px 0 0; color: var(--muted); font-size: 12.5px; }
-.portal-gaps li { padding: 3px 0; }
-.portal-disclaimer { margin: 18px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; font-style: italic; }
-
-/* ── V8 approvals inbox ── */
-/* ══ Approvals ══
- *
- * The one surface the direction contract allows colour on, so the rules for it are stricter than
- * anywhere else, not looser. Colour appears on exactly three things: the state of a decided
- * request, the two decision controls, and a closed window. Everything else is ink.
- *
- * Approve and refuse are deliberately identical in size, weight, padding and border, and differ
- * only in hue. PRODUCT.md principle 3 says refusing must be as easy and as legible as approving,
- * and a "primary" style on either one would break that. Request-cheaper is separated by position
- * rather than demoted by weight, because it is a different answer, not a lesser one.
- */
-.approval-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
-.approval {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel-2);
-  padding: 18px 20px;
-}
-/* The deep-linked request, marked with corner ticks rather than a coloured rail down one edge.
-   The rail was the more obvious move and the wrong one: a thick accent border on one side of a
-   card is the single most recognisable tell of a generated interface, which is the register this
-   project refuses. Corner ticks say "this row, here" and cannot be confused with the focus ring
-   (an offset outline, different geometry). */
-.approval.is-linked { position: relative; }
-.approval.is-linked::before,
-.approval.is-linked::after {
-  content: "";
-  position: absolute;
-  width: 13px;
-  height: 13px;
-  border-color: var(--accent);
-  border-style: solid;
-}
-.approval.is-linked::before { top: -1px; left: -1px; border-width: 2px 0 0 2px; }
-.approval.is-linked::after { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; }
-.approval:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-.approval.is-expired { opacity: 0.72; }
-
-.approval-line { display: flex; align-items: flex-start; gap: 14px; }
-.approval-ident { min-width: 0; flex: 1; }
-.approval-resource {
-  margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--text);
-  overflow-wrap: anywhere;
-}
-.approval-origin { margin: 3px 0 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-.approval-amount { text-align: right; white-space: nowrap; display: flex; align-items: baseline; gap: 5px; }
-.approval-figure { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.approval-unit { font-size: 11px; color: var(--muted); }
-/* Every figure names its source (PRODUCT principle 1). */
-.approval-source { margin: 10px 0 0; font-size: 11px; color: var(--muted-2); }
-.approval-purpose { margin: 12px 0 0; color: var(--text-2); font-size: 13.5px; line-height: 1.55; }
-
-.approval-facts { margin: 14px 0 0; display: grid; gap: 7px; }
-.approval-facts div { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); padding-top: 7px; }
-.approval-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.approval-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.approval-facts dd.is-expired { color: var(--neg); }
-.approval-hash { color: var(--muted-2); }
-
-/* The state of a decided request: a dot and a word, painted by the row's own state class so the
-   marker and its lettering can never disagree. The dot inherits currentcolor, so each state is a
-   single declaration -- the same rule .badge follows. */
-.approval-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text-2); }
-.approval-state::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentcolor; }
-.approval.approved .approval-state { color: var(--pos); }
-.approval.rejected .approval-state { color: var(--neg); }
-.approval.alternative_requested .approval-state { color: var(--warn); }
-
-.approval-label { display: block; margin: 16px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.approval-reason {
-  width: 100%; padding: 10px 12px; min-height: 58px; resize: vertical;
-  background: var(--bg); color: var(--text); border: 1px solid var(--border-2);
-  border-radius: var(--radius); font: inherit; font-size: 13px;
-}
-/* The UA default placeholder is roughly 54% of --text, which composites below 4.5:1 in light.
-   Stated explicitly so the hint is readable rather than inherited. */
-.approval-reason::placeholder { color: var(--muted-2); opacity: 1; }
-.approval-reason:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-.approval-hint { margin: 6px 0 0; font-size: 11.5px; color: var(--muted-2); line-height: 1.5; }
-
-.approval-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.approval-action {
-  display: inline-flex; min-height: 34px; min-width: 104px;
-  align-items: center; justify-content: center;
-  padding: 6px 16px;
-  border: 1px solid var(--border-2); border-radius: var(--radius);
-  background: var(--bg-2); color: var(--text-2);
-  font-size: 12.5px; font-weight: 600; cursor: pointer;
-}
-.approval-action.approve { color: var(--pos); border-color: var(--pos-border); background: var(--pos-bg); }
-.approval-action.reject { color: var(--neg); border-color: var(--neg-border); background: var(--neg-bg); }
-/* Separated rather than demoted: a different answer, not a weaker one. */
-.approval-action.alternative { margin-left: auto; }
-.approval-action:hover:not(:disabled) { border-color: var(--muted-2); }
-.approval-action:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-/* The submit state had no styling at all, so a decision in flight looked identical to an idle
-   button and invited the second click. */
-.approval-action:disabled { opacity: 0.45; cursor: not-allowed; }
-/* The suggested action from a deep link. A dotted underline, not an outline: an inline outline
-   here outranked :focus-visible and made the two states indistinguishable. */
-.approval-action[data-suggested] { text-decoration: underline dotted; text-underline-offset: 4px; }
-
-.approval-note { margin: 12px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
-.approval-note.is-expired, .approval-note.is-failure { color: var(--warn); }
-.approval-code { color: var(--muted-2); font-size: 11px; font-variant-numeric: tabular-nums; }
-
-/* A decided request, kept on screen after it leaves the pending list. */
-.approval.is-settled { background: none; border-style: dashed; }
-
-/* The live region carries text for a screen reader and must not take layout. Not display:none,
-   which would stop it being announced at all. */
-.approval-announce {
-  position: absolute; width: 1px; height: 1px; overflow: hidden;
-  clip-path: inset(50%); white-space: nowrap;
-}
-
-/* ── Workforce: bounded roles and the manifest gallery ──
- *
- * The authority model as a schedule and the hireable manifests as plain cards. No role marks and
- * no glyph icons: the role name and its duty are on the row in words, and a permission is a
- * stated bound, not an icon to decode.
- */
-.workforce-page { display: grid; gap: 16px; }
-.workforce-panel-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-}
-.workforce-panel-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
-.workforce-panel-sub { margin: 4px 0 0; font-size: 12px; color: var(--muted-2); line-height: 1.5; }
-.workforce-safe, .gallery-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.workforce-active,
-.manifest-gallery {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-  padding: 20px 22px;
-}
-/* The five bounded roles as a schedule: name left, duty right, hairlines between. */
-.workforce-roles { list-style: none; margin: 14px 0 0; padding: 0; }
-.workforce-roles li { display: flex; align-items: baseline; gap: 14px; padding: 8px 0; border-top: 1px solid var(--border); }
-.workforce-roles strong { flex: 0 0 92px; font-size: 13px; font-weight: 600; }
-.workforce-roles li > span { color: var(--muted); font-size: 12.5px; }
-.manifest-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 16px;
-  align-items: stretch;
-}
-.manifest-card {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel-2);
-}
-.manifest-featured { padding: 18px 20px; }
-.manifest-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.manifest-identity { min-width: 0; }
-.manifest-card h3 {
-  margin: 0;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-.manifest-identity p,
-.manifest-category {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-/* Hire state as a dot and a word, painted by the state class: active is pos; ready and upcoming
-   are muted, because neither is a live thing yet. */
-.manifest-status,
-.coming-soon {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted-2);
-  font-size: 11.5px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.manifest-status::before,
-.coming-soon::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: currentcolor;
-}
-.manifest-status.is-active { color: var(--pos); }
-.manifest-description {
-  margin: 12px 0 0;
-  color: var(--text-2);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-/* A permission is a stated bound: plain text inside a hairline, no glyph to decode. */
-.permission-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 12px;
-}
-.permission-chip {
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-/* The evidence flow as one line of text: the arrows are operators, not icons. */
-.watcher-flow { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
-
-.watcher-config {
-  display: grid;
-  margin-top: 14px;
-  padding: 4px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-}
-.watcher-config label,
-.watcher-readonly {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 116px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--border);
-}
-.watcher-config label > span,
-.watcher-readonly > span {
-  color: var(--muted);
-  font-size: 11px;
-}
-.watcher-config input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-}
-.watcher-config input::placeholder { color: var(--muted-2); }
-.watcher-config input:focus-visible { outline: 2px solid var(--sky); outline-offset: 1px; border-radius: 2px; }
-.watcher-config input:disabled { opacity: 0.7; }
-.watcher-readonly code {
-  overflow: hidden;
-  color: var(--text-2);
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.quote-input {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
-}
-.quote-input b { color: var(--muted); font-size: 11px; font-weight: 500; }
-/* The one filled button in the product. Flat accent, no glow: the hover is a brighter fill,
-   which RAISES contrast against --on-accent in both themes (dark's label is near-black, light's
-   is white, and --accent-bright moves away from each). */
-.watcher-activate {
-  min-height: 36px;
-  margin: 12px 0 6px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--on-accent);
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.watcher-activate:hover:not(:disabled) { background: var(--accent-bright); }
-.watcher-activate:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-.watcher-activate:disabled { cursor: not-allowed; opacity: 0.5; }
-.watcher-feedback { min-height: 26px; padding: 2px 0 8px; }
-.watcher-feedback p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-.watcher-feedback .is-error { color: var(--neg); }
-.watcher-feedback .is-success { color: var(--pos); }
-.watcher-feedback code {
-  color: inherit;
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  font-size: 11px;
-}
-
-/* Operator tools are content-height cards, no form, so they get their own row. */
-.operator-tools {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 12px;
-  align-items: start;
-}
-.manifest-soon {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 16px 18px;
-}
-.manifest-soon .coming-soon { margin-top: 10px; }
-.manifest-soon .permission-row { margin-top: auto; padding-top: 12px; }
-
-@media (max-width: 1120px) {
-  .manifest-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .manifest-featured { grid-column: 1 / -1; }
-  .operator-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 560px) {
-  .workforce-panel-head { align-items: flex-start; flex-direction: column; }
-  .manifest-grid { grid-template-columns: 1fr; }
-  .manifest-featured { grid-column: auto; }
-  .operator-tools { grid-template-columns: 1fr; }
-  .watcher-config label,
-  .watcher-readonly { grid-template-columns: 1fr; gap: 4px; }
-}
-
-/* ── V7 job detail ── */
-.job-grid { display: grid; gap: 2px; }
-.job-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--border); }
-.job-row:first-child { border-top: none; }
-.job-row-label { color: var(--muted); font-size: 12.5px; }
-.job-row-value { font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; word-break: break-all; }
-
-.job-figure { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-/* An absent advance states itself in the figure's own slot, at the muted floor, tabular off. */
-.job-figure-muted { color: var(--muted-2); font-weight: 500; font-variant-numeric: normal; }
-/* Open/closed as a dot and a word, not a pill: the same state register .badge uses, one
-   declaration per state because the dot inherits currentcolor. */
-.job-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
-.job-chip::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentcolor; }
-.job-chip.is-open { color: var(--accent); }
-.job-chip.is-closed { color: var(--muted); }
-
-/* lifecycle rail */
-.job-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 0; }
-.job-stage { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 108px; font-size: 12.5px; position: relative; }
-.job-stage::after { content: ""; flex: 1; height: 2px; background: var(--border); margin-right: 6px; }
-.job-stage:last-child::after { display: none; }
-.job-stage-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border-2); flex: none; }
-.job-stage-name { color: var(--muted-2); white-space: nowrap; }
-.job-stage.is-done .job-stage-dot { background: var(--pos); }
-.job-stage.is-done .job-stage-name { color: var(--muted); }
-.job-stage.is-done::after { background: var(--pos-border); }
-.job-stage.is-current .job-stage-dot { background: var(--accent); outline: 1.25px solid var(--accent); outline-offset: 2px; }
-.job-stage.is-current .job-stage-name { color: var(--text); font-weight: 700; }
-.job-alt-terminal { margin: 0; font-size: 13px; color: var(--warn); }
-
-/* budget bar */
-.job-budget { display: grid; gap: 8px; }
-.job-budget-bar { height: 10px; border-radius: 5px; background: var(--bg-2); border: 1px solid var(--border); overflow: hidden; }
-.job-budget-fill { height: 100%; background: var(--accent); }
-.job-budget-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; font-size: 13px; font-variant-numeric: tabular-nums; }
-
-.job-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12.5px; }
-.job-links a { color: var(--sky); }
-
-/* per-job timeline: hairline-separated rows, the same register as the activity feed. The actor
-   is named in text on every row, so a colour-coded dot would only duplicate it. */
-.job-timeline { list-style: none; margin: 0; padding: 0; }
-.job-event { padding: 9px 0; border-top: 1px solid var(--border); }
-.job-event:first-child { border-top: none; }
-.job-event-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.job-event-actor { font-size: 12.5px; font-weight: 700; }
-.job-event-text { font-size: 13px; flex: 1; min-width: 0; }
-.job-event-amount { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
-.job-event-meta { display: flex; gap: 8px; margin-top: 1px; font-size: 11.5px; color: var(--muted-2); }
-
-/* Per-expense rows. Same monochrome register as the timeline directly below them: no accent
-   fills, no card-within-a-card, one hairline per row. The amount is tabular so a column of
-   figures aligns on the decimal, which is the whole reason to list them separately from the
-   total. */
-.job-expense-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
-.job-expenses { list-style: none; margin: 0; padding: 0; }
-.job-expense { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border-2); }
-.job-expense:last-child { border-bottom: 0; }
-.job-expense-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.job-expense-meta { display: flex; align-items: baseline; gap: 10px; flex: none; font-size: 11.5px; color: var(--muted-2); }
-.job-expense-amount { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
-
-/* The minted customer link. Wraps rather than truncating: a link the operator cannot select in
-   full is no better than no link, and this one is shown exactly once. */
-.job-link { margin: 10px 0 0; font-size: 12px; color: var(--text-2); word-break: break-all; line-height: 1.5; }
-.job-link-copied { margin-left: 8px; color: var(--pos); font-size: 11.5px; }
-.job-link-error { margin: 10px 0 0; font-size: 12.5px; color: var(--neg); }
-
-@media (max-width: 640px) {
-  .job-stages { flex-direction: column; }
-  .job-stage::after { display: none; }
-  .job-row { flex-direction: column; align-items: flex-start; gap: 2px; }
-  .job-row-value { text-align: left; }
-}
-/* The budget fill no longer transitions at all, so there is nothing left for a reduced-motion
-   guard to switch off. */
-
-/* ── F1 Live Money Graph + F2 Score Ring (V10/V11, PRD §8) ── */
-.mg {
-  overflow: hidden;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-}
-.mg-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 20px 4px;
-}
-.mg-heading { min-width: 0; }
-.mg-heading h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
-.mg-live { display: inline-flex; align-items: center; gap: 6px; margin-top: 5px; color: var(--pos); font-size: 11.5px; font-weight: 600; }
-.mg-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
-.mg-live.is-waiting { color: var(--warn); }
-.mg-beat {
-  margin: 8px 0 0;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--muted);
-  min-height: 22px;
-  /* The idle-to-beat emphasis is carried by the hue rules below, never by dimming: a dimmed
-     resting caption fails AA in both themes. */
-  transition: color 0.3s;
-}
-.mg-beat-fund, .mg-beat-spend { color: var(--sky); }
-.mg-beat-snap, .mg-beat-fall { color: var(--accent); }
-.mg-beat-reject { color: var(--warn); }
-.mg-beat-flywheel { color: var(--violet); }
-
-.mg-stage { padding: 0 12px 10px; }
-.mg-svg { width: 100%; height: auto; display: block; }
-
-/* Solid hairlines, no shimmer: on a ledger the only motion is money actually moving, which the
-   droplets carry on their own. */
-.mg-pipe {
-  stroke: var(--border-2);
-  stroke-width: 1.5;
-  opacity: 0.9;
-}
-.mg-pipe-snap, .mg-pipe-repay { stroke: var(--pipe-accent); }
-
-.mg-drop-fund, .mg-drop-spend { fill: var(--sky); }
-.mg-drop-snap, .mg-drop-fall-pool { fill: var(--accent); }
-.mg-drop-fall-op { fill: var(--pos); }
-
-.mg-box { fill: var(--panel-2); stroke: var(--border); stroke-width: 1; }
-.mg-node .mg-box[style] { stroke: var(--n); }
-.mg-name { fill: var(--muted); font-size: 12.5px; font-weight: 600; text-anchor: middle; }
-.mg-bal { fill: var(--text); font-size: 13.5px; font-weight: 650; text-anchor: middle; font-variant-numeric: tabular-nums; }
-
-/* F2 Score Ring: only the percentage sits inside the circle; captions flow beneath it. */
-/* The ring leads the Overview page now (moved out of the money-graph header), so it carries a
-   proportionate nudge — 104→124px figure, 23→28px value — to read as primary against the pool
-   vessel's mass rather than sitting subordinate to it. Still the ring device, not a hero tile. */
-.ring { width: 148px; flex: none; text-align: center; }
-.ring-figure { position: relative; width: 124px; height: 124px; margin: 0 auto; }
-.ring-figure.is-bumping { animation: ring-bump 0.5s ease; }
-@keyframes ring-bump { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.06); } }
-.ring-svg { width: 100%; height: 100%; display: block; }
-.ring-track { fill: none; stroke: var(--border); stroke-width: 7; }
-.ring-arc {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 7;
-  stroke-linecap: round;
-  transition: stroke-dasharray 0.1s linear;
-}
-.ring-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.ring-pct { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.ring-cap { margin-top: 8px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
-.ring-hint { margin-top: 1px; font-size: 11.5px; color: var(--muted-2); }
-.ring-hint b { color: var(--pos); font-weight: 700; font-variant-numeric: tabular-nums; }
-
-/* The advance rate leads the Overview page: the ScoreRing beside its on-chain progression, above
-   the pool vessel. Not a hero-metric tile — the ring is this world's own device, the progression is
-   the evidence set beside it. The ring keeps its 23px value; the ORDER carries the emphasis. */
-.rate-hero { display: flex; align-items: center; gap: 34px; flex-wrap: wrap; padding: 2px 0 10px; }
-.rate-progression { min-width: 0; }
-.rate-progression-cap {
-  margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--muted);
-}
-.rate-progression-seq {
-  list-style: none; margin: 9px 0 0; padding: 0;
-  display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px;
-  font-variant-numeric: tabular-nums;
-}
-.rate-progression-seq li { display: flex; align-items: baseline; gap: 10px; font-size: 20px; font-weight: 600; color: var(--muted); }
-.rate-progression-seq li::after { content: "\2192"; color: var(--muted-2); font-weight: 400; font-size: 15px; }
-.rate-progression-seq li:last-child::after { content: none; }
-.rate-progression-seq li.is-current { color: var(--text); }
-.rate-progression-note { margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); max-width: 46ch; }
-
-@media (max-width: 640px) {
-  .mg-head { flex-direction: column; align-items: flex-start; }
-  .ring { margin: 0 auto; }
-}
-/* The ring bump and beat transition are brief and driven by data rather than interaction, so no
-   criterion demands removing them; they are decorative, so they stop anyway.
-   NOT SC 2.3.3, which covers interaction-triggered motion. */
-@media (prefers-reduced-motion: reduce) {
-  .ring-figure.is-bumping { animation: none; }
-  .mg-beat { transition: none; }
-}
-
-/* ── theme toggle ── */
-.sidebar-foot-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.theme-toggle {
-  width: 30px; height: 30px; flex: none;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--muted);
-  cursor: pointer;
-  padding: 0;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
-}
-.theme-toggle:hover { color: var(--text); border-color: var(--border-2); background: var(--panel-2); }
-.theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* Sized in a block so the empty pre-mount span holds the same footprint and nothing reflows
-   when the icon appears. */
+/* ── theme toggle (ThemeToggle.tsx) ── */
+.theme-toggle { width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
 .theme-toggle-icon { width: 15px; height: 15px; display: block; fill: none; stroke: currentColor; stroke-width: 1.7; }
 
-/* ══ Card system ══
- *
- * Backs components/Card.tsx, components/Badge.tsx and components/PageHeader.tsx. A card is a
- * flat panel separated by hairlines: no shadow, no glow, no gradient, and no tinted fill per
- * state — status is a dot plus a label, one hue per state.
- *
- * Contrast, recomputed for the ledger palette, dark / light, worst case across the surfaces a
- * card can paint:
- *   .card-heading, --text        15.20 / 17.92 (on --panel)
- *   .card-meta, --muted-2         5.12 /  5.05 (dark --panel-3 / light --panel)
- *   .card-body prose, --text-2    8.18 /  9.92 (same worst surfaces)
- *   .status-badge worst tint      5.12 /  5.05 (--muted-2, both themes)
- * The hairlines are not text and are not held to 4.5: --border reads 1.28 / 1.31 on --panel.
- */
-.card-shell {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
+/* ── legacy surfaces: their header becomes the band, their body sits in the content column ── */
+.legacy { padding-bottom: 96px; }
+.legacy .page-header {
+  margin: 0 calc(50% - 50vw) 36px; padding: 40px max(40px, calc(50vw - 560px)) 40px;
+  background: var(--band); color: var(--band-ink); border-bottom: 1px solid var(--band-line);
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
 }
-/* A real header row, so a card's title is a landmark a screen reader can jump to and not a styled
-   paragraph. 44px is the floor, not the height: a two-line title grows the row. */
-.card-head {
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 20px;
-  border-bottom: 1px solid var(--border);
-}
-.card-heading {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-/* CardTitle, the back-compat kicker, is the same heading standing alone inside a body. */
-.card-heading-block { margin-bottom: 16px; }
-.card-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted-2);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.card-body { padding: 20px; }
-/* Prose inside a card is capped at a readable measure; figures and tables are not prose. */
-.card-body > p { max-width: 70ch; }
-/* The nested canvas for visuals. --inset rather than --well because it is an alpha over whatever
-   surface it lands on, so it recedes from its parent in both themes instead of only in light.
-   At that separation the recession is really carried by the hairline, which is why the border
-   is not optional here. */
-.card-well {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--inset);
-}
+.legacy .page-header h1 { font-family: var(--display); font-size: clamp(30px, 4vw, 44px); font-weight: 600; letter-spacing: -0.03em; color: var(--band-ink); animation: none; }
+.legacy .page-header .page-header-sub { color: var(--band-ink-2); max-width: 62ch; font-size: 15.5px; animation: none; }
+.legacy .page-header .page-header-aside { animation: none; }
+.legacy .page-header .status-badge, .legacy .page-header .badge-live, .legacy .page-header .head-meta { color: var(--band-ink-2); }
+.legacy .card, .legacy .card-shell, .legacy .pool, .legacy .pending, .legacy .activity { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: none; }
+.legacy .card { padding: 22px 24px; }
+.legacy .card + .card, .legacy .card.mt { margin-top: 16px; }
+.legacy .card-title { font-family: var(--display); font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); margin-bottom: 12px; }
 
-/* Status as a dot plus a label rather than a filled pill: the same information with one hue
-   instead of three, which is what keeps a table of twelve states quiet. The dot inherits
-   currentcolor, so each state is a single declaration and the tint cannot drift from the text.
-   The kind names are the contract's state names, so they are the class names too, matching the
-   .badge.<State> convention this file already uses. */
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12.5px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.status-badge::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 999px;
-  background: currentcolor;
-}
-.status-badge.Funded, .status-badge.Accepted, .status-badge.Repaid { color: var(--pos); }
-.status-badge.InProgress, .status-badge.Delivered, .status-badge.DeliveryReady { color: var(--sky); }
-.status-badge.Issued { color: var(--accent); }
-.status-badge.AwaitingFunding { color: var(--warn); }
-.status-badge.Failed, .status-badge.Refunded, .status-badge.WrittenOff { color: var(--neg); }
-.status-badge.Draft, .status-badge.Cancelled { color: var(--muted-2); }
-
-/* Page header: one bold line and a muted lede, the register every surface uses. */
-.page-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 8px 0 24px;
-}
-.page-header-text { min-width: 0; }
-.page-header h1 {
-  margin: 0;
-  font-size: clamp(1.5rem, 3.4vw, 2.2rem);
-  line-height: 1.05;
-  letter-spacing: -0.01em;
-}
-.page-header-sub {
-  max-width: 560px;
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: clamp(0.9rem, 2vw, 1rem);
-  line-height: 1.65;
-}
-.page-header-aside { flex: none; }
-@media (min-width: 640px) {
-  .page-header { padding-top: 16px; }
-}
-/* The branch animated these three nodes with framer-motion's fadeUp and a per-node stagger. Two
-   keyframes and a delay reproduce it without the dependency, and without making PageHeader a
-   client component: it has no state, so as plain CSS it renders on the server. */
-@keyframes page-header-rise {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
-}
-/* Staggered on the three leaves, not on the wrapper: nesting one rise inside another would
-   compound both the transform and the opacity. */
-.page-header h1, .page-header-sub, .page-header-aside {
-  animation: page-header-rise 0.32s ease-out both;
-}
-.page-header-sub { animation-delay: 0.06s; }
-.page-header-aside { animation-delay: 0.12s; }
-/* Entry motion is decorative, and `animation: none` on a `both`-filled animation returns the node
-   to its resting opacity rather than freezing it at 0. */
+/* ── responsive & motion ── */
 @media (prefers-reduced-motion: reduce) {
-  .page-header h1, .page-header-sub, .page-header-aside { animation: none; }
+  .fall-bar, .wf-bar { animation: none; }
+}
+@media (max-width: 1100px) { .hide-md { display: none; } }
+@media (max-width: 980px) {
+  .band-grid, .split { grid-template-columns: 1fr; gap: 32px; }
+  .top-side .net { display: none; }
+}
+@media (max-width: 760px) {
+  .wrap { padding: 0 16px; }
+  .top-inner { height: auto; flex-wrap: wrap; gap: 6px 12px; padding-top: 10px; }
+  .top-nav { order: 3; flex-basis: 100%; padding-bottom: 6px; }
+  .top-side { margin-left: auto; }
+  .top-link.is-active::after { bottom: -6px; }
+  .band { padding: 28px 0 32px; }
+  .legacy .page-header { padding: 28px 16px; }
+  .content { padding-top: 28px; padding-bottom: 72px; }
+  .fall-row { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 16px; }
+  .fall-when { grid-column: 1 / -1; }
+  .feed-item { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 16px; }
+  .feed-time { grid-column: 1 / -1; }
+  .steps .step-name { font-size: 11.5px; }
+  .hide-sm { display: none; }
+  .table th:first-child, .table td:first-child { padding-left: 16px; }
+  .table th:last-child, .table td:last-child { padding-right: 16px; }
 }
 
-/* ── the capital pool, measured ──
- *
- * The first viewport's primary panel. The vessel drawing is gone; what remains is the
- * information it carried, in ledger form: TVL as the headline figure, utilisation as a meter
- * with the contract's two caps marked as ticks where they actually sit, and four facts each
- * naming their source. A cap is a threshold, not an alarm: its tick colours only when the level
- * actually approaches it, because permanent red at 0% utilisation would make colour decorative.
+/* Legacy headers read like the new band: small aqua page name, the sentence set large. */
+.legacy .page-header h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.01em; color: var(--accent); }
+.legacy .page-header .page-header-sub:not(.mono) { margin-top: 4px; max-width: 30ch; font-family: var(--display); font-size: clamp(26px, 3.2vw, 38px); line-height: 1.1; font-weight: 600; letter-spacing: -0.03em; color: var(--band-ink); }
+.legacy .page-header .page-header-sub.mono { font-size: 14px; color: var(--band-ink-2); overflow-wrap: anywhere; }
+.legacy .page-header h1, .legacy .page-header .page-header-sub, .legacy .page-header .page-header-aside { animation: none; opacity: 1; transform: none; }
+
+/* ── card grid: equal-height cards in balanced rows ── */
+.cards { display: grid; gap: 20px; align-items: stretch; }
+.cards-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cards-main { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.card-x { display: flex; flex-direction: column; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.card-x-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 20px 24px 0; }
+.card-x-head h2 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.015em; }
+.card-x-head p { margin: 3px 0 0; font-size: 13.5px; color: var(--muted); }
+.card-x-body { padding: 18px 24px 22px; flex: 1; display: flex; flex-direction: column; }
+.card-x-body.flush { padding: 8px 0 4px; }
+.card-x-foot { margin-top: auto; padding-top: 16px; font-size: 13px; color: var(--muted); }
+.card-x .table td, .card-x .table th { padding-top: 12px; padding-bottom: 12px; }
+.card-x .feed-item { padding-top: 11px; padding-bottom: 11px; }
+.job-focus { padding: 10px 24px 18px; border-bottom: 1px solid var(--line); }
+.job-focus-top { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.steps .step-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+@media (max-width: 980px) {
+  .cards-2, .cards-main { grid-template-columns: 1fr; }
+}
+.card-x .owner-signin { border: 0; padding: 0; background: none; }
+
+/* ── money flow (band) ── */
+.flow { display: block; width: 100%; height: auto; margin-top: 10px; overflow: visible; }
+.flow-stream { fill: none; stroke-linecap: round; opacity: 0.38; }
+.flow-in { stroke: var(--ink-2); }
+.flow-pool { stroke: var(--band-pool); opacity: 0.55; }
+.flow-op { stroke: var(--band-op); opacity: 0.5; }
+.flow-snap { fill: none; stroke: var(--band-pool); stroke-width: 1.5; stroke-dasharray: 4 5; opacity: 0.7; }
+.flow-dot { filter: drop-shadow(0 0 4px currentColor); }
+.flow-dot-in { fill: var(--ink); color: var(--ink); }
+.flow-dot-pool, .flow-dot-snap { fill: var(--accent); color: var(--accent); }
+.flow-dot-op { fill: var(--operator); color: var(--operator); }
+.flow-node rect { fill: var(--surface-2); stroke: var(--band-line); stroke-width: 1; }
+.flow-node-core rect { fill: var(--surface); stroke: var(--accent); stroke-opacity: 0.5; }
+.flow-label { fill: var(--band-ink-2); font-size: 12px; font-family: var(--font); font-weight: 600; }
+.flow-value { fill: var(--band-ink); font-size: 17px; font-family: var(--font); font-weight: 800; letter-spacing: -0.02em; }
+.flow-value-pool { fill: var(--accent); }
+.flow-value-op { fill: var(--operator); }
+.flow-sub { fill: var(--band-ink-2); font-size: 11px; font-family: var(--font); }
+.flow-snap-label { fill: var(--accent); }
+
+/* The waterfall also lives in a light card below the band: re-point its band colours. */
+.wf-card { --band-line: var(--line); --band-ink: var(--ink); --band-ink-2: var(--muted); --band-pool: var(--pool); --band-op: var(--operator); justify-content: center; }
+.wf-card .wf-total { fill: var(--line-2); }
+:root[data-theme='light'] .wf-card .wf-total { fill: #b9cbd8; }
+
+/* ══ Bento overview ══
+ * A mosaic of tiles in four columns (UI/UX Pro Max "Bento Box Grid": varied 1×1/2×1/2×2 spans,
+ * 16px gaps, ~20px radius, 4→2→1 columns). Tiles enter once, in a short stagger (the dashboard's
+ * single orchestrated motion); hover lifts only tiles that are links.
  */
-.pool {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-  padding: 20px 22px;
+.page-title { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 20px; padding: 32px 0 20px; }
+.page-title h1 { margin: 0; font-family: var(--display); font-size: 15px; font-weight: 600; color: var(--accent); letter-spacing: 0; }
+.page-title span { font-size: 13px; color: var(--muted); }
+.bento { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: minmax(150px, auto); gap: 16px; padding-bottom: 96px; }
+.tile {
+  position: relative; display: flex; flex-direction: column; min-width: 0; padding: 22px 24px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  animation: tile-in 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(var(--i, 0) * 70ms);
 }
-.pool-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
-.pool-title { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
-.pool-sub { margin: 4px 0 0; font-size: 12px; color: var(--muted-2); line-height: 1.5; }
-.pool-figure { display: flex; align-items: baseline; gap: 7px; }
-.pool-tvl { font-size: 32px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.pool-unit { font-size: 12px; color: var(--muted); }
+.tile.flush { padding: 0; overflow: hidden; }
+.tile.flush > .tile-head { padding: 20px 24px 0; }
+.t-2x2 { grid-column: span 2; grid-row: span 2; }
+.t-2x1 { grid-column: span 2; }
+.t-3x2 { grid-column: span 3; grid-row: span 2; }
+.t-1x2 { grid-row: span 2; }
+.t-4x1 { grid-column: span 4; }
+a.tile { color: inherit; transition: transform 0.2s ease, border-color 0.2s ease; cursor: pointer; }
+a.tile:hover { transform: translateY(-3px); border-color: var(--line-2); }
+.tile-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.tile-label { font-size: 13px; font-weight: 500; color: var(--muted); }
+.tile-title { margin: 0; font-family: var(--display); font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.tile-sub { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.tile-big { margin-top: auto; padding-top: 12px; font-family: var(--display); font-size: 34px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; white-space: nowrap; }
+.tile-big small { font-family: var(--font); font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 6px; letter-spacing: 0; }
+.tile-note { margin-top: 10px; font-size: 13px; color: var(--muted); }
+.tile-link { font-size: 13px; font-weight: 500; color: var(--accent); white-space: nowrap; }
+.tile-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.tile-foot { margin-top: auto; padding-top: 14px; font-size: 13px; color: var(--muted); }
 
-.pool-meter { margin-top: 20px; }
-.pool-track { position: relative; height: 10px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--border); }
-/* Unknown is not zero: an empty track asserts nothing-is-lent, so an unread track is hatched. */
-.pool-track.is-unknown {
-  background-image: repeating-linear-gradient(
-    135deg, transparent, transparent 4px, var(--border-2) 4px, var(--border-2) 5px
-  );
+/* hero tile */
+.tile-hero { background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%), var(--surface); }
+.hero-lede { margin: 18px 0 0; font-family: var(--display); font-size: clamp(26px, 2.7vw, 40px); line-height: 1.15; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+.hero-lede .num { color: var(--accent); }
+.hero-sub { margin: 14px 0 0; max-width: 52ch; font-size: 15px; color: var(--ink-2); }
+.hero-figs { display: flex; flex-wrap: wrap; gap: 14px 36px; margin: auto 0 0; padding-top: 22px; }
+.hero-figs dt { font-size: 13px; color: var(--muted); }
+.hero-figs dd { margin: 3px 0 0; font-family: var(--display); font-size: 22px; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; }
+.hero-figs dd small { font-family: var(--font); font-size: 12.5px; font-weight: 400; color: var(--muted); margin-left: 5px; }
+
+/* bullet chart (UI/UX Pro Max chart guidance: compact performance vs limits, labelled ranges) */
+.bullet { position: relative; height: 10px; margin-top: 16px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--line); }
+.bullet-range { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.bullet-bar { position: absolute; top: 2px; bottom: 2px; left: 2px; border-radius: 3px; background: var(--pool); }
+.bullet-mark { position: absolute; top: -5px; bottom: -5px; width: 3px; border-radius: 2px; background: var(--ink); }
+.bullet-scale { position: relative; height: 18px; margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+.bullet-scale span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.bullet-scale span:first-child { transform: none; }
+.bullet-scale span:last-child { transform: translateX(-100%); }
+
+/* tiles that embed existing pieces */
+.tile .flow { margin-top: 6px; }
+.tile .fall-row { padding-left: 24px; padding-right: 24px; }
+.tile .feed-item { padding-left: 24px; padding-right: 24px; }
+.tile .owner-signin { border: 0; padding: 0; background: none; }
+.tile.card-x { padding: 0; }
+
+@keyframes tile-in { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .tile { animation: none; } a.tile { transition: none; } }
+@media (max-width: 1100px) {
+  .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .t-3x2, .t-4x1 { grid-column: span 2; }
+  .t-1x2 { grid-row: span 1; }
 }
-.pool-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; background: var(--accent); }
-.pool-tick { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--border-2); }
-.pool-tick.is-near { background: var(--warn); }
-.pool-tick.is-at { background: var(--neg); }
-/* Tick labels sit under their tick, anchored so neither can overflow the track's ends: the 10%
-   label starts at its tick, the 80% label ends at its tick. */
-.pool-scale { position: relative; margin-top: 7px; height: 16px; font-size: 11px; color: var(--muted-2); }
-.pool-scale span { position: absolute; white-space: nowrap; }
-.pool-scale .is-at-cap { color: var(--warn); font-weight: 600; }
-.pool-meter-note { margin: 8px 0 0; font-size: 11.5px; color: var(--muted-2); line-height: 1.5; }
-
-/* The facts: value first, then where it came from. Four columns on a wide viewport, two on a
-   narrow one, hairline-separated from the meter. */
-.pool-facts {
-  margin: 18px 0 0;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-.pool-fact dt { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-.pool-fact dd { margin: 6px 0 0; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.pool-src { display: block; margin-top: 3px; font-size: 11px; font-weight: 400; line-height: 1.45; color: var(--muted-2); }
-/* An absent figure must not carry the same authority as a chain-read one. Same size, so the row
-   still aligns, but dropped to the muted floor with tabular figures off, so it can never be
-   mistaken for a value at a glance. */
-.pool-fact dd.is-absent { color: var(--muted-2); font-variant-numeric: normal; font-weight: 500; }
-.pool-note { margin: 14px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); border-top: 1px solid var(--border); padding-top: 12px; }
-@media (max-width: 720px) {
-  .pool-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-.mb { margin-bottom: 12px; }
-
-/* ══ Jobs index ══
- *
- * A schedule of drawn rows rather than a table, for one reason: against a real daemon three of the
- * four old columns are empty by contract, and a table cell has nowhere to say WHY it is empty. A
- * row can. Each absent field states what it is waiting on, in the muted register, so a blank is
- * never mistaken for a zero.
- *
- * Deliberately the same register as .approval-* rather than a third vocabulary: identity left,
- * money right, a source line under it, then a dt/dd fact table over hairlines.
- */
-.jobs-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
-.jobs-row {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel-2);
-  padding: 18px 20px;
-}
-.jobs-line { display: flex; align-items: flex-start; gap: 14px; }
-.jobs-ident { min-width: 0; flex: 1; }
-.jobs-title {
-  margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--text);
-  overflow-wrap: anywhere;
-}
-.jobs-origin { margin: 3px 0 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-.jobs-amount { text-align: right; white-space: nowrap; display: flex; align-items: baseline; gap: 5px; }
-.jobs-figure { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.jobs-unit { font-size: 11px; color: var(--muted); }
-/* Every figure names its source (PRODUCT principle 1). */
-.jobs-source { margin: 10px 0 0; font-size: 11px; color: var(--muted-2); }
-
-.jobs-facts { margin: 14px 0 0; display: grid; gap: 7px; }
-.jobs-facts div { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; border-top: 1px solid var(--border); padding-top: 7px; }
-.jobs-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.jobs-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
-.jobs-hash { color: var(--muted-2); font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; }
-.jobs-sub { color: var(--muted-2); font-size: 11.5px; }
-
-/* An absent field is not a value. Muted, and tabular figures off so it can never be mistaken for
-   one -- the same treatment .vessel-facts dd.is-absent uses on the Overview. */
-.jobs-row .is-absent { color: var(--muted-2); font-variant-numeric: normal; font-size: 11.5px; }
-
-/* The surface's only navigation affordance previously used .feed-link, which has no rule anywhere
-   in this stylesheet, so it inherited `a { color: inherit; text-decoration: none }` and rendered as
-   plain body text. A link has to look like one. */
-.jobs-open {
-  display: inline-block; margin-top: 14px;
-  color: var(--accent); font-size: 12.5px; font-weight: 600;
-  text-decoration: underline; text-underline-offset: 3px;
-}
-.jobs-open:hover { color: var(--accent-bright); }
-.jobs-open:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
-/* Was a `title` tooltip on a non-focusable span: unreachable by keyboard, unreliable for AT. */
-.jobs-blocked { margin: 14px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--muted-2); }
-
-/* ══ Settlement waterfall (job detail) ══
- *
- * The escrow as one bar split in proportion to where it actually goes, so the reader sees that
- * the pool is satisfied before the operator instead of subtracting two numbers. The pool leg
- * sits first and solid, the operator leg is whatever survives it: order is carried by position
- * and weight, not hue, because "first" is not an alarm. The facts underneath are numbered,
- * because the order IS the evidence.
- */
-.wf { margin: 12px 0 0; display: grid; gap: 12px; }
-.wf-track {
-  display: flex; height: 10px; border-radius: 5px; overflow: hidden;
-  background: var(--panel-2); border: 1px solid var(--border);
-}
-/* Unknown is not zero: an empty track asserts nothing-to-split, so an unread split is hatched. */
-.wf-track.is-unknown {
-  background-image: repeating-linear-gradient(
-    135deg, transparent, transparent 4px, var(--border-2) 4px, var(--border-2) 5px
-  );
-}
-.wf-pool { background: var(--accent); }
-.wf-operator { background: var(--border-2); }
-.wf-facts { margin: 0; display: grid; gap: 7px; }
-.wf-facts div { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; border-top: 1px solid var(--border); padding-top: 7px; }
-.wf-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.wf-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
-/* An absent leg says which absence it is, at the muted floor with tabular figures off. */
-.wf-facts dd.is-absent { color: var(--muted-2); font-variant-numeric: normal; }
-.wf-note { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); }
-.wf-terminal { margin: 12px 0 0; font-size: 13px; line-height: 1.55; color: var(--text-2); }
-
-/* ══ Job detail, converted ══ */
-/* .stat-sub never reset its bottom margin, so four call sites patched the UA 1em by hand with
-   four different inline values. One rule instead. */
-.stat-sub { margin-bottom: 0; }
-/* Unknown is not zero: an empty bar asserts nothing-spent, so unknown is hatched instead. */
-.job-budget-bar.is-unknown {
-  background-image: repeating-linear-gradient(
-    135deg, transparent, transparent 4px, var(--border-2) 4px, var(--border-2) 5px
-  );
-}
-/* Stated in text for AT; the visual state is already carried by the dot and the weight. */
-.job-stage-state { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-/* .feed-link had no rule anywhere in this file, so both call sites on this page rendered as
-   plain grey body text indistinguishable from the timestamp beside them. */
-.job-txlink { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
-.job-txlink:hover { color: var(--accent-bright); }
-.job-txlink:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
-/* Focusable so the full hash in the accessible name is reachable by keyboard. */
-.job-hashv:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
-
-/* ══ Customer portal, converted ══
- *
- * Same tokens and the same flat register as the owner surfaces, and deliberately none of the
- * instrument vocabulary: this reader arrived from one link to accept one deliverable, and owes
- * nobody a drafting language to do it.
- */
-.portal-jobid { word-break: break-all; font-variant-numeric: tabular-nums; }
-.portal-receipt-title { margin: 0 0 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
-.portal-total { margin: 0; font-size: 15px; display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-variant-numeric: tabular-nums; }
-/* Absent is not zero, and on a receipt that distinction is the customer's money. */
-.portal-absent { color: var(--muted-2); font-size: 12.5px; font-variant-numeric: normal; }
-.portal-proof { margin: 14px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
-.portal-proof code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text-2); }
-.portal-accept:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-
-/* The customer's own wallet (OwnWalletPanel): the same plain register, one action at a time. */
-.portal-lede { margin-top: 20px; }
-.portal-wallet { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border); }
-.portal-wallet-name { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; font-size: 12.5px; color: var(--muted); }
-.portal-wallet-name input {
-  min-height: 40px; padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--border);
-  background: var(--bg); color: var(--text); font: inherit; font-size: 14px;
-}
-.portal-wallet-name input:focus-visible { outline: 2px solid var(--sky); outline-offset: 1px; }
-.portal-wallet-actions { display: flex; flex-direction: column; gap: 10px; }
-/* Check again (and, while settling, the retry) under an accepted-but-unsettled delivery. */
-.portal-recheck { margin-top: 10px; }
-.portal-secondary {
-  width: 100%; min-height: 44px; border-radius: var(--radius); border: 1px solid var(--border);
-  background: transparent; color: var(--text); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer;
-}
-.portal-secondary:disabled { opacity: 0.6; cursor: default; }
-.portal-secondary:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-.portal-wallet code { word-break: break-all; }
-/* Sentences, not state slugs: the base .portal-note capitalizes every word. */
-.portal-note.is-sentence { text-transform: none; }
-.portal-note a { color: inherit; text-decoration: underline; }
-.portal-bridge .portal-proof { margin: 0 0 14px; }
-
-/* ══ Audit ══
- *
- * A schedule of references, not a drawing: nothing here is flowing, so there is no instrument to
- * draw. The one thing every row owes the reader is somewhere independent to follow it, which is
- * why the reference link is the only coloured element on the page.
- */
-.audit-lede { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 68ch; }
-.audit-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
-.audit-row { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; padding: 12px 0; border-top: 1px solid var(--border); }
-.audit-row:first-child { border-top: none; }
-.audit-row-main { min-width: 0; }
-.audit-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
-.audit-role { margin: 3px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; max-width: 56ch; }
-/* The reference out. This is the page's only accent, because following it is the page's point. */
-.audit-ref { display: inline-block; flex: none; color: var(--accent); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
-.audit-ref:hover { color: var(--accent-bright); }
-.audit-ref:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; border-radius: var(--radius); }
-.audit-ref code { font-family: ui-monospace, "Cascadia Code", monospace; }
-.audit-inline { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
-
-/* The two settlement legs, in log order. The order is the evidence, so it is numbered and the
-   rows are not reorderable by styling. */
-.audit-legs { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 0; counter-reset: leg; }
-.audit-leg { display: grid; grid-template-columns: 74px 96px auto 1fr; gap: 14px; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
-.audit-leg-index { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.audit-leg-to { font-size: 13px; font-weight: 600; }
-.audit-leg-amount { font-size: 15px; font-weight: 600; }
-.audit-unit { font-size: 10.5px; color: var(--muted); font-weight: 400; }
-.audit-leg-detail { font-size: 11.5px; color: var(--muted-2); text-align: right; }
-.audit-note { margin: 0 0 14px; font-size: 12.5px; line-height: 1.6; color: var(--text-2); max-width: 68ch; }
-.audit-note code, .audit-gap-detail code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text); }
-
-/* The gaps. Deliberately the same weight as the proofs above: an audit page that whispered its
-   absences and shouted its evidence would be doing the thing it exists to prevent. */
-.audit-gaps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
-.audit-gaps li { display: grid; gap: 3px; padding: 11px 0; border-top: 1px solid var(--border); }
-.audit-gap-claim { font-size: 13px; font-weight: 600; color: var(--text); }
-.audit-gap-detail { font-size: 12px; color: var(--muted); line-height: 1.55; max-width: 68ch; }
 @media (max-width: 640px) {
-  .audit-row { flex-direction: column; gap: 8px; }
-  .audit-leg { grid-template-columns: 1fr; gap: 2px; }
-  .audit-leg-detail { text-align: left; }
+  .bento { grid-template-columns: 1fr; }
+  .t-2x2, .t-2x1, .t-3x2, .t-4x1 { grid-column: span 1; }
+  .t-2x2, .t-3x2 { grid-row: span 1; }
+  .page-title { padding-top: 22px; }
 }
 
-/* ══ Workforce, converted ══ */
-/* The section states an authority model, not a live roster, and says so at the muted floor so the
-   caveat is present without competing with the roles it qualifies. */
-.workforce-caveat { margin: 14px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); max-width: 68ch; }
+/* ══ One identity per tile ══ */
 
-/* ══ Settings ══
- *
- * A configuration record, so it is set as one: label left, state right, hairlines between. The
- * only colour is on whether a value is present, because that is the single fact each row carries.
- */
-.settings-lede { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 68ch; }
-.settings-body { margin: 0 0 12px; font-size: 13px; line-height: 1.6; color: var(--text-2); max-width: 70ch; }
-.settings-body code, .settings-note code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text); }
-.settings-note { margin: 12px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); max-width: 70ch; }
+/* Summary */
+.tile-hero .btn-solid { margin-top: 20px; align-self: flex-start; }
 
-.settings-facts { margin: 0; display: grid; gap: 0; }
-.settings-facts div { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; padding: 9px 0; border-top: 1px solid var(--border); }
-.settings-facts div:first-child { border-top: none; }
-.settings-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.settings-facts dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
-.settings-mono { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text-2); word-break: break-all; }
-
-.settings-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
-.settings-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 13px 0; border-top: 1px solid var(--border); }
-.settings-row:first-child { border-top: none; }
-.settings-row-main { min-width: 0; }
-.settings-key { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; color: var(--text); word-break: break-all; }
-/* Marks a row whose value is a credential, so the reason it is never printed is on screen. */
-.settings-secret { margin-left: 8px; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--warn); }
-.settings-enables { margin: 4px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); max-width: 62ch; }
-/* Not set is the ordinary case, not an alarm: most of these are optional overrides, and painting
-   them red would make the two that matter invisible among nine that do not. */
-.settings-state { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted-2); }
-.settings-state.is-set { color: var(--pos); }
-@media (max-width: 640px) {
-  .settings-row { flex-direction: column; gap: 6px; }
-  .settings-facts div { flex-direction: column; gap: 2px; }
-  .settings-facts dd { text-align: left; }
+/* Money flow: a dark stage on a dot grid */
+.tile-stage {
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ink) 9%, transparent) 1px, transparent 0) 0 0 / 18px 18px,
+    color-mix(in srgb, var(--page) 70%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
 }
+.live-tag { display: inline-flex; align-items: center; gap: 7px; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-soft); }
+.live-tag::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
-/* ══ Pending approvals, on the Overview ══
- *
- * The first viewport's one coloured region. --warn because a purchase held for a decision is
- * caution, not alarm, and the colour appears ONLY when something is actually waiting -- a
- * coloured zero would make the hue decorative, which is the one thing the semantic-colour rule
- * forbids.
- */
-.pending { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: 16px 20px; }
-.pending.is-quiet { background: none; border-style: dashed; }
-.pending.is-waiting {
-  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
-  border-color: var(--warn-border); background: var(--warn-bg);
-}
-.pending-count { flex: none; font-size: 26px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--warn); }
-.pending-text { flex: 1; min-width: 220px; }
-.pending-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
-.pending-body { margin: 3px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
-.pending.is-quiet .pending-body { margin: 0; }
-/* The primary action of the first viewport. Sized as a real control, not a text link. */
-.pending-action {
-  flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 36px;
-  padding: 8px 16px; border: 1px solid var(--warn-border); border-radius: var(--radius-sm);
-  color: var(--warn); font-size: 12.5px; font-weight: 600;
-}
-.pending-action:hover { border-color: var(--warn); }
-.pending-action:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+/* Pool: liquid level */
+.tile-pool { overflow: hidden; isolation: isolate; }
+.pool-level { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; }
+.pool-liquid { fill: color-mix(in srgb, var(--pool) 16%, transparent); }
+.pool-surface { fill: none; stroke: color-mix(in srgb, var(--pool) 55%, transparent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 
-/* ══ Landing ══
- *
- * The product's ledger, shown to a stranger. Same register as the dashboard -- flat, hairlines,
- * semantic colour only -- but given room, because this reader is being told what the product is
- * rather than operating it. The settlement bar is the job detail page's own .wf-* idiom.
- *
- * .app is a 224px + 1fr grid for the dashboard. Sidebar returns null on "/" and on the portal, so
- * without this the landing would sit behind an empty 224px gutter.
- */
-.app:has(> .main:only-child) { grid-template-columns: 1fr; }
-.app:has(> .main:only-child) .main { max-width: none; padding: 0; }
+/* Advance rate: gauge */
+.tile-gauge { align-items: stretch; }
+.gauge { display: block; width: 100%; max-width: 220px; margin: 10px auto 0; }
+.gauge-track { fill: none; stroke: var(--line); stroke-width: 12; stroke-linecap: round; }
+.gauge-fill { fill: none; stroke: var(--accent); stroke-width: 12; stroke-linecap: round; }
+.gauge-start { stroke: var(--muted); stroke-width: 2; }
+.gauge-needle { stroke: var(--ink); stroke-width: 3; stroke-linecap: round; }
+.gauge-hub { fill: var(--ink); }
+.gauge-tick { fill: var(--muted); font-size: 11px; font-family: var(--font); }
+.gauge-value { margin-top: -6px; text-align: center; font-family: var(--display); font-size: 30px; font-weight: 600; letter-spacing: -0.03em; }
 
-.lp { max-width: 920px; margin: 0 auto; padding: 64px 30px 72px; }
-.lp-header { border-bottom: 1px solid var(--border); padding-bottom: 40px; }
-.lp-brand { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.14em; color: var(--accent); }
-.lp-title { margin: 18px 0 0; font-size: clamp(30px, 5vw, 46px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 600; max-width: 16ch; }
-.lp-lede { margin: 18px 0 0; font-size: 17px; line-height: 1.6; color: var(--text-2); max-width: 52ch; }
-.lp-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 32px; }
-.lp-cta {
-  display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 10px 22px;
-  border: 1px solid var(--accent); border-radius: var(--radius);
-  background: var(--accent); color: var(--on-accent); font-size: 13.5px; font-weight: 600;
-}
-.lp-cta:hover { background: var(--accent-bright); border-color: var(--accent-bright); }
-.lp-cta:focus-visible, .lp-alt:focus-visible, .lp-ref:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-.lp-alt { color: var(--accent); font-size: 13px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
-.lp-alt:hover { color: var(--accent-bright); }
+/* Fees: columns */
+.tile-fees { background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--operator) 7%, var(--surface))); }
+.fee-bars { display: flex; align-items: flex-end; gap: 6px; height: 46px; margin-top: 14px; }
+.fee-bars span { flex: 1; max-width: 26px; border-radius: 4px 4px 1px 1px; background: var(--operator); opacity: 0.85; transform-origin: bottom; animation: fee-up 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(400ms + var(--i, 0) * 80ms); }
+@keyframes fee-up { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 
-.lp-h2 { margin: 0 0 18px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
-/* Landing body lifted 14px → 16px (#3): this is the honest-limits paragraph, the one most meant to
-   be read. Measure already capped at 66ch. */
-.lp-body { margin: 0 0 14px; font-size: 16px; line-height: 1.65; color: var(--text-2); max-width: 66ch; }
-.lp-body code, .lp-ref code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12.5px; color: var(--text); }
+/* Agents: a locked compartment */
+.tile-agents { border-style: dashed; border-color: var(--line-2); background: repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in srgb, var(--ink) 2.5%, transparent) 10px 11px), var(--surface); }
+.tile-agents .card-x-head h2 { font-family: var(--display); font-size: 15px; }
+.tile-agents .card-x-head h2::before { content: ''; display: inline-block; width: 10px; height: 12px; margin-right: 8px; vertical-align: -1px; border-radius: 2px; background: var(--muted); -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Cpath d='M2 5V3.5a3 3 0 0 1 6 0V5h.5A1.5 1.5 0 0 1 10 6.5v4A1.5 1.5 0 0 1 8.5 12h-7A1.5 1.5 0 0 1 0 10.5v-4A1.5 1.5 0 0 1 1.5 5H2Zm1.5 0h3V3.5a1.5 1.5 0 0 0-3 0V5Z'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Cpath d='M2 5V3.5a3 3 0 0 1 6 0V5h.5A1.5 1.5 0 0 1 10 6.5v4A1.5 1.5 0 0 1 8.5 12h-7A1.5 1.5 0 0 1 0 10.5v-4A1.5 1.5 0 0 1 1.5 5H2Zm1.5 0h3V3.5a1.5 1.5 0 0 0-3 0V5Z'/%3E%3C/svg%3E") center / contain no-repeat; }
 
-.lp-figure { margin-top: 44px; }
-/* The money path as a numbered schedule: the order is the evidence, so it is numbered. */
-.lp-steps { list-style: none; margin: 0; padding: 0; }
-.lp-steps li { display: flex; align-items: baseline; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border); }
-.lp-steps li > span { color: var(--muted-2); font-size: 12px; font-variant-numeric: tabular-nums; }
-.lp-steps p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--text-2); max-width: 64ch; }
-.lp-steps strong { color: var(--text); font-weight: 600; }
-/* The split, drawn with the job detail page's own bar (.wf-track/.wf-pool/.wf-operator), a
-   little taller here because on this page it is the hero rather than one card among several. */
-.lp-split { margin-top: 22px; display: grid; gap: 12px; }
-.lp-split .wf-track { height: 14px; }
-/* The caption sits under the drawing and does the explaining the drawing cannot. */
-.lp-caption { margin: 18px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted); max-width: 74ch; }
-.lp-caption code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; color: var(--text-2); }
-.lp-ref { display: inline-block; color: var(--accent); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
-.lp-ref:hover { color: var(--accent-bright); }
+/* Every settlement: plain stage for the split bars, accent edge */
+.tile-fall { box-shadow: inset 3px 0 0 var(--pool); }
 
-.lp-honest { border-top: 1px solid var(--border); padding-top: 40px; margin-top: 52px; }
-.lp-foot { display: flex; flex-wrap: wrap; gap: 20px; align-items: baseline; margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted-2); }
-.lp-foot a { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
-.lp-foot a:hover { color: var(--text); }
-@media (max-width: 640px) {
-  .lp { padding: 48px 20px 60px; }
-}
+/* Open jobs: a ticket with a perforated edge and a stage stripe */
+.tile-ticket .ticket { position: relative; margin: 14px 16px 12px; padding: 14px 16px 16px 20px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--line); }
+.tile-ticket .ticket::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 4px; border-radius: 0 4px 4px 0; background: var(--accent); }
+.tile-ticket .ticket::after { content: ''; position: absolute; left: 20px; right: 16px; bottom: -1px; border-bottom: 2px dashed var(--line-2); opacity: 0.5; }
+.count-badge { min-width: 34px; height: 34px; padding: 0 10px; display: grid; place-items: center; border-radius: 12px; font-family: var(--display); font-size: 17px; font-weight: 600; color: var(--wait); background: var(--wait-soft); }
 
-/* ── Owner sign-in (components/OwnerSignIn.tsx) ──
-   Shown wherever an owner route answered "sign in first". Not an alarm: a locked owner control is
-   expected on a visitor's browser, so it takes no state colour; only a rejected secret does. */
-.owner-signin-body { margin: 0 0 14px; font-size: 13px; line-height: 1.6; color: var(--text-2); max-width: 70ch; }
-.owner-signin-body code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11.5px; color: var(--text); }
-.owner-signin-label { display: block; margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.owner-signin-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.owner-signin-row .settings-body { margin: 0; }
-.owner-signin-input {
-  flex: 1 1 220px; min-width: 0; min-height: 34px; padding: 6px 12px;
-  background: var(--bg); color: var(--text); border: 1px solid var(--border-2);
-  border-radius: var(--radius); font: inherit; font-size: 13px;
-}
-.owner-signin-input:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-.owner-signin-submit {
-  display: inline-flex; min-height: 34px; min-width: 104px;
-  align-items: center; justify-content: center; padding: 6px 16px;
-  border: 1px solid var(--border-2); border-radius: var(--radius);
-  background: var(--bg-2); color: var(--text-2);
-  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
-}
-.owner-signin-submit:hover:not(:disabled) { border-color: var(--muted-2); }
-.owner-signin-submit:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-.owner-signin-submit:disabled { opacity: 0.45; cursor: not-allowed; }
-.owner-signin-error { margin: 10px 0 0; font-size: 12.5px; color: var(--neg); }
-/* Inside another card (Settings, the job's customer-link card) it is a section, not a second box. */
-.card .owner-signin { border: 0; padding: 0; background: none; }
+/* Where it fell */
+.tile-wf { background: linear-gradient(0deg, color-mix(in srgb, var(--pool) 6%, var(--surface)), var(--surface) 60%); }
+
+/* Latest on chain: a timeline with a rail */
+.tile-timeline .feed { position: relative; }
+.tile-timeline .feed::before { content: ''; position: absolute; left: 34px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
+.tile-timeline .feed-item { grid-template-columns: 22px 80px minmax(0, 1fr) auto; border-top: 0; padding-top: 10px; padding-bottom: 10px; }
+.tile-timeline .feed-item::before { content: ''; width: 10px; height: 10px; margin: 5px 0 0 3px; border-radius: 50%; background: var(--surface); border: 2px solid var(--line-2); position: relative; z-index: 1; }
+.tile-timeline .feed-item.is-good::before { border-color: var(--good); background: var(--good); }
+@media (max-width: 760px) { .tile-timeline .feed-item { grid-template-columns: 22px minmax(0, 1fr) auto; } .tile-timeline .feed-time { grid-column: 2 / -1; } }
+
+/* ══ One identity per button role ══ */
+.btn-solid { display: inline-flex; align-items: center; height: 40px; padding: 0 20px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-weight: 600; font-size: 14px; transition: transform 0.15s, filter 0.15s; }
+.btn-solid:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.btn-chip { display: inline-flex; align-items: center; height: 26px; padding: 0 11px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--pool) 45%, transparent); color: var(--pool); font-size: 12px; font-weight: 600; background: color-mix(in srgb, var(--pool) 10%, transparent); }
+.btn-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--line-2); color: var(--ink-2); transition: transform 0.2s, border-color 0.2s; }
+.btn-icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+a.tile:hover .btn-icon { transform: translateX(3px); border-color: var(--accent); color: var(--accent); }
+.btn-underline { font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: underline; text-decoration-color: var(--pool); text-decoration-thickness: 2px; text-underline-offset: 5px; white-space: nowrap; }
+.btn-underline:hover { color: var(--pool); }
+.btn-outline { display: inline-flex; align-items: center; height: 32px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line-2); color: var(--ink); font-size: 13px; font-weight: 500; white-space: nowrap; transition: border-color 0.15s, background 0.15s; }
+.btn-outline:hover { border-color: var(--accent); background: var(--accent-soft); }
+.owner-signin-submit { border-radius: 10px !important; background: var(--accent) !important; color: var(--accent-ink) !important; border: 0 !important; font-weight: 600 !important; }
+
+@media (prefers-reduced-motion: reduce) { .fee-bars span { animation: none; } .btn-solid, .btn-icon { transition: none; } }
+
+/* Rows fill completely: dense packing closes any hole, and every tile in a row stretches to it. */
+.bento { grid-auto-flow: row dense; align-items: stretch; }
+.tile-fall .fall { padding-bottom: 8px; }
+.tile-wf .wf { max-width: 520px; margin: 0 auto; }
+.tile-agents .card-x-body { padding-top: 12px; }

@@ -2,8 +2,7 @@
  * Which Arc deployment this dashboard reads, chosen once by SNAPFALL_NETWORK.
  *
  * `arc-testnet` (the default) or `arc-mainnet`, matching the `network.name` of the two committed
- * deployment records. next.config inlines SNAPFALL_NETWORK at BUILD time, like
- * SNAPFALL_DEMO_STREAM, so the static pages, the client chrome and the API routes of one build
+ * deployment records. next.config inlines SNAPFALL_NETWORK at BUILD time, so the static pages, the client chrome and the API routes of one build
  * can never disagree about which chain they show. A mainnet dashboard is a mainnet build.
  *
  * The RPC comes from the env var the deployment record names (`network.rpcUrlEnv`:

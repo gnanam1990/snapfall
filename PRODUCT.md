@@ -39,8 +39,8 @@ The demo thesis, in the team's own words: *"We gave our AI business zero dollars
 - Money is always atomic USDC — six decimal places, carried as base-10 strings or integers. Never a float, anywhere, including in display code.
 - Contracts are frozen: JobVault (escrow), FloatPool (advance vault), AuditAnchor. An advance is capped at 10% of pool TVL per org and 80% utilisation pool-wide; the fee is 2% of principal and 20% of that fee goes to a first-loss reserve.
 - **A 0.04 USDC agent purchase has settled end to end through the x402 path, self-facilitated (`docs/spine-runs/2026-08-08-first-x402-settlement.md`). Separately, the Circle Gateway facilitator client is built and has never run against Circle's live service.** These are two independent facts — settlement did not require Gateway — and surfaces must state both, implying neither's reverse.
-- Two figures on Overview are read live from the chain and are real today (pool TVL, advance rate). Most other panels have no data until a run happens.
-- Sample data is permitted **only** behind an explicit flag stripped from the deployed artifact, following the existing `SNAPFALL_DEMO_STREAM` precedent. This was a deliberate operator decision, taken after the risk was raised.
+- Every figure on the dashboard is real: the pool, jobs, advances, settlements and the activity timeline are decoded from the deployed contracts' own events, each linked to its transaction. Agent chat, approvals and the workforce come from the owner's daemon and are shown only when one is connected.
+- There is no sample data. The scripted demo replay was removed (Nov 2026) at the operator's request.
 
 ## Brand Commitments
 

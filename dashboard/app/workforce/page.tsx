@@ -338,7 +338,7 @@ export default function WorkforcePage() {
         <div className="page-header-text">
           <h1>Workforce</h1>
           <p className="page-header-sub">
-            Deploy bounded specialists without expanding their authority.
+            Your AI agents. Each one has a narrow job, and none can do more than it is allowed to.
           </p>
         </div>
         <span className="page-header-aside">

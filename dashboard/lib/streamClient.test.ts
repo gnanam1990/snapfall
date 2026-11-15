@@ -148,7 +148,7 @@ test('handover timing and the resume URL', () => {
   assert.equal(resumeUrl('/api/events/stream?x=1', '42'), '/api/events/stream?x=1&lastEventId=42');
 });
 
-test('frame dedup: chain and daemon sequences are separate namespaces; snapshots and demo frames pass', () => {
+test('frame dedup: chain and daemon sequences are separate namespaces; snapshots pass', () => {
   const admit = createFrameDedup(3);
   assert.equal(admit(chain(10, 0)), true);
   assert.equal(admit(chain(10, 0)), false);
@@ -156,7 +156,6 @@ test('frame dedup: chain and daemon sequences are separate namespaces; snapshots
   assert.equal(admit({ ...chain(7, 0), seq: 7 } as StreamMessage), true, 'chain 7 is not daemon 7');
   assert.equal(admit(snapshot), true);
   assert.equal(admit(snapshot), true);
-  assert.equal(admit({ ...daemon(7), demo: true } as StreamMessage), true, 'the demo replay is never deduplicated');
   assert.equal(frameKey(snapshot), null);
   // Bounded: the oldest key is forgotten once the cap is passed.
   admit(daemon(8));

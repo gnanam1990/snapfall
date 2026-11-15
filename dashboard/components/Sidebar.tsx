@@ -2,57 +2,83 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { Fragment, type ReactNode } from 'react';
 import ThemeToggle from '@/components/ThemeToggle';
 import Logo from '@/components/Logo';
 import { networkLabel } from '@/lib/network';
 
-const NAV: { href: string; label: string }[] = [
-  { href: '/overview', label: 'Overview' },
-  { href: '/jobs', label: 'Jobs' },
-  { href: '/workforce', label: 'Workforce' },
-  { href: '/approvals', label: 'Approvals' },
-  { href: '/float', label: 'Float' },
-  { href: '/audit', label: 'Audit' },
-  { href: '/settings', label: 'Settings' },
+/** The business, the agents, and the proof — separated by a rule rather than by labels. */
+const GROUPS: { href: string; label: string }[][] = [
+  [
+    { href: '/overview', label: 'Overview' },
+    { href: '/jobs', label: 'Jobs' },
+    { href: '/activity', label: 'Activity' },
+    { href: '/float', label: 'Capital pool' },
+  ],
+  [
+    { href: '/approvals', label: 'Approvals' },
+    { href: '/workforce', label: 'Workforce' },
+  ],
+  [
+    { href: '/audit', label: 'Audit' },
+    { href: '/settings', label: 'Settings' },
+  ],
 ];
 
-export default function Sidebar() {
+/** Customer-facing pages (the acceptance portal and the pay page) are for a different person and
+ *  render without the owner's navigation. */
+function isBare(pathname: string | null): boolean {
+  return !!pathname && (pathname.startsWith('/portal') || pathname.startsWith('/pay/'));
+}
+
+/** Owner pages whose markup predates this template: framed in the content column, with their
+ *  page header drawn as the same navy band (globals.css, `.legacy`). */
+function isLegacy(pathname: string | null): boolean {
+  if (!pathname) return false;
+  return ['/approvals', '/workforce', '/settings', '/audit'].some((p) => pathname.startsWith(p)) || /^\/jobs\/.+/.test(pathname);
+}
+
+export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  // These surfaces are not the owner's dashboard and must not carry its navigation.
-  // The customer portal (V9) and the customer's /pay page are for a different principal. The landing
-  // page at "/" is for someone who does not yet know what this is; showing them an operator
-  // nav before the product has been explained is the wrong first move. All render full-bleed.
-  if (pathname === '/' || pathname?.startsWith('/portal') || pathname?.startsWith('/pay/')) return null;
+  if (isBare(pathname)) {
+    return (
+      <div className="shell-bare">
+        <main className="main">{children}</main>
+      </div>
+    );
+  }
   return (
-    <aside className="sidebar">
-      <div className="brand">
-        <Logo size={22} />
-        <div className="brand-name">Snapfall</div>
-      </div>
-      <nav>
-        {NAV.map((n) => {
-          const active = pathname.startsWith(n.href);
-          return (
-            <Link
-              key={n.href}
-              href={n.href}
-              className={`nav-link${active ? ' active' : ''}`}
-              aria-current={active ? 'page' : undefined}
-            >
-              {n.label}
-            </Link>
-          );
-        })}
-      </nav>
-      <div className="sidebar-foot">
-        <div className="sidebar-foot-row">
-          <div className="sidebar-net">
-            <span className="sidebar-net-dot" aria-hidden="true" /> {networkLabel()}
+    <>
+      <header className="top">
+        <div className="wrap top-inner">
+          <Link href="/overview" className="top-brand">
+            <Logo size={22} />
+            <span className="top-name">Snapfall</span>
+          </Link>
+          <nav className="top-nav" aria-label="Dashboard">
+            {GROUPS.map((group, gi) => (
+              <Fragment key={gi}>
+                {gi > 0 ? <span className="top-sep" aria-hidden="true" /> : null}
+                {group.map((n) => {
+                  const active = pathname?.startsWith(n.href) ?? false;
+                  return (
+                    <Link key={n.href} href={n.href} className={`top-link${active ? ' is-active' : ''}`} aria-current={active ? 'page' : undefined}>
+                      {n.label}
+                    </Link>
+                  );
+                })}
+              </Fragment>
+            ))}
+          </nav>
+          <div className="top-side">
+            <span className="net">{networkLabel()}</span>
+            <ThemeToggle />
           </div>
-          <ThemeToggle />
         </div>
-        <div style={{ marginTop: 4 }}>capital in a snap,<br />settlement in a waterfall</div>
-      </div>
-    </aside>
+      </header>
+      <main className="main" style={{ overflowX: 'clip' }}>
+        {isLegacy(pathname) ? <div className="wrap legacy">{children}</div> : children}
+      </main>
+    </>
   );
 }

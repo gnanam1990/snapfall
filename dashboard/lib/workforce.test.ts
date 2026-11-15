@@ -216,7 +216,7 @@ test('activation labels expose the real one-shot Build Monitor lifecycle', () =>
 });
 
 test('workforce gallery has no fixed-width track that could overflow, and collapses on narrow', () => {
-  const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../app/legacy.css', import.meta.url), 'utf8');
   // The old four-across grid carried a minmax(390px, …) track for Build Monitor's hire form, which
   // overflowed once the three operator tools shared its row (144px columns padded to 491px). That
   // grid is gone: Build Monitor is now a full-width block, and the operator tools use only

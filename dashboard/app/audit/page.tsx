@@ -117,10 +117,12 @@ export default function AuditPage() {
         <div className="page-header-text">
           <h1>Audit</h1>
           <p className="page-header-sub">
-            What can be checked without trusting us, and what cannot.{' '}
+            Don&rsquo;t take our word for it: every claim here links to the public chain.{' '}
+            <span className="tech">
             {SETTLEMENT_IS_OTHER_CHAIN
               ? `Every contract address below links to the public explorer for ${deployment.network.name}; the settlement links to the Arc testnet explorer, where it ran.`
               : `Every address and hash below links to the public explorer for ${deployment.network.name}.`}
+            </span>
           </p>
         </div>
         <span className="page-header-aside">

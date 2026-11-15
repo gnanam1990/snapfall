@@ -61,9 +61,9 @@ export function resumeUrl(base: string, lastEventId: string): string {
 }
 
 /** The identity of a frame both overlapping connections may deliver, or null for one that is never
- *  deduplicated (snapshots, the local demo replay, frames without a sequence). */
+ *  deduplicated (snapshots, frames without a sequence). */
 export function frameKey(msg: StreamMessage): string | null {
-  if (msg.kind !== 'event' || msg.demo === true) return null;
+  if (msg.kind !== 'event') return null;
   const seq = msg.seq as unknown;
   if ((typeof seq !== 'number' && typeof seq !== 'string') || seq === '') return null;
   return `${msg.source}:${String(seq)}`;

@@ -3,7 +3,7 @@ services:
   - type: web
     name: snapfall-dashboard
     runtime: docker
-    plan: free
+    plan: starter
     region: singapore
     dockerfilePath: ./Dockerfile
     dockerContext: .
