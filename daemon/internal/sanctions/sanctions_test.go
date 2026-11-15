@@ -126,3 +126,27 @@ func TestLiveOracle(t *testing.T) {
 		t.Fatalf("clean address: got %v, %v; want false", hit, err)
 	}
 }
+
+// A keyed RPC carries its key in the URL. No error may repeat it, because the error
+// becomes the refusal reason the owner sees and the store keeps.
+func TestErrorsNeverQuoteTheRPCURL(t *testing.T) {
+	const secret = "s3cr3t-provider-key"
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := dead.URL + "/v2/" + secret + "?apikey=" + secret
+	dead.Close() // connection refused from here on
+
+	for name, rpc := range map[string]string{
+		"unreachable": deadURL,
+		"unparseable": "http://[::1" + "/v2/" + secret,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewOracle(rpc).Sanctioned(context.Background(), clean)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("error leaks the RPC URL: %v", err)
+			}
+		})
+	}
+}

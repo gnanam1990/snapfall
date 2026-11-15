@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -74,7 +75,8 @@ func (o *Oracle) Sanctioned(ctx context.Context, address string) (bool, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.RPC, bytes.NewReader(body))
 	if err != nil {
-		return false, fmt.Errorf("sanctions: %w", err)
+		// The parse error would quote the URL, and a keyed provider carries its key there.
+		return false, errors.New("sanctions: the oracle RPC URL is not a valid URL")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := o.HTTP
@@ -83,6 +85,12 @@ func (o *Oracle) Sanctioned(ctx context.Context, address string) (bool, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		// *url.Error prints the full request URL, and a keyed RPC (".../v2/<key>") would put
+		// its key into the refusal reason the owner sees. Keep only the underlying cause.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
 		return false, fmt.Errorf("sanctions: oracle unreachable: %w", err)
 	}
 	defer resp.Body.Close()
