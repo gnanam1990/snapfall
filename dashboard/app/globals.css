@@ -713,6 +713,9 @@ a.tile:hover .btn-icon { transform: translateX(3px); border-color: var(--accent)
 .cascade-replay .is-pool { color: var(--stage-pool); font-weight: 700; }
 .cascade-replay .is-operator { color: var(--stage-op); font-weight: 700; }
 .cascade-controls { display: flex; gap: 4px; flex: none; }
+.cascade-controls-solo { justify-content: flex-end; }
+.cascade-controls-solo .cascade-reset { background: var(--chip); backdrop-filter: blur(6px); }
+.cascade-canvas:active { cursor: grabbing; }
 .icon-btn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; border: 1px solid var(--chip-line); background: transparent; color: var(--stage-ink); cursor: pointer; transition: border-color 0.15s; }
 .icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .icon-btn svg path[d$='z'] { fill: currentColor; }

@@ -14,6 +14,8 @@ import type { Anchors, CascadeData, CascadeHandle, PartName, StageMode } from '@
  * whether or not WebGL draws. The canvas is decoration that follows the data; the legend buttons
  * select the same parts a click on the scene selects, so the keyboard has the same path.
  *
+ * Dragging the stage turns the fountain; the reset button (or a double-click) brings it home.
+ *
  * With reduced motion the scene renders one still frame and the replay waits for Next. When WebGL
  * cannot start, or its context is lost, the 2D money flow takes its place.
  */
@@ -78,12 +80,14 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
   const reduced = useReducedMotion();
   const stageRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<CascadeHandle | null>(null);
+  const legendRef = useRef<HTMLDivElement>(null);
   const labelRefs = useRef<Record<PartName, HTMLDivElement | null>>({ escrow: null, pool: null, operator: null });
   const [failed, setFailed] = useState(false);
   const [ready, setReady] = useState(false);
   const [paused, setPaused] = useState(false);
   const [jobIdx, setJobIdx] = useState(settled.length ? settled.length - 1 : 0);
   const [selected, setSelected] = useState<PartName | null>(null);
+  const [turned, setTurned] = useState(false);
   const dataRef = useRef(data);
   dataRef.current = data;
 
@@ -102,6 +106,7 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
           modelUrl: '/cascade/fountain.glb',
           onFrame: (a: Anchors) => {
             const width = el.clientWidth;
+            const placed: { node: HTMLDivElement; x: number; y: number; half: number; top: number; h: number; on: boolean }[] = [];
             for (const k of Object.keys(a) as PartName[]) {
               const node = labelRefs.current[k];
               if (!node) continue;
@@ -109,13 +114,36 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
               // the very edge and its label would otherwise be cut in half.
               const half = node.offsetWidth / 2 + 8;
               const x = Math.min(Math.max(a[k].x, half), Math.max(half, width - half));
-              node.style.transform = `translate(${Math.round(x)}px, ${Math.round(a[k].y)}px)`;
-              node.style.opacity = a[k].visible ? '1' : '0';
+              // A turned stage can carry a label up under the legend; keep it just below instead.
+              let y = a[k].y;
+              const legend = legendRef.current;
+              if (legend) {
+                const lx = legend.offsetLeft, lw = legend.offsetWidth;
+                const overlapsX = x + half - 8 > lx && x - half + 8 < lx + lw;
+                const floor = legend.offsetTop + legend.offsetHeight + 6 - node.offsetTop;
+                if (overlapsX && y < floor) y = floor;
+              }
+              placed.push({ node, x, y, half: half - 8, top: node.offsetTop, h: node.offsetHeight, on: a[k].visible });
+            }
+            // Seen from the front the three bowls line up, and so would their labels: top to
+            // bottom, push each shown label clear of any above it that it would cover.
+            const shown = placed.filter((p) => p.on).sort((p, q) => p.y - q.y);
+            for (let i = 1; i < shown.length; i++)
+              for (let j = 0; j < i; j++) {
+                const p = shown[j]!, q = shown[i]!;
+                if (Math.abs(p.x - q.x) >= p.half + q.half + 4) continue;
+                const pBottom = p.y + p.top + p.h + 4;
+                if (q.y + q.top < pBottom) q.y = pBottom - q.top;
+              }
+            for (const p of placed) {
+              p.node.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
+              p.node.style.opacity = p.on ? '1' : '0';
             }
           },
           onJob: setJobIdx,
           onPick: setSelected,
           onFail: () => setFailed(true),
+          onTurn: setTurned,
         });
         setReady(true);
       })
@@ -163,6 +191,12 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
     setJobIdx(next);
   };
 
+  const resetBtn = turned ? (
+    <button type="button" className="icon-btn cascade-reset" onClick={() => handleRef.current?.resetView()} aria-label="Reset the view">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10a5.5 5.5 0 1 0 1.8-4.1M4.5 3.5v3h3" /></svg>
+    </button>
+  ) : null;
+
   return (
     <div className={`cascade${ready ? ' is-ready' : ''}${selected ? ` sel-${selected}` : ''}`}>
       <div ref={stageRef} className="cascade-stage" />
@@ -184,7 +218,7 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
 
       {/* No caption when nothing has settled: the hero sentence beside the stage already says so. */}
 
-      <div className="cascade-legend" role="group" aria-label="Show one part of the cascade">
+      <div ref={legendRef} className="cascade-legend" role="group" aria-label="Show one part of the cascade">
         {PARTS.map((p) => (
           <button
             key={p.key}
@@ -213,6 +247,7 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
               <span>{timeAgo(current.lastAt, now)}</span>
             </p>
             <div className="cascade-controls">
+              {resetBtn}
               <button type="button" className="icon-btn" onClick={() => step(-1)} aria-label="Previous settlement">
                 <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 5l-5 5 5 5" /></svg>
               </button>
@@ -228,6 +263,8 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
               </button>
             </div>
           </div>
+        ) : resetBtn ? (
+          <div className="cascade-controls cascade-controls-solo">{resetBtn}</div>
         ) : null}
       </div>
     </div>

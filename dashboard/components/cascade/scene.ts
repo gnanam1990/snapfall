@@ -51,6 +51,8 @@ export interface CascadeOptions {
   onJob?: (index: number) => void;
   onPick?: (part: PartName | null) => void;
   onFail?: () => void;
+  /** Called when the viewer turns the stage away from its resting view, or it comes back. */
+  onTurn?: (turned: boolean) => void;
 }
 
 export interface CascadeHandle {
@@ -60,6 +62,8 @@ export interface CascadeHandle {
   setSelected(p: PartName | null): void;
   setMode(m: StageMode): void;
   showJob(index: number): void;
+  /** Ease the stage back to its resting view. */
+  resetView(): void;
   dispose(): void;
 }
 
@@ -246,6 +250,8 @@ function basinGeometry(radius: number, depth: number): THREE.LatheGeometry {
 
 interface Stream {
   mesh: THREE.InstancedMesh;
+  /** The pour itself: a tube along the arc whose surface scrolls with the flow. */
+  body: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   from: THREE.Vector3;
   to: THREE.Vector3;
   width: number;
@@ -256,6 +262,144 @@ interface Stream {
   flight: number;
   vx: number;
   vy0: number;
+}
+
+// ── water shading ──
+//
+// Droplets alone read as a string of beads, not a pour. Falling water is a column that thins and
+// breaks up as it drops, streaked along its length, brighter where the surface turns away from you.
+// That is what these two shaders draw: value noise stretched along the flow and scrolled with time.
+
+const NOISE_GLSL = /* glsl */ `
+  float wHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float wNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(wHash(i), wHash(i + vec2(1.0, 0.0)), f.x), mix(wHash(i + vec2(0.0, 1.0)), wHash(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+`;
+
+const POUR_VERT = /* glsl */ `
+  varying vec2 vUv;
+  varying vec3 vN;
+  varying vec3 vV;
+  void main() {
+    vUv = uv;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vN = normalize(normalMatrix * normal);
+    vV = normalize(-mv.xyz);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const POUR_FRAG = /* glsl */ `
+  uniform float uTime;
+  uniform vec3 uColor;
+  uniform vec3 uFoam;
+  uniform float uOpacity;
+  varying vec2 vUv;
+  varying vec3 vN;
+  varying vec3 vV;
+  ${NOISE_GLSL}
+  void main() {
+    float along = vUv.x;
+    // streaks: fine around the column, long along it, sliding down with the flow
+    vec2 p = vec2(vUv.y * 14.0, along * 5.0 - uTime * 2.6);
+    float streak = wNoise(p) * 0.6 + wNoise(p * vec2(2.1, 1.7) + 7.3) * 0.4;
+    float rim = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 1.6);
+    float a = uOpacity * (0.38 + 0.62 * streak) * (0.5 + 0.5 * rim);
+    // leaves the lip cleanly, then frays into gaps as it nears the water
+    a *= smoothstep(0.0, 0.05, along);
+    a *= 1.0 - smoothstep(0.55, 1.0, along) * (1.0 - smoothstep(0.32, 0.5, streak)) * 0.85;
+    vec3 col = mix(uColor, uFoam, clamp(smoothstep(0.6, 0.95, streak) * 0.55 + rim * 0.3, 0.0, 1.0));
+    gl_FragColor = vec4(col, a);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+const SURFACE_FRAG = /* glsl */ `
+  uniform float uTime;
+  uniform vec3 uColor;
+  uniform vec3 uFoam;
+  uniform float uOpacity;
+  varying vec2 vUv;
+  varying vec3 vN;
+  varying vec3 vV;
+  ${NOISE_GLSL}
+  void main() {
+    // still water drifting slowly towards the spout (+x), with soft edges so no slab corner shows
+    vec2 p = vec2(vUv.x * 7.0 - uTime * 0.45, vUv.y * 4.0);
+    float n = wNoise(p) * 0.6 + wNoise(p * 2.3 + 3.1) * 0.4;
+    float edge = smoothstep(0.0, 0.12, vUv.x) * smoothstep(1.0, 0.88, vUv.x) * smoothstep(0.0, 0.16, vUv.y) * smoothstep(1.0, 0.84, vUv.y);
+    float a = uOpacity * edge * (0.7 + 0.3 * n);
+    vec3 col = mix(uColor, uFoam, smoothstep(0.62, 0.9, n) * 0.45);
+    gl_FragColor = vec4(col, a);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+function waterMaterial(frag: string, color: THREE.ColorRepresentation, opacity: number): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(color) },
+      uFoam: { value: new THREE.Color('#ffffff') },
+      uOpacity: { value: opacity },
+    },
+    vertexShader: POUR_VERT,
+    fragmentShader: frag,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+}
+
+/**
+ * The pour's tube along a ballistic arc. u runs from the lip (0) to the landing (1), v around the
+ * column. The column is a little wider than deep and swells as it falls, as a real pour does.
+ */
+function pourGeometry(from: THREE.Vector3, vx: number, vy0: number, flight: number, radius: number): THREE.BufferGeometry {
+  const L = 36, R = 14;
+  const pos = new Float32Array((L + 1) * (R + 1) * 3);
+  const nrm = new Float32Array((L + 1) * (R + 1) * 3);
+  const uv = new Float32Array((L + 1) * (R + 1) * 2);
+  const idx: number[] = [];
+  const T = new THREE.Vector3(), N = new THREE.Vector3(), Z = new THREE.Vector3(0, 0, 1), c = new THREE.Vector3(), d = new THREE.Vector3();
+  for (let i = 0; i <= L; i++) {
+    const u = i / L;
+    const t = u * flight;
+    c.set(from.x + vx * t, from.y + vy0 * t - 0.5 * GRAVITY * t * t, from.z);
+    T.set(vx, vy0 - GRAVITY * t, 0).normalize();
+    N.set(-T.y, T.x, 0);
+    const r = radius * (0.7 + 0.5 * u);
+    for (let j = 0; j <= R; j++) {
+      const a = (j / R) * Math.PI * 2;
+      d.copy(N).multiplyScalar(Math.cos(a)).addScaledVector(Z, Math.sin(a) * 1.3);
+      const k = (i * (R + 1) + j) * 3;
+      pos[k] = c.x + d.x * r;
+      pos[k + 1] = c.y + d.y * r;
+      pos[k + 2] = c.z + d.z * r;
+      d.normalize();
+      nrm[k] = d.x;
+      nrm[k + 1] = d.y;
+      nrm[k + 2] = d.z;
+      uv[(i * (R + 1) + j) * 2] = u;
+      uv[(i * (R + 1) + j) * 2 + 1] = j / R;
+    }
+  }
+  for (let i = 0; i < L; i++)
+    for (let j = 0; j < R; j++) {
+      const a = i * (R + 1) + j, b = a + R + 1;
+      idx.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
 }
 
 export function mountCascade(container: HTMLElement, opts: CascadeOptions): CascadeHandle {
@@ -279,7 +423,7 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' });
   } catch {
     opts.onFail?.();
-    return { setData() {}, setPaused() {}, setReduced() {}, setSelected() {}, setMode() {}, showJob() {}, dispose() {} };
+    return { setData() {}, setPaused() {}, setReduced() {}, setSelected() {}, setMode() {}, showJob() {}, resetView() {}, dispose() {} };
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -329,9 +473,17 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   const stone = new THREE.MeshStandardMaterial({ map: stoneMap, roughness: 0.9, metalness: 0.02, color: '#e4e6dc' });
   const stoneDark = new THREE.MeshStandardMaterial({ map: stoneMap, roughness: 0.95, metalness: 0, color: '#aab2aa' });
 
+  // The viewer turns the stage about its own centre: `turn` is the pivot, `root` sits offset inside
+  // it so the fountain spins in place rather than swinging round the world origin.
+  const turn = new THREE.Group();
+  scene.add(turn);
   const root = new THREE.Group();
-  root.position.y = 0.45;
-  scene.add(root);
+  turn.add(root);
+  function setPivot(cx: number, cz: number) {
+    turn.position.set(cx, 0, cz);
+    root.position.set(-cx, 0.45, -cz);
+  }
+  setPivot(0.1, 0);
 
   const parts: Record<PartName, THREE.Object3D> = {} as Record<PartName, THREE.Object3D>;
 
@@ -347,7 +499,7 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   escrowCliff.position.set(-2.85, 0.72, -0.15);
   root.add(escrowCliff);
   // The escrow's own still water, sitting on the shelf.
-  const escrowWaterMat = new THREE.MeshPhysicalMaterial({ color: INFLOW, roughness: 0.12, metalness: 0, clearcoat: 1, transparent: true, opacity: 0.55 });
+  const escrowWaterMat = waterMaterial(SURFACE_FRAG, INFLOW, 0.7);
   const escrowWater = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 1.4), escrowWaterMat);
   escrowWater.name = 'escrow-water';
   escrowWater.userData.part = 'escrow';
@@ -444,7 +596,7 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
 
   const MAX_DROPS = 320;
 
-  function makeStream(from: THREE.Vector3, to: THREE.Vector3, mat: THREE.Material, seed: number, name: string): Stream {
+  function makeStream(from: THREE.Vector3, to: THREE.Vector3, mat: THREE.Material, color: string, seed: number, name: string): Stream {
     const mesh = new THREE.InstancedMesh(dropGeo, mat, MAX_DROPS);
     mesh.name = name;
     mesh.frustumCulled = false;
@@ -456,7 +608,11 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
       jitter[i] = r();
     }
     root.add(mesh);
-    const s: Stream = { mesh, from, to, width: 1, count: 0, phase, lane, jitter, flight: 1, vx: 0, vy0: 0 };
+    const body = new THREE.Mesh(new THREE.BufferGeometry(), waterMaterial(POUR_FRAG, color, 0.85));
+    body.name = `${name}-pour`;
+    body.renderOrder = 2;
+    root.add(body);
+    const s: Stream = { mesh, body, from, to, width: 1, count: 0, phase, lane, jitter, flight: 1, vx: 0, vy0: 0 };
     aim(s);
     return s;
   }
@@ -467,10 +623,15 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     s.flight = Math.sqrt((2 * drop) / GRAVITY) * 1.25;
     s.vx = (s.to.x - s.from.x) / s.flight;
     s.vy0 = (s.to.y - s.from.y + 0.5 * GRAVITY * s.flight * s.flight) / s.flight;
+    // the pour's girth carries the same share the droplet count does
+    const radius = 0.055 + 0.085 * Math.min(1, s.width / 1.15);
+    s.body.geometry.dispose();
+    s.body.geometry = pourGeometry(s.from, s.vx, s.vy0, s.flight, radius);
+    s.body.visible = s.count > 0;
   }
 
-  const inflow = makeStream(A, B, inflowMat, 7, 'inflow');
-  const spill = makeStream(C, D, spillMat, 19, 'spill');
+  const inflow = makeStream(A, B, inflowMat, PALETTE.night.inflow, 7, 'inflow');
+  const spill = makeStream(C, D, spillMat, PALETTE.night.op, 19, 'spill');
 
   // Mist where each stream lands.
   const mistTex = mistTexture();
@@ -521,8 +682,8 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     const poolShare = has ? Math.min(1, data.pool / paid) : 0;
     inflow.width = has ? 1.15 : 0;
     spill.width = has ? Math.max(0.12, 1.15 * opShare) : 0;
-    inflow.count = has ? 320 : 0;
-    spill.count = has ? Math.max(30, Math.round(320 * opShare)) : 0;
+    inflow.count = has ? 140 : 0;
+    spill.count = has ? Math.max(24, Math.round(140 * opShare)) : 0;
     inflow.mesh.count = inflow.count;
     spill.mesh.count = spill.count;
     // Basin levels: how full each is reads as how much of the money it kept.
@@ -535,7 +696,8 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     opWater.scale.set(layout.op.r * (0.71 + 0.26 * os), layout.op.r * layout.op.rz * (0.71 + 0.26 * os), 1);
     opWater.visible = has;
     // the streams land on the water, and the rings spread from where they land
-    B.set(layout.pool.x - layout.pool.r * 0.35, poolWater.position.y, layout.pool.z);
+    // water leaves a spout forwards: land ahead of the lip, never behind it, and inside the bowl
+    B.set(Math.min(layout.pool.x + layout.pool.r * 0.5, Math.max(A.x + 0.3, layout.pool.x - layout.pool.r * 0.5)), poolWater.position.y, layout.pool.z);
     D.set(layout.op.x - layout.op.r * 0.25, opWater.position.y, layout.op.z);
     aim(inflow);
     aim(spill);
@@ -570,7 +732,16 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     opGlow.color.set(P.op);
     inflowMat.color.set(P.inflow);
     spillMat.color.set(P.op);
-    escrowWaterMat.color.set(P.inflow);
+    escrowWaterMat.uniforms.uColor.value.set(P.inflow);
+    // the pour reads against pale stone only if it carries a little of the pool's blue
+    inflow.body.material.uniforms.uColor.value.set(P.inflow).lerp(new THREE.Color(P.pool), mode === 'day' ? 0.35 : 0.1);
+    spill.body.material.uniforms.uColor.value.set(P.op);
+    for (const m of [inflow.body.material, spill.body.material, escrowWaterMat]) {
+      // still water is a surface, not light: it never adds, or at night it burns to white
+      m.blending = m === escrowWaterMat ? THREE.NormalBlending : blend;
+      m.uniforms.uFoam.value.set(mode === 'day' ? '#ffffff' : '#e8f1fb');
+      m.needsUpdate = true;
+    }
     for (const m of [inflowMat, spillMat]) {
       m.blending = blend;
       m.needsUpdate = true;
@@ -600,7 +771,7 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     for (let i = 0; i < s.count; i++) {
       const life = (s.phase[i]! + t * speed * (0.85 + s.jitter[i]! * 0.3)) % 1;
       const tt = life * s.flight;
-      const spread = s.width * (0.4 + 0.6 * life); // the sheet fans out as it falls
+      const spread = s.width * 0.2 * (0.5 + 0.9 * life); // spray around the pour, fanning as it falls
       v.set(
         s.from.x + s.vx * tt + (s.jitter[i]! - 0.5) * 0.08,
         s.from.y + s.vy0 * tt - 0.5 * GRAVITY * tt * tt,
@@ -671,30 +842,94 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     return partOf(hit.object);
   }
 
+  // Drag turns the stage (a turntable, with a little tilt); a press that does not travel is still
+  // a click that picks a part. Double-click, or the reset button, eases back to the resting view.
+  let yaw = 0, pitch = 0, yawVel = 0, homing = false, turned = false;
+  let drag: { id: number; x: number; y: number; travel: number } | null = null;
+  let swallowClick = false;
+  const restCursor = () => (hovered ? 'pointer' : 'grab');
+  function noteTurn() {
+    const t = Math.abs(yaw - Math.round(yaw / (Math.PI * 2)) * Math.PI * 2) > 0.02 || Math.abs(pitch) > 0.02;
+    if (t !== turned) {
+      turned = t;
+      opts.onTurn?.(t);
+    }
+  }
+  const onDown = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, travel: 0 };
+    homing = false;
+    yawVel = 0;
+    canvas.setPointerCapture(e.pointerId);
+  };
   const onMove = (e: PointerEvent) => {
+    if (drag && e.pointerId === drag.id) {
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      drag.x = e.clientX;
+      drag.y = e.clientY;
+      drag.travel += Math.abs(dx) + Math.abs(dy);
+      if (drag.travel > 4) {
+        canvas.style.cursor = 'grabbing';
+        yaw += dx * 0.0085;
+        yawVel = dx * 0.0085;
+        // touch scrolls the page vertically (touch-action: pan-y), so only a mouse tilts
+        if (e.pointerType === 'mouse') pitch = Math.min(0.45, Math.max(-0.3, pitch + dy * 0.004));
+        noteTurn();
+        if (!running) renderOnce();
+      }
+      return;
+    }
     const rect = canvas.getBoundingClientRect();
     target.set(((e.clientX - rect.left) / rect.width) * 2 - 1, ((e.clientY - rect.top) / rect.height) * 2 - 1);
     const h = pick(e.clientX, e.clientY);
     if (h !== hovered) {
       hovered = h;
-      canvas.style.cursor = h ? 'pointer' : '';
-      if (reduced || paused) renderOnce();
+      canvas.style.cursor = restCursor();
+      if (!running) renderOnce();
     }
   };
+  const onUp = (e: PointerEvent) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    swallowClick = drag.travel > 4;
+    drag = null;
+    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    canvas.style.cursor = restCursor();
+    if (reduced) yawVel = 0;
+  };
   const onLeave = () => {
+    if (drag) return;
     target.set(0, 0);
     hovered = null;
-    canvas.style.cursor = '';
+    canvas.style.cursor = 'grab';
   };
   const onClick = (e: MouseEvent) => {
+    if (swallowClick) {
+      swallowClick = false;
+      return;
+    }
     const p = pick(e.clientX, e.clientY);
     selected = p === selected ? null : p;
     opts.onPick?.(selected);
     renderOnce();
   };
+  function resetView() {
+    yawVel = 0;
+    if (reduced || paused || !running) {
+      yaw = 0;
+      pitch = 0;
+      noteTurn();
+      renderOnce();
+    } else homing = true;
+  }
+  const onDbl = () => resetView();
+  canvas.style.cursor = 'grab';
+  canvas.addEventListener('pointerdown', onDown);
   canvas.addEventListener('pointermove', onMove);
+  canvas.addEventListener('pointerup', onUp);
+  canvas.addEventListener('pointercancel', onUp);
   canvas.addEventListener('pointerleave', onLeave);
   canvas.addEventListener('click', onClick);
+  canvas.addEventListener('dblclick', onDbl);
 
   // ── highlight: the selected or hovered part lifts its glow ──
   function applyHighlight() {
@@ -705,7 +940,7 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     opGlow.intensity = (focus === 'operator' ? 8 : 3) * (1 + surge * 0.4) * lit;
     poolWaterMat.emissiveIntensity = focus === 'pool' ? 0.6 : 0.25 + surge * 0.2;
     opWaterMat.emissiveIntensity = focus === 'operator' ? 0.55 : 0.22 + surge * 0.15;
-    escrowWaterMat.opacity = focus === 'escrow' ? 0.85 : 0.55;
+    escrowWaterMat.uniforms.uOpacity.value = focus === 'escrow' ? 0.9 : 0.7;
     stone.emissive.set(focus === 'escrow' ? '#15302c' : '#000000');
   }
 
@@ -733,14 +968,41 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     pool: new THREE.Vector3(0.15, 0.85, 0.5),
     operator: new THREE.Vector3(2.85, -1.05, 0.5),
   };
+  // Each label's water, which a turned stage can hide behind rock. Its label hides with it, so a
+  // side view does not stack three labels over one rock face.
+  const probePts: Record<PartName, THREE.Vector3> = {
+    escrow: new THREE.Vector3(-2.55, 2.48, 0),
+    pool: new THREE.Vector3(0.15, 0.1, 0),
+    operator: new THREE.Vector3(2.85, -1.8, 0),
+  };
+  const hidden: Record<PartName, boolean> = { escrow: false, pool: false, operator: false };
+  const occRay = new THREE.Raycaster();
+  const wp = new THREE.Vector3();
+  let occTick = 0;
+  function updateOcclusion() {
+    if (!turned) {
+      hidden.escrow = hidden.pool = hidden.operator = false;
+      return;
+    }
+    const stoneParts = pickables.filter((o) => o.visible && !o.name.endsWith('-water'));
+    for (const k of Object.keys(probePts) as PartName[]) {
+      wp.copy(probePts[k]).applyMatrix4(root.matrixWorld);
+      const dist = wp.distanceTo(camera.position);
+      occRay.set(camera.position, wp.sub(camera.position).normalize());
+      occRay.far = dist - 0.12;
+      hidden[k] = occRay.intersectObjects(stoneParts, false).length > 0;
+    }
+  }
   const proj = new THREE.Vector3();
-  function emitAnchors() {
+  function emitAnchors(force = false) {
     if (!opts.onFrame) return;
+    // raycasting the sculpture is not free: a few times a second is plenty for a fade
+    if (force || occTick++ % 5 === 0) updateOcclusion();
     const w = container.clientWidth, h = container.clientHeight;
     const out = {} as Anchors;
     for (const k of Object.keys(anchorPts) as PartName[]) {
       proj.copy(anchorPts[k]).applyMatrix4(root.matrixWorld).project(camera);
-      out[k] = { x: (proj.x * 0.5 + 0.5) * w, y: (-proj.y * 0.5 + 0.5) * h, visible: proj.z < 1 };
+      out[k] = { x: (proj.x * 0.5 + 0.5) * w, y: (-proj.y * 0.5 + 0.5) * h, visible: proj.z < 1 && !hidden[k] };
     }
     opts.onFrame(out);
   }
@@ -757,10 +1019,29 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
       surge *= 0.965;
       if (data.jobs.length > 1 && now - lastSwitch > REPLAY_MS) showJob((jobIndex + 1) % data.jobs.length, now);
     }
-    camera.position.set(camBase.x + pointer.x * 0.9, camBase.y - pointer.y * 0.5, camBase.z);
+    if (!still && !drag) {
+      if (homing) {
+        const home = Math.round(yaw / (Math.PI * 2)) * Math.PI * 2;
+        yaw += (home - yaw) * 0.12;
+        pitch += (0 - pitch) * 0.12;
+        if (Math.abs(home - yaw) < 0.002 && Math.abs(pitch) < 0.002) {
+          yaw = home;
+          pitch = 0;
+          homing = false;
+        }
+        noteTurn();
+      } else if (Math.abs(yawVel) > 0.0004) {
+        // a flick keeps turning and settles, like a real turntable
+        yaw += yawVel;
+        yawVel *= 0.93;
+        noteTurn();
+      }
+    }
+    const lean = drag ? 0 : 1; // no parallax fighting the hand while dragging
+    camera.position.set(camBase.x + pointer.x * 0.9 * lean, camBase.y - pointer.y * 0.5 * lean + pitch * 9, camBase.z - Math.max(0, pitch) * 2.5);
     camera.lookAt(look);
-    root.rotation.y = -0.18 + pointer.x * 0.06;
-    root.updateMatrixWorld();
+    turn.rotation.y = -0.18 + yaw + pointer.x * 0.06 * lean;
+    turn.updateMatrixWorld();
     const speed = 0.55 * (1 + surge * 0.8);
     if (inflow.count) updateStream(inflow, t, speed);
     if (spill.count) updateStream(spill, t + 0.31, speed);
@@ -771,11 +1052,17 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
       updateRipples(opRipples, t + 0.2, Math.max(0.35, spill.width / 1.15) * (1 + surge * 0.4));
     }
     const base = mode === 'day' ? 0.7 : 0.5;
-    inflowMat.opacity = base + surge * 0.3;
-    spillMat.opacity = base + 0.1 + surge * 0.25;
+    inflowMat.opacity = (base + surge * 0.3) * 0.7;
+    spillMat.opacity = (base + 0.1 + surge * 0.25) * 0.7;
+    const ts = t * (1 + surge * 0.5);
+    inflow.body.material.uniforms.uTime.value = ts;
+    spill.body.material.uniforms.uTime.value = ts + 0.37;
+    escrowWaterMat.uniforms.uTime.value = t;
+    inflow.body.material.uniforms.uOpacity.value = (mode === 'day' ? 1 : 0.85) * (1 + surge * 0.15);
+    spill.body.material.uniforms.uOpacity.value = (mode === 'day' ? 0.95 : 0.85) * (1 + surge * 0.15);
     applyHighlight();
     renderer.render(scene, camera);
-    emitAnchors();
+    emitAnchors(still);
   }
 
   function renderOnce() {
@@ -850,6 +1137,11 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     });
     root.add(model);
     model.updateMatrix();
+    // turn about the sculpture's own centre
+    turn.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const mid = box.getCenter(new THREE.Vector3()).applyMatrix4(new THREE.Matrix4().copy(root.matrixWorld).invert());
+    setPivot(mid.x, mid.z);
     const toRoot = (v: THREE.Vector3) => v.clone().applyMatrix4(model.matrix);
     for (const r of rockParts) r.visible = false;
 
@@ -865,6 +1157,9 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     escrowWater.position.copy(ew);
     escrowWater.scale.set((F.escrowWater.w * F.scale) / 2.3, (F.escrowWater.d * F.scale) / 1.4, 1);
     anchorPts.escrow.set(ew.x, ew.y + 0.55, ew.z + 0.3);
+    probePts.escrow.copy(ew);
+    probePts.pool.set(P.x, (P.y + Pf.y) / 2, P.z);
+    probePts.operator.set(O.x, (O.y + Of.y) / 2, O.z);
     anchorPts.pool.set(P.x, P.y + 0.7, P.z + 0.3);
     anchorPts.operator.set(O.x, O.y + 0.75, O.z + 0.3);
     // the glow sits just above each bowl's water and reaches only the bowl, not the shelf above it
@@ -962,15 +1257,20 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     showJob(i) {
       showJob(i);
     },
+    resetView,
     dispose() {
       disposed = true;
       stop();
       io.disconnect();
       ro.disconnect();
       document.removeEventListener('visibilitychange', onVis);
+      canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointermove', onMove);
+      canvas.removeEventListener('pointerup', onUp);
+      canvas.removeEventListener('pointercancel', onUp);
       canvas.removeEventListener('pointerleave', onLeave);
       canvas.removeEventListener('click', onClick);
+      canvas.removeEventListener('dblclick', onDbl);
       canvas.removeEventListener('webglcontextlost', onLost);
       scene.traverse((o) => {
         const mesh = o as THREE.Mesh;
