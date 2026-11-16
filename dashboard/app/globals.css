@@ -880,3 +880,13 @@ a.tile:hover { transform: translateY(-2px); border-color: var(--line-2); }
   .top-link::after, .cascade-key i { transition: none; }
   .theme-toggle-icon, .icon-btn svg, .replay-line { animation: none; }
 }
+
+/* Tab labels change colour in step with the pill (motion review): the incoming label waits until
+   the pill reaches it, the outgoing one until the pill has left. Reduced motion: they snap with it. */
+.m-has-ind .tab { transition: color 90ms var(--m-ease) 60ms, transform var(--m-press) var(--m-ease); }
+.m-has-ind .tab.is-on { transition: color 100ms var(--m-ease) 130ms, transform var(--m-press) var(--m-ease); }
+/* A theme flip changes every colour at once; no transition runs from the old theme's values. */
+html.theme-switching *, html.theme-switching *::before, html.theme-switching *::after { transition: none !important; }
+@media (prefers-reduced-motion: reduce) { .m-has-ind .tab, .m-has-ind .tab.is-on { transition: none; } }
+/* A selected tab keeps its weight, so choosing one never changes the row's width under the pill. */
+.m-has-ind .tab, .m-has-ind .tab.is-on { font-weight: 600; }

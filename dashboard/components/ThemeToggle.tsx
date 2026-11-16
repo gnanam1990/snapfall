@@ -14,8 +14,13 @@ export function readTheme(): Theme {
 /** Writes a theme to the document. Light removes the attribute rather than setting it, so the
  *  default lives in exactly one place (the :root block) instead of two. */
 function applyTheme(t: Theme): void {
-  if (t === 'dark') document.documentElement.dataset.theme = 'dark';
-  else delete document.documentElement.dataset.theme;
+  // Colour transitions would otherwise start from the old theme's values while the page swaps at
+  // once, flashing a light ring on a dark header (motion review). Hold them for the flip's frames.
+  const root = document.documentElement;
+  root.classList.add('theme-switching');
+  if (t === 'dark') root.dataset.theme = 'dark';
+  else delete root.dataset.theme;
+  requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('theme-switching')));
 }
 
 // ── document-level theme controller ──

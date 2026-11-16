@@ -23,6 +23,10 @@ export default function TabIndicator() {
     let at: { x: number; y: number; w: number; h: number } | null = null;
     let instant = true;
     let alive = true;
+    // While the pill is travelling, a resize (a label's colour or count changing its width) must not
+    // snap it to the end: it re-places once the slide is over (motion review regression).
+    let slidingUntil = 0;
+    let pending: ReturnType<typeof setTimeout> | null = null;
 
     const set = (b: { x: number; y: number; w: number; h: number }, sx = 1, sy = 1) => {
       ind.style.setProperty('--x', `${b.x}px`);
@@ -53,6 +57,7 @@ export default function TabIndicator() {
         ind.getBoundingClientRect();
         jump(false);
         set(to);
+        slidingUntil = performance.now() + 260;
       }
       at = to;
       instant = false;
@@ -62,6 +67,17 @@ export default function TabIndicator() {
     const mo = new MutationObserver(place);
     mo.observe(list, { subtree: true, attributes: true, attributeFilter: ['aria-selected'] });
     const ro = new ResizeObserver(() => {
+      const wait = slidingUntil - performance.now();
+      if (wait > 0) {
+        if (pending) clearTimeout(pending);
+        pending = setTimeout(() => {
+          pending = null;
+          if (!alive) return;
+          instant = true;
+          place();
+        }, wait);
+        return;
+      }
       instant = true;
       place();
     });
@@ -73,6 +89,7 @@ export default function TabIndicator() {
     });
     return () => {
       alive = false;
+      if (pending) clearTimeout(pending);
       mo.disconnect();
       ro.disconnect();
       list.classList.remove('m-has-ind');
