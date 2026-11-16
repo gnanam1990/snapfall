@@ -53,6 +53,20 @@ The dashboard then needs `SNAPFALL_OWNER_API_URL=http://<internal-host>:4010/api
 token, and its own `SNAPFALL_DASHBOARD_OWNER_SECRET`; free instances cannot use the private
 network, so the dashboard must be on a paid plan too. Never put a mainnet key on this host.
 
+### Render: the daemon with a chain deployment (mainnet)
+
+`daemon/Dockerfile.chain` builds from the **repository root** (Render: Dockerfile path
+`daemon/Dockerfile.chain`, build context `.`) and adds the committed deployment records and the
+indexer ABIs, then starts `-deployment /app/deployments/$SNAPFALL_DEPLOYMENT.json`
+(`arc-mainnet` by default; only `arc-mainnet` and `arc-testnet` are accepted). It still carries
+no keys, so the treasury and customer lanes stay unwired and money flows stop at
+`*.pending_chain`. Besides the private-service settings above it needs
+`SNAPFALL_TREASURY_ADDRESS` and `SNAPFALL_CUSTOMER_ADDRESS` (public addresses the record's
+`fundedWallets` require) and, for anything but light use, `ARC_MAINNET_RPC` pointing at a
+private RPC. The mainnet dashboard that talks to it must be a Render service on the same
+private network, built with `SNAPFALL_NETWORK=arc-mainnet`; the public Vercel project still
+gets no owner credentials.
+
 Before every purchase the daemon screens the quoted payee address against the Chainalysis
 sanctions oracle on Ethereum mainnet (read-only, no key) through a public RPC. A listed payee
 is refused, and so is one that cannot be screened. `SNAPFALL_SANCTIONS_RPC` sets another
