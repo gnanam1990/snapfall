@@ -15,7 +15,12 @@ Arc Programmable Money Hackathon (Encode × Circle) · Agentic Economy + DeFi ·
 Aug 9, 2026.
 
 **Live site:** [snapfall.lol](https://www.snapfall.lol). It reads the Arc **mainnet** contracts
-(read-only for now: see [On Arc mainnet](#on-arc-mainnet)).
+(read-only for now: see [On Arc mainnet](#on-arc-mainnet)). The full product, owner views
+included, runs on Arc testnet at [app.snapfall.lol](https://app.snapfall.lol).
+
+On the site: [how it works](https://www.snapfall.lol/guide) ·
+[support](https://www.snapfall.lol/support) · [privacy](https://www.snapfall.lol/privacy) ·
+[terms](https://www.snapfall.lol/terms). Security reports: [`SECURITY.md`](SECURITY.md).
 
 - [`docs/CIRCLE-INTEGRATIONS.md`](docs/CIRCLE-INTEGRATIONS.md) — the five Circle products, what each one is for, and the live testnet run of each, with transactions.
 - [`docs/END-TO-END.md`](docs/END-TO-END.md) — who uses Snapfall and how, where each piece runs, one job from payment to settlement, and what works on testnet vs mainnet today.
