@@ -71,3 +71,24 @@ earlier runs that day (0.10 each).
 
 The last two runs' purchases are on chain too; the fixes (`9e3ce17`, `554bf7d`) changed what was
 recorded and checked, not what was paid.
+
+## The second PASS, back to back
+
+Run `20261116T035924Z` at commit `a8aca00`, started straight after, with no fix between the two:
+PASS on every beat, again at price 1.00.
+
+| | |
+| --- | --- |
+| job | `0x4b31149604127db4d7d40ccc74d6221973e3048a2d3235b97765c169ea09e6ec`, read Accepted (4) |
+| advance | 0.65 principal, 0.013 fee, rate 6500 bps ([`0x281d446c…eb963b9`](https://testnet.arcscan.app/tx/0x281d446c59f6b7a7db0489882549f2461180e2137e9571d9b2c514a36eb963b9), block 72511740) |
+| purchases | 0.04 [`0xe4375964…e26ebbc5`](https://testnet.arcscan.app/tx/0xe43759644c9fced3975a3e4c1f2efb8be843605377f657b9b9970141e26ebbc5) (block 72511738) and 0.06 [`0x53f9f480…805e4703`](https://testnet.arcscan.app/tx/0x53f9f480f27094b24c08ef305c102ce0542c00136100b6be4b42a942805e4703) (block 72511759), both `SETTLED`, both created during this run |
+| settlement | [`0xf41e9fe8…d7c427ad`](https://testnet.arcscan.app/tx/0xf41e9fe8c750f9ea37843bf935b9d09cb5123c9899b02f3399fd4ef4d7c427ad), block 72511774: FloatPool 0.663 at log 75, operator 0.337 at log 78 |
+| rate | 6500 -> 7000 bps |
+
+**The ordering caveat repeated.** The 0.04 purchase landed two blocks before the advance, so in
+both runs the first purchase was paid before any borrowed money existed. Twice out of twice, so
+this is how the code behaves: the DD worker starts buying without waiting for the snap.
+
+**Not V12.** These are two consecutive PASSes with no manual fix between them, but V12's clause
+is "reset to full spine, twice in a row": `scripts/reset_demo` was not run between them and both
+were at reduced scale.
