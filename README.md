@@ -39,13 +39,30 @@ The contracts, with the capital controls in [`docs/MAINNET.md`](docs/MAINNET.md)
 | AuditAnchor | [`0xe8886A39158C7CC504F31789513b926704CCaB4D`](https://explorer.arc.io/address/0xe8886A39158C7CC504F31789513b926704CCaB4D) |
 
 **Deliberately tiny:** every cap is 1.00 USDC (lifetime loss ceiling, per advance, per job), and
-deposits are allowlisted. Raising a cap and moving admin both wait out an on-chain delay. The
-admin handover to the owner's wallet is pending. [snapfall.lol/audit](https://www.snapfall.lol/audit)
-reads all of this live from the contracts.
+deposits are allowlisted. Raising a cap and moving admin both wait out an on-chain delay.
+[snapfall.lol/audit](https://www.snapfall.lol/audit) reads all of this live from the contracts.
 
-**Not operating yet:** no capital in the pool, no job, no advance. Paying from a passkey wallet
-is off on mainnet until Circle's mainnet (LIVE) keys and gas sponsorship are set up. The money
-path below has run on testnet, not mainnet.
+**Admin is the owner's wallet.** On 16 Nov 2026 `0x0f094eec6B569c3f33033102ad3ce33EAbFeb2fB`
+accepted admin on JobVault
+([`0xf668b04b…0cca`](https://explorer.arc.io/tx/0xf668b04bd040753fc0edb994da055ce631d3c4fcb584ff9dd9b61cbf7f100cca),
+block 31,507,782) and FloatPool
+([`0x7362bf9a…0cae`](https://explorer.arc.io/tx/0x7362bf9a0967a39ee4cfae3025596d3c2b511ad0ec94eba566df3bc0fa4a0cae),
+block 31,507,827). Both contracts are paused.
+
+**One self-test job has settled.** Also on 16 Nov 2026, a 0.50 USDC job ran between the owner's
+own two wallets to prove the vault path on mainnet. It was not a customer and not a sale. It
+took no advance, because the pool is paused and empty, so the operator kept the whole 0.50.
+JobVault was unpaused for the run and paused again afterwards. Job
+`0x1693dd7b88579cd34d9f57675c48ad40f999285b3c1f4c53184faf679eaa9bc2`, settled in
+[`0x57cd0e9c…5033`](https://explorer.arc.io/tx/0x57cd0e9caf16a915aa4f20dad89d21a064e714a11277ede43a57c51265155033);
+every step is listed in [`docs/END-TO-END.md`](docs/END-TO-END.md).
+
+**Not operating yet:** no capital in the pool and no advance. This set predates the audit fixes
+in [#126](https://github.com/gnanam1990/snapfall/pull/126) and
+[#127](https://github.com/gnanam1990/snapfall/pull/127); [`docs/MAINNET.md`](docs/MAINNET.md)
+retires it and redeploys from the fixed source before any liquidity is accepted. Paying from a
+passkey wallet is off on mainnet until Circle's mainnet (LIVE) keys and gas sponsorship are set
+up. The full money path below, advance included, has run on testnet, not mainnet.
 
 ## Live on Arc testnet
 
@@ -149,8 +166,13 @@ differences worth knowing before a deploy.
 - **Without a Circle client key the customer wallet is daemon-custodial**, stated openly. With
   one, the customer self-custodies a passkey wallet and signs `fund` and `acceptDelivery` from their
   own device. That ran live on testnet; on mainnet it is off until a LIVE client key exists.
-- **The daemon and sidecar are not hosted.** They have run on the operator's machine, not as a
-  public service, so the hosted site shows the chain, not the agent runtime.
+- **The hosted daemons are keyless, and the sidecar is not hosted.** Render runs one daemon per
+  network, reachable only on Render's private network, behind
+  [app.snapfall.lol](https://app.snapfall.lol) (testnet) and the mainnet owner dashboard. They
+  serve owner sign-in, approvals and the workforce, but hold no signing key, so they put nothing
+  on chain. Signing and the payment sidecar have run on the operator's machine. On mainnet the
+  signer is to come from a Circle developer-controlled wallet, never a raw key on the host
+  ([`docs/END-TO-END.md`](docs/END-TO-END.md), [`docs/HOSTING.md`](docs/HOSTING.md)).
 - **Scoping and quotes above the money path use a deterministic stub by default, not a live LLM**,
   so demo runs are reproducible; the chain is authoritative for every figure that moves money. A
   live scoper is opt-in: set `ANTHROPIC_API_KEY` (model via `SNAPFALL_SCOPER_MODEL`, default
