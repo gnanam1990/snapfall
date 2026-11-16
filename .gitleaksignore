@@ -1,0 +1,43 @@
+# gitleaks false positives, each reviewed by hand on 16 Nov 2026. None is a live secret.
+# - treasuryTestKey / testKey: the public Hardhat/Anvil test account #1 key (0x7099…79C8).
+# - test-* HMAC, token and nonce fixtures in the daemon and sidecar tests.
+# - the sidecar secret and token constants in main.go and at15_test.go: environment variable names, not values.
+# - tokenMessenger: Circle's public CCTP contract addresses.
+# History scan (gitleaks git) uses commit:file:rule:line; the tree scan (gitleaks dir) uses
+# file:rule:line, so both are listed. Moving one of these lines needs its tree entry updated.
+# Add a fingerprint here only after checking that the match is not a real secret.
+
+0018563bb95e7bb7320ed2b09569421088d9e4f5:daemon/cmd/snapfall/treasury_test.go:generic-api-key:15
+0018563bb95e7bb7320ed2b09569421088d9e4f5:dashboard/lib/cctp.ts:generic-api-key:53
+0018563bb95e7bb7320ed2b09569421088d9e4f5:dashboard/lib/cctp.ts:generic-api-key:62
+5999f162cc3c61209ad6aa6326a8611b57ad0f3a:daemon/cmd/snapfall/main.go:generic-api-key:87
+5999f162cc3c61209ad6aa6326a8611b57ad0f3a:daemon/internal/funding/at15_test.go:generic-api-key:40
+5999f162cc3c61209ad6aa6326a8611b57ad0f3a:daemon/internal/funding/at15_test.go:generic-api-key:529
+5999f162cc3c61209ad6aa6326a8611b57ad0f3a:daemon/internal/h3/client_test.go:generic-api-key:20
+5999f162cc3c61209ad6aa6326a8611b57ad0f3a:daemon/internal/h3/client_test.go:generic-api-key:30
+5999f162cc3c61209ad6aa6326a8611b57ad0f3a:daemon/internal/h3/client_test.go:generic-api-key:90
+5999f162cc3c61209ad6aa6326a8611b57ad0f3a:daemon/internal/purchasing/pay_test.go:generic-api-key:50
+6f60d575b1c42bc176dd640fe4b8bf7b13e17f0d:daemon/cmd/snapfall/treasury_test.go:generic-api-key:15
+6f60d575b1c42bc176dd640fe4b8bf7b13e17f0d:dashboard/lib/cctp.ts:generic-api-key:53
+6f60d575b1c42bc176dd640fe4b8bf7b13e17f0d:dashboard/lib/cctp.ts:generic-api-key:62
+954c0dfec3d72d162122338673a9e2adbf2cb0ae:sidecar/src/h3-golden-vector-test.ts:generic-api-key:112
+e9495f30d6c35f0f687bd047a8285114307d3f6b:daemon/internal/chain/chain_test.go:generic-api-key:19
+f1cb18b118657cf813654121eea3cf5211ee96b7:daemon/cmd/snapfall/treasury_test.go:generic-api-key:15
+f1cb18b118657cf813654121eea3cf5211ee96b7:dashboard/lib/cctp.ts:generic-api-key:53
+f1cb18b118657cf813654121eea3cf5211ee96b7:dashboard/lib/cctp.ts:generic-api-key:62
+f8d11cb3d98c1928becae9c928896bf922ea1057:sidecar/src/service-test.ts:generic-api-key:41
+
+# Tree scan (gitleaks dir)
+daemon/cmd/snapfall/main.go:generic-api-key:90
+daemon/cmd/snapfall/treasury_test.go:generic-api-key:15
+daemon/internal/chain/chain_test.go:generic-api-key:21
+daemon/internal/funding/at15_test.go:generic-api-key:40
+daemon/internal/funding/at15_test.go:generic-api-key:529
+daemon/internal/h3/client_test.go:generic-api-key:20
+daemon/internal/h3/client_test.go:generic-api-key:30
+daemon/internal/h3/client_test.go:generic-api-key:90
+daemon/internal/purchasing/pay_test.go:generic-api-key:50
+dashboard/lib/cctp.ts:generic-api-key:53
+dashboard/lib/cctp.ts:generic-api-key:62
+sidecar/src/h3-golden-vector-test.ts:generic-api-key:112
+sidecar/src/service-test.ts:generic-api-key:41
