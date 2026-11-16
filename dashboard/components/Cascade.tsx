@@ -99,6 +99,7 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
           data: dataRef.current,
           reduced: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
           mode: stageMode(),
+          modelUrl: '/cascade/fountain.glb',
           onFrame: (a: Anchors) => {
             const width = el.clientWidth;
             for (const k of Object.keys(a) as PartName[]) {
