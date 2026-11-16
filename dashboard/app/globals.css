@@ -1040,3 +1040,14 @@ html.theme-switching *, html.theme-switching *::before, html.theme-switching *::
   .guide-table:not(.is-stack) .table tbody th, .guide-table:not(.is-stack) .table tbody td { display: block; width: auto; padding: 0 !important; border: 0; }
   .guide-table:not(.is-stack) .table tbody td { margin-top: 3px; }
 }
+
+/* Site footer: help and policies, on every page. Quiet, one rule above it. */
+.site-foot { margin-top: 24px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+.site-foot-inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 32px; padding-top: 22px; padding-bottom: 28px; }
+.site-foot-links { display: flex; flex-wrap: wrap; gap: 4px 22px; }
+.site-foot a { display: inline-block; padding: 4px 0; color: var(--muted); }
+.site-foot a:hover { color: var(--ink); }
+.site-foot-note { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0; }
+.site-foot-note span { padding: 4px 0; }
+.shell-bare .site-foot { margin-top: 48px; }
+@media (max-width: 640px) { .site-foot-inner { flex-direction: column; align-items: flex-start; } }

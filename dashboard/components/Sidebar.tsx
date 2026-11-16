@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { Fragment, type ReactNode } from 'react';
 import ThemeToggle from '@/components/ThemeToggle';
 import Logo from '@/components/Logo';
+import SiteFooter from '@/components/SiteFooter';
 import { networkLabel } from '@/lib/network';
 
 /** The business, the agents, and the proof — separated by a rule rather than by labels. */
@@ -45,6 +46,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return (
       <div className="shell-bare">
         <main className="main">{children}</main>
+        <SiteFooter />
       </div>
     );
   }
@@ -80,6 +82,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <main className="main" style={{ overflowX: 'clip' }}>
         {isLegacy(pathname) ? <div className="wrap legacy">{children}</div> : children}
       </main>
+      <SiteFooter />
     </>
   );
 }
