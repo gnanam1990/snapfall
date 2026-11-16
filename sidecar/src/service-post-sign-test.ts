@@ -236,6 +236,10 @@ before(async () => {
       SIDECAR_STORE_PATH: STORE_PATH,
       SIDECAR_PROBE_TIMEOUT_MS: String(PROBE_TIMEOUT_MS),
       ARC_CHAIN_ID: String(CHAIN_ID),
+      // No chain is contacted: a fixture's made-up settlement hash is checked against a closed
+      // loopback port, once, and so stays DELIVERED -- the seller's hash alone is never believed.
+      ARC_TESTNET_RPC: 'http://127.0.0.1:9',
+      SIDECAR_SETTLEMENT_CONFIRM_TRIES: '1',
     },
     stdio: 'ignore',
   });

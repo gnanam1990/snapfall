@@ -32,7 +32,8 @@
     "test:circle-wallet": "tsx --test src/circle-wallet-test.ts",
     "test:circle-relayer": "tsx --test src/circle-relayer-test.ts",
     "x402:simulate": "tsx src/x402-simulate.ts",
-    "x402:broadcast": "tsx src/x402-broadcast.ts"
+    "x402:broadcast": "tsx src/x402-broadcast.ts",
+    "test:settlement-confirm": "tsx --test src/settlement-confirm-test.ts"
   },
   "dependencies": {
     "viem": "^2.21.0"

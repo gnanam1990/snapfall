@@ -147,6 +147,9 @@ async function main() {
         TREASURY_PRIVATE_KEY: generatePrivateKey(),
         SIDECAR_STORE_PATH: STORE_PATH,
         ARC_CHAIN_ID: String(CHAIN_ID),
+        // Settlement confirmation reads a closed loopback port, once: no chain is contacted.
+        ARC_TESTNET_RPC: 'http://127.0.0.1:9',
+        SIDECAR_SETTLEMENT_CONFIRM_TRIES: '1',
       },
       stdio: 'inherit',
     },
