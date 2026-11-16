@@ -63,7 +63,7 @@ export default function PrivacyPage() {
 
           <section id="browser" className="guide-sec">
             <h2>Your browser</h2>
-            <p>The sites keep a few small values in your own browser. They are not sent to us.</p>
+            <p>The sites keep a few small values in your own browser. Apart from the owner session cookie, none of them is sent to us.</p>
             <div className="guide-table">
               <table className="table is-stack">
                 <tbody>
@@ -81,7 +81,7 @@ export default function PrivacyPage() {
                   </tr>
                   <tr>
                     <th scope="row"><span>Owner session</span></th>
-                    <td data-label="What it holds"><span>Only for the operator: an HttpOnly, same-site cookie set when they sign in to the owner dashboard, which expires on its own.</span></td>
+                    <td data-label="What it holds"><span>Only for the operator: an HttpOnly, same-site cookie set when they sign in to the owner dashboard. The browser sends it with each request to that dashboard so the server can recognise the owner. It expires on its own.</span></td>
                   </tr>
                 </tbody>
               </table>
@@ -98,8 +98,9 @@ export default function PrivacyPage() {
               nothing else.
             </p>
             <p>
-              If the operator turns on the optional AI scoper, the text of a job request is sent to Anthropic to draft the
-              scope. Keys, wallet addresses and job state are not sent. It is off unless the operator configures it.
+              If the operator turns on the optional AI scoper, the text of a job request is sent to Anthropic, as written, to
+              draft the scope. Anything typed into that text goes with it, so do not put private details in a request. Keys
+              and stored job state are not sent. It is off unless the operator configures it.
             </p>
           </section>
 
