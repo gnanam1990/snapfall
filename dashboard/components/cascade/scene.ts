@@ -473,9 +473,11 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   const opRipples = makeRipples(new THREE.Vector3(D.x, -1.65, 0), OP.clone().lerp(new THREE.Color('#ffffff'), 0.4), 0.8);
 
   // ── data → geometry ──
+  let hasMoney = false;
   function applyData() {
     const paid = Math.max(0, data.paid);
     const has = paid > 0;
+    hasMoney = has;
     const opShare = has ? Math.min(1, data.op / paid) : 0;
     const poolShare = has ? Math.min(1, data.pool / paid) : 0;
     inflow.width = has ? 1.15 : 0;
@@ -640,8 +642,10 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   // ── highlight: the selected or hovered part lifts its glow ──
   function applyHighlight() {
     const focus = selected ?? hovered;
-    poolGlow.intensity = (focus === 'pool' ? 9 : 4) * (1 + surge * 0.6);
-    opGlow.intensity = (focus === 'operator' ? 8 : 3) * (1 + surge * 0.4);
+    // Dry basins do not glow: with nothing settled there is no money in them to light.
+    const lit = hasMoney ? 1 : 0;
+    poolGlow.intensity = (focus === 'pool' ? 9 : 4) * (1 + surge * 0.6) * lit;
+    opGlow.intensity = (focus === 'operator' ? 8 : 3) * (1 + surge * 0.4) * lit;
     poolWaterMat.emissiveIntensity = focus === 'pool' ? 0.6 : 0.25 + surge * 0.2;
     opWaterMat.emissiveIntensity = focus === 'operator' ? 0.55 : 0.22 + surge * 0.15;
     escrowWaterMat.opacity = focus === 'escrow' ? 0.85 : 0.55;

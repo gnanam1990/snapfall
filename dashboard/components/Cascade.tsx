@@ -181,9 +181,7 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
           ))
         : null}
 
-      {!has ? (
-        <p className="cascade-empty">No job has settled yet.</p>
-      ) : null}
+      {/* No caption when nothing has settled: the hero sentence beside the stage already says so. */}
 
       <div className="cascade-legend" role="group" aria-label="Show one part of the cascade">
         {PARTS.map((p) => (
