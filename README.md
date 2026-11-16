@@ -18,6 +18,7 @@ Aug 9, 2026.
 (read-only for now: see [On Arc mainnet](#on-arc-mainnet)).
 
 - [`docs/CIRCLE-INTEGRATIONS.md`](docs/CIRCLE-INTEGRATIONS.md) — the five Circle products, what each one is for, and the live testnet run of each, with transactions.
+- [`docs/END-TO-END.md`](docs/END-TO-END.md) — who uses Snapfall and how, where each piece runs, one job from payment to settlement, and what works on testnet vs mainnet today.
 - [`docs/MAINNET.md`](docs/MAINNET.md) — capital controls, the mainnet deployment, the emergency stop.
 - [`docs/addresses.md`](docs/addresses.md) — every deployment, read back from chain.
 - [`docs/architecture.md`](docs/architecture.md) — architecture diagram: the local/on-chain split, the settlement waterfall, and the Circle surfaces marked proven vs unproven.
