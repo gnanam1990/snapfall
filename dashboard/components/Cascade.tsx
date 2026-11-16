@@ -99,6 +99,7 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
           data: dataRef.current,
           reduced: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
           mode: stageMode(),
+          modelUrl: '/cascade/fountain.glb',
           onFrame: (a: Anchors) => {
             const width = el.clientWidth;
             for (const k of Object.keys(a) as PartName[]) {
@@ -181,9 +182,7 @@ export default function Cascade({ jobs, now }: { jobs: ChainJob[]; now: number }
           ))
         : null}
 
-      {!has ? (
-        <p className="cascade-empty">No job has settled yet.</p>
-      ) : null}
+      {/* No caption when nothing has settled: the hero sentence beside the stage already says so. */}
 
       <div className="cascade-legend" role="group" aria-label="Show one part of the cascade">
         {PARTS.map((p) => (

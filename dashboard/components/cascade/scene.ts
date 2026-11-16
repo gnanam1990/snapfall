@@ -17,6 +17,8 @@
  */
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
 export type PartName = 'escrow' | 'pool' | 'operator';
 
@@ -43,6 +45,8 @@ export interface CascadeOptions {
   data: CascadeData;
   reduced: boolean;
   mode: StageMode;
+  /** A sculpted fountain (GLB) to replace the procedural rock with; the rock stays if it fails. */
+  modelUrl?: string;
   onFrame?: (a: Anchors) => void;
   onJob?: (index: number) => void;
   onPick?: (part: PartName | null) => void;
@@ -73,6 +77,22 @@ const PALETTE = {
     hemi: 1.4, key: 2.6, exposure: 1.2, fogNear: 12, fogFar: 24, additive: true,
   },
 } as const;
+/**
+ * Where the fountain model's parts are, in the model's own units (its bounding box is about
+ * 1.9 x 0.96 x 1.0, the shelf high on the left, the pool's bowl in the middle, the operator's wide
+ * bowl low on the right). Measured from the mesh and tuned against the render with ?cascadeDebug.
+ */
+const FOUNTAIN = {
+  scale: 4.0,
+  offset: new THREE.Vector3(0.05, 0.12, 0),
+  rotationY: 0,
+  shelfLip: new THREE.Vector3(-0.07, 0.43, 0.04),
+  escrowWater: { x: -0.52, y: 0.468, z: 0.0, w: 0.7, d: 0.38 },
+  pool: { x: -0.08, rim: 0.34, floor: 0.06, z: 0.0, r: 0.24, rz: 1 },
+  poolLip: new THREE.Vector3(0.34, 0.08, 0.08),
+  op: { x: 0.6, rim: -0.16, floor: -0.28, z: 0.0, r: 0.3, rz: 1 },
+};
+
 const POOL = new THREE.Color(PALETTE.night.pool);
 const OP = new THREE.Color(PALETTE.night.op);
 const INFLOW = new THREE.Color(PALETTE.night.inflow);
@@ -348,11 +368,12 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   poolPillar.position.set(0.05, -1.05, -0.05);
   poolGroup.add(poolPillar);
   const poolWaterMat = new THREE.MeshPhysicalMaterial({ color: POOL, roughness: 0.08, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.05, transparent: true, opacity: 0.88, emissive: POOL, emissiveIntensity: 0.25 });
-  const poolWater = new THREE.Mesh(new THREE.CircleGeometry(1.0, 48), poolWaterMat);
+  const poolWater = new THREE.Mesh(new THREE.CircleGeometry(1, 48), poolWaterMat);
   poolWater.name = 'pool-water';
   poolWater.rotation.x = -Math.PI / 2;
   poolWater.scale.set(1, 0.78, 1);
-  poolGroup.add(poolWater);
+  poolWater.userData.part = 'pool';
+  root.add(poolWater);
   root.add(poolGroup);
   parts.pool = poolGroup;
   poolGlow.position.set(0.15, 0.7, 0.6);
@@ -370,11 +391,12 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   opPillar.position.set(0, -0.78, -0.05);
   opGroup.add(opPillar);
   const opWaterMat = new THREE.MeshPhysicalMaterial({ color: OP, roughness: 0.1, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.06, transparent: true, opacity: 0.9, emissive: OP, emissiveIntensity: 0.22 });
-  const opWater = new THREE.Mesh(new THREE.CircleGeometry(0.92, 48), opWaterMat);
+  const opWater = new THREE.Mesh(new THREE.CircleGeometry(1, 48), opWaterMat);
   opWater.name = 'operator-water';
   opWater.rotation.x = -Math.PI / 2;
   opWater.scale.set(1, 0.8, 1);
-  opGroup.add(opWater);
+  opWater.userData.part = 'operator';
+  root.add(opWater);
   root.add(opGroup);
   parts.operator = opGroup;
   opGlow.position.set(2.85, -1.2, 0.6);
@@ -400,6 +422,15 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   }
   root.add(pebbles);
 
+  // Where the water sits, in root space. These are the procedural rock's numbers; a loaded
+  // fountain model replaces them with its own (useModel below).
+  const layout = {
+    pool: { x: 0.15, rim: 0.25, floor: -0.3, z: 0, r: 1.0, rz: 0.78 },
+    op: { x: 2.85, rim: -1.65, floor: -2.1, z: 0, r: 0.92, rz: 0.8 },
+  };
+  const rockParts: THREE.Object3D[] = [escrow, escrowCliff, poolBowl, poolPillar, opBowl, opPillar, pebbles];
+  const fountainMats: THREE.MeshStandardMaterial[] = [];
+
   // ── water in motion ──
   const dropGeo = new THREE.SphereGeometry(0.022, 6, 4);
   dropGeo.scale(1, 3.2, 1);
@@ -424,12 +455,18 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
       lane[i] = r() - 0.5;
       jitter[i] = r();
     }
-    const drop = from.y - to.y;
-    const flight = Math.sqrt((2 * drop) / GRAVITY) * 1.25;
-    const vx = (to.x - from.x) / flight;
-    const vy0 = (to.y - from.y + 0.5 * GRAVITY * flight * flight) / flight;
     root.add(mesh);
-    return { mesh, from, to, width: 1, count: 0, phase, lane, jitter, flight, vx, vy0 };
+    const s: Stream = { mesh, from, to, width: 1, count: 0, phase, lane, jitter, flight: 1, vx: 0, vy0: 0 };
+    aim(s);
+    return s;
+  }
+
+  /** A falling arc from the stream's lip to where it lands (re-run when either point moves). */
+  function aim(s: Stream) {
+    const drop = Math.max(0.2, s.from.y - s.to.y);
+    s.flight = Math.sqrt((2 * drop) / GRAVITY) * 1.25;
+    s.vx = (s.to.x - s.from.x) / s.flight;
+    s.vy0 = (s.to.y - s.from.y + 0.5 * GRAVITY * s.flight * s.flight) / s.flight;
   }
 
   const inflow = makeStream(A, B, inflowMat, 7, 'inflow');
@@ -437,6 +474,8 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
 
   // Mist where each stream lands.
   const mistTex = mistTexture();
+  let mistLift = 1; // how high spray rises above the water; lower over the sculpted bowls
+  let mistScale = 1; // how strong it is
   function makeMist(at: THREE.Vector3, color: THREE.Color, name: string) {
     const n = 40;
     const geo = new THREE.BufferGeometry();
@@ -473,9 +512,11 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   const opRipples = makeRipples(new THREE.Vector3(D.x, -1.65, 0), OP.clone().lerp(new THREE.Color('#ffffff'), 0.4), 0.8);
 
   // ── data → geometry ──
+  let hasMoney = false;
   function applyData() {
     const paid = Math.max(0, data.paid);
     const has = paid > 0;
+    hasMoney = has;
     const opShare = has ? Math.min(1, data.op / paid) : 0;
     const poolShare = has ? Math.min(1, data.pool / paid) : 0;
     inflow.width = has ? 1.15 : 0;
@@ -485,14 +526,21 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     inflow.mesh.count = inflow.count;
     spill.mesh.count = spill.count;
     // Basin levels: how full each is reads as how much of the money it kept.
-    poolWater.position.y = has ? -0.42 + 0.36 * Math.max(0.2, poolShare) : -0.5;
-    poolWater.scale.setScalar(has ? 0.72 + 0.26 * Math.max(0.2, poolShare) : 0.5);
-    poolWater.scale.y = poolWater.scale.x * 0.78;
+    const level = (b: typeof layout.pool, share: number) => b.floor + (b.rim - b.floor) * (0.25 + 0.6 * Math.max(0.2, share));
+    const ps = Math.max(0.2, poolShare), os = Math.max(0.2, opShare);
+    poolWater.position.set(layout.pool.x, level(layout.pool, poolShare), layout.pool.z);
+    poolWater.scale.set(layout.pool.r * (0.72 + 0.26 * ps), layout.pool.r * layout.pool.rz * (0.72 + 0.26 * ps), 1);
     poolWater.visible = has;
-    opWater.position.y = has ? -0.38 + 0.32 * Math.max(0.2, opShare) : -0.45;
-    opWater.scale.setScalar(has ? 0.7 + 0.26 * Math.max(0.2, opShare) : 0.5);
-    opWater.scale.y = opWater.scale.x * 0.8;
+    opWater.position.set(layout.op.x, level(layout.op, opShare), layout.op.z);
+    opWater.scale.set(layout.op.r * (0.71 + 0.26 * os), layout.op.r * layout.op.rz * (0.71 + 0.26 * os), 1);
     opWater.visible = has;
+    // the streams land on the water, and the rings spread from where they land
+    B.set(layout.pool.x - layout.pool.r * 0.35, poolWater.position.y, layout.pool.z);
+    D.set(layout.op.x - layout.op.r * 0.25, opWater.position.y, layout.op.z);
+    aim(inflow);
+    aim(spill);
+    for (const r of poolRipples) r.position.set(B.x, B.y + 0.012, B.z);
+    for (const r of opRipples) r.position.set(D.x, D.y + 0.012, D.z);
     escrowWater.visible = has;
     poolMist.pts.visible = opMist.pts.visible = has;
     for (const r of [...poolRipples, ...opRipples]) r.visible = has;
@@ -512,6 +560,7 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     hemi.intensity = P.hemi;
     key.intensity = P.key;
     stone.color.set(P.stone);
+    for (const m of fountainMats) m.color.set(mode === 'day' ? '#ffffff' : '#8b8f97');
     stoneDark.color.set(P.stoneDark);
     poolWaterMat.color.set(P.pool);
     poolWaterMat.emissive.set(P.pool);
@@ -571,12 +620,12 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     const arr = (m.pts.geometry.attributes.position as THREE.BufferAttribute).array as Float32Array;
     for (let i = 0; i < m.n; i++) {
       const life = (m.seeds[i * 3]! + t * 0.25) % 1;
-      arr[i * 3] = m.at.x + (m.seeds[i * 3 + 1]! - 0.5) * 0.9;
-      arr[i * 3 + 1] = m.at.y + life * 0.7;
+      arr[i * 3] = m.at.x + (m.seeds[i * 3 + 1]! - 0.5) * 0.9 * Math.max(0.4, mistScale);
+      arr[i * 3 + 1] = m.at.y + life * 0.7 * mistLift;
       arr[i * 3 + 2] = (m.seeds[i * 3 + 2]! - 0.5) * Math.max(0.3, width);
     }
     m.pts.geometry.attributes.position!.needsUpdate = true;
-    (m.pts.material as THREE.PointsMaterial).opacity = 0.18 + 0.2 * Math.min(1, width);
+    (m.pts.material as THREE.PointsMaterial).opacity = (0.18 + 0.2 * Math.min(1, width)) * mistScale;
   }
 
   function updateRipples(rings: THREE.Mesh[], t: number, strength: number) {
@@ -608,8 +657,18 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
     const rect = canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     ray.setFromCamera(ndc, camera);
-    const hit = ray.intersectObjects(pickables, false)[0];
-    return hit ? partOf(hit.object) : null;
+    const hit = ray.intersectObjects(pickables, true)[0];
+    if (!hit) return null;
+    if (hit.object.userData.fountain) {
+      // one sculpted mesh: which part was hit is where on it the pointer landed
+      const pnt = root.worldToLocal(hit.point.clone());
+      const near = (b: typeof layout.pool) => Math.hypot(pnt.x - b.x, (pnt.z - b.z) / Math.max(0.5, b.rz)) < b.r * 1.35;
+      if (near(layout.op) && pnt.y < layout.pool.floor) return 'operator';
+      if (near(layout.pool)) return 'pool';
+      if (near(layout.op)) return 'operator';
+      return pnt.x < layout.pool.x ? 'escrow' : null;
+    }
+    return partOf(hit.object);
   }
 
   const onMove = (e: PointerEvent) => {
@@ -640,8 +699,10 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   // ── highlight: the selected or hovered part lifts its glow ──
   function applyHighlight() {
     const focus = selected ?? hovered;
-    poolGlow.intensity = (focus === 'pool' ? 9 : 4) * (1 + surge * 0.6);
-    opGlow.intensity = (focus === 'operator' ? 8 : 3) * (1 + surge * 0.4);
+    // Dry basins do not glow: with nothing settled there is no money in them to light.
+    const lit = hasMoney ? 1 : 0;
+    poolGlow.intensity = (focus === 'pool' ? 9 : 4) * (1 + surge * 0.6) * lit;
+    opGlow.intensity = (focus === 'operator' ? 8 : 3) * (1 + surge * 0.4) * lit;
     poolWaterMat.emissiveIntensity = focus === 'pool' ? 0.6 : 0.25 + surge * 0.2;
     opWaterMat.emissiveIntensity = focus === 'operator' ? 0.55 : 0.22 + surge * 0.15;
     escrowWaterMat.opacity = focus === 'escrow' ? 0.85 : 0.55;
@@ -761,6 +822,103 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
   };
   document.addEventListener('visibilitychange', onVis);
 
+  // ── the sculpted fountain (Higgsfield → Meshy image-to-3D, meshopt + WebP) ──
+  function useModel(model: THREE.Object3D) {
+    const F = FOUNTAIN;
+    model.scale.setScalar(F.scale);
+    model.rotation.y = F.rotationY;
+    model.position.copy(F.offset);
+    model.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.userData.fountain = true;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        const sm = m as THREE.MeshStandardMaterial;
+        if (sm.isMeshStandardMaterial) {
+          // Limestone is not metal: drop the generated metalness map, which picked up the sky as
+          // blue smears, and keep the surface matte.
+          sm.metalnessMap = null;
+          sm.metalness = 0;
+          sm.roughness = 1;
+          sm.envMapIntensity = 0.35;
+          sm.needsUpdate = true;
+          fountainMats.push(sm);
+        }
+      }
+      pickables.push(mesh);
+    });
+    root.add(model);
+    model.updateMatrix();
+    const toRoot = (v: THREE.Vector3) => v.clone().applyMatrix4(model.matrix);
+    for (const r of rockParts) r.visible = false;
+
+    const P = toRoot(new THREE.Vector3(F.pool.x, F.pool.rim, F.pool.z));
+    const Pf = toRoot(new THREE.Vector3(F.pool.x, F.pool.floor, F.pool.z));
+    const O = toRoot(new THREE.Vector3(F.op.x, F.op.rim, F.op.z));
+    const Of = toRoot(new THREE.Vector3(F.op.x, F.op.floor, F.op.z));
+    layout.pool = { x: P.x, rim: P.y, floor: Pf.y, z: P.z, r: F.pool.r * F.scale, rz: F.pool.rz };
+    layout.op = { x: O.x, rim: O.y, floor: Of.y, z: O.z, r: F.op.r * F.scale, rz: F.op.rz };
+    A.copy(toRoot(F.shelfLip));
+    C.copy(toRoot(F.poolLip));
+    const ew = toRoot(new THREE.Vector3(F.escrowWater.x, F.escrowWater.y, F.escrowWater.z));
+    escrowWater.position.copy(ew);
+    escrowWater.scale.set((F.escrowWater.w * F.scale) / 2.3, (F.escrowWater.d * F.scale) / 1.4, 1);
+    anchorPts.escrow.set(ew.x, ew.y + 0.55, ew.z + 0.3);
+    anchorPts.pool.set(P.x, P.y + 0.7, P.z + 0.3);
+    anchorPts.operator.set(O.x, O.y + 0.75, O.z + 0.3);
+    // the glow sits just above each bowl's water and reaches only the bowl, not the shelf above it
+    poolGlow.position.set(P.x, (P.y + Pf.y) / 2 + 0.1, P.z + 0.15);
+    opGlow.position.set(O.x, (O.y + Of.y) / 2 + 0.1, O.z + 0.15);
+    poolGlow.distance = 1.6;
+    opGlow.distance = 1.9;
+    mistLift = 0.18;
+    mistScale = 0.45;
+    for (const mist of [poolMist, opMist]) (mist.pts.material as THREE.PointsMaterial).size = 0.16;
+    for (const r of poolRipples) r.userData.scaleZ = F.pool.rz;
+    for (const r of opRipples) r.userData.scaleZ = F.op.rz;
+    applyData();
+    applyMode();
+    if (debug) markAnchors();
+    renderOnce();
+  }
+
+  // ?cascadeDebug shows the anchor points the water and labels are attached to.
+  const debug = typeof window !== 'undefined' && window.location.search.includes('cascadeDebug');
+  const markers = new THREE.Group();
+  root.add(markers);
+  function markAnchors() {
+    markers.clear();
+    const dot = (v: THREE.Vector3, c: string) => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), new THREE.MeshBasicMaterial({ color: c, depthTest: false }));
+      m.position.copy(v);
+      m.renderOrder = 10;
+      markers.add(m);
+    };
+    dot(A, '#ff0000');
+    dot(C, '#ff00ff');
+    dot(new THREE.Vector3(layout.pool.x, layout.pool.rim, layout.pool.z), '#00a0ff');
+    dot(new THREE.Vector3(layout.pool.x, layout.pool.floor, layout.pool.z), '#003a80');
+    dot(new THREE.Vector3(layout.op.x, layout.op.rim, layout.op.z), '#ffa000');
+    dot(new THREE.Vector3(layout.op.x, layout.op.floor, layout.op.z), '#804000');
+  }
+  if (debug) markAnchors();
+
+  if (opts.modelUrl) {
+    const loader = new GLTFLoader();
+    loader.setMeshoptDecoder(MeshoptDecoder);
+    loader.load(
+      opts.modelUrl,
+      (gltf) => {
+        if (!disposed) useModel(gltf.scene);
+      },
+      undefined,
+      () => {
+        // keep the procedural rock: the stage still works without the sculpture
+      },
+    );
+  }
+
   resize();
   if (data.jobs.length) opts.onJob?.(0);
   renderOnce();
@@ -818,8 +976,11 @@ export function mountCascade(container: HTMLElement, opts: CascadeOptions): Casc
         const mesh = o as THREE.Mesh;
         if (mesh.geometry) mesh.geometry.dispose();
         const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
-        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
-        else mat?.dispose();
+        const all = Array.isArray(mat) ? mat : mat ? [mat] : [];
+        for (const m of all) {
+          for (const v of Object.values(m)) if (v instanceof THREE.Texture) v.dispose();
+          m.dispose();
+        }
       });
       stoneMap.dispose();
       mistTex.dispose();

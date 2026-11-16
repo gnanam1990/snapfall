@@ -35,11 +35,13 @@ FROM node:22-slim AS run
 WORKDIR /app/dashboard
 ENV NODE_ENV=production
 
-# `next start` needs .next, node_modules, package.json and next.config; there is no public/.
-# deployments/ is not copied: its contents were bundled into .next at build time.
+# `next start` needs .next, node_modules, package.json, next.config and public/ (the overview's
+# fountain model is served from public/cascade). deployments/ is not copied: its contents were
+# bundled into .next at build time.
 COPY --from=build /app/dashboard/package.json /app/dashboard/package-lock.json ./
 COPY --from=build /app/dashboard/node_modules ./node_modules
 COPY --from=build /app/dashboard/.next ./.next
+COPY --from=build /app/dashboard/public ./public
 COPY --from=build /app/dashboard/next.config.mjs ./
 
 EXPOSE 3000
