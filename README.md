@@ -160,3 +160,9 @@ differences worth knowing before a deploy.
   qualified:** with the scoper on, the owner's request text (only that — no keys, addresses, or job
   state) leaves the machine to Anthropic. With no key set, the deterministic stub runs and nothing
   leaves the machine, which is what keeps the local-first claim true by default.
+
+## Security and licence
+
+Report vulnerabilities privately, as described in [`SECURITY.md`](SECURITY.md).
+
+Snapfall is released under the [MIT License](LICENSE).
