@@ -14,6 +14,9 @@ import { chainNetwork, clientSafeError, requireAddress } from '@/lib/network';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+// The first read on a cold function scans the deployment's logs over the RPC in 10k-block chunks
+// (about 25s on Arc mainnet from its deploy block); later reads are incremental from the cache.
+export const maxDuration = 60;
 
 const FRESH_MS = 15_000;
 let store: HistoryStore | null = null;
