@@ -222,13 +222,12 @@ function AcceptLink({
         </button>
       </div>
       <p className="stat-sub">
-        Shown once, and minting again rotates any link already issued for this job.
+        Shown once. Minting again replaces the old link.
       </p>
       {error ? <p className="job-link-error">{error}</p> : null}
       {unavailable ? (
         <p className="stat-sub">
-          The live event stream is unavailable, so this page cannot confirm the owner session and
-          keeps the timeline hidden. Minting still works: the mint route checks the session itself.
+          Live updates are unavailable, so the timeline is hidden. Minting still works.
         </p>
       ) : null}
       {/* Minting is off while signed out, so a signed-out owner signs in here rather than through
@@ -457,10 +456,6 @@ export default function JobDetailPage() {
                   {job.orgRateBps === null ? '—' : formatBps(job.orgRateBps)}
                 </Row>
               </div>
-              <p className="stat-sub">
-                The waterfall repays this in full before the operator receives anything, in the same
-                transaction as acceptance.
-              </p>
             </>
           ) : (
             <>
@@ -577,7 +572,6 @@ export default function JobDetailPage() {
         <div className="section-head">
           <div>
             <h2>On-chain steps</h2>
-            <p>Every transaction this job has made, newest first.</p>
           </div>
         </div>
         <div className="panel">

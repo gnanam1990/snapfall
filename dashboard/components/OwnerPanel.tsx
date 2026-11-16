@@ -54,15 +54,14 @@ export default function OwnerPanel({ className = '', style, compact = false }: {
   if (status === 'signed-out') {
     // In a small tile the full form would set the row's height; link to a page that has room for it.
     return compact
-      ? card('Owner sign-in needed.', <><p style={{ margin: 0, color: 'var(--ink-2)', fontSize: 14 }}>Purchases waiting for you and what each agent is doing.</p><Link className="btn-solid" style={{ marginTop: 'auto', alignSelf: 'flex-start' }} href="/approvals">Sign in</Link></>)
-      : card('Sign in as the owner to see purchases waiting for you and what each agent is doing.', <OwnerSignIn />);
+      ? card('Sign in to see them.', <Link className="btn-solid" style={{ marginTop: 'auto', alignSelf: 'flex-start' }} href="/approvals">Sign in</Link>)
+      : card('Sign in to see purchases waiting for you.', <OwnerSignIn />);
   }
 
   if (connected === false) {
     return card(
-      'Approvals and agent activity come from your Snapfall daemon.',
+      'No daemon connected.',
       <p style={{ margin: 0, color: 'var(--ink-2)', fontSize: 14 }}>
-        No daemon is connected to this dashboard. Everything else on this page is read from the chain and needs none.{' '}
         <Link className="link" href="/settings">How to connect one</Link>
       </p>,
     );
@@ -74,13 +73,13 @@ export default function OwnerPanel({ className = '', style, compact = false }: {
 
   const waiting = pending ?? 0;
   return card(
-    'Live from your daemon.',
+    'Live.',
     <>
       <div className={waiting ? 'notice' : undefined} style={waiting ? undefined : { color: 'var(--ink-2)', fontSize: 14 }}>
         <p style={{ margin: 0 }}>
           {waiting
             ? `${waiting} purchase${waiting === 1 ? ' is' : 's are'} waiting for your decision.`
-            : 'Nothing is waiting for you. Agents bring any spend above their limit here.'}
+            : 'Nothing waiting.'}
         </p>
         {waiting ? <Link className="btn btn-accent" href="/approvals">Review purchases</Link> : null}
       </div>
@@ -93,7 +92,7 @@ export default function OwnerPanel({ className = '', style, compact = false }: {
           ))}
         </ul>
       ) : null}
-      <p className="card-x-foot"><Link className="link" href="/workforce">Manage the workforce</Link></p>
+      <p className="card-x-foot"><Link className="link" href="/workforce">Workforce</Link></p>
     </>,
   );
 }

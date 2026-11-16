@@ -67,9 +67,8 @@ export default function OwnerSignIn({ onSignedIn, className = '' }: { onSignedIn
           Owner access is not configured
         </h2>
         <p className="owner-signin-body">
-          This dashboard is connected to a daemon but has no owner secret, so every owner control
-          refuses. Set <code>SNAPFALL_DASHBOARD_OWNER_SECRET</code> (at least 32 characters,
-          different from the daemon token) on the dashboard and restart it.
+          Set <code>SNAPFALL_DASHBOARD_OWNER_SECRET</code> (32+ characters) on the dashboard and
+          restart it.
         </p>
       </section>
     );
@@ -80,11 +79,7 @@ export default function OwnerSignIn({ onSignedIn, className = '' }: { onSignedIn
       <h2 className="card-title" id="owner-signin-title">
         Owner sign-in
       </h2>
-      <p className="owner-signin-body">
-        Approvals, customer links, hiring and the live event stream act with the owner’s authority,
-        so they need the dashboard owner secret. It is checked once and exchanged for a session
-        cookie this page cannot read.
-      </p>
+      <p className="owner-signin-body">Enter the dashboard owner secret.</p>
       <form className="owner-signin-form" onSubmit={(e) => void submit(e)}>
         <label className="owner-signin-label" htmlFor="owner-signin-secret">
           Owner secret

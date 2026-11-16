@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import TabIndicator from '@/components/TabIndicator';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { useChainHistory } from '@/lib/useChain';
@@ -33,7 +34,6 @@ export default function JobsPage() {
       <Band
         title="Jobs"
         lede={h ? `${h.totals.jobs} jobs, ${h.totals.settled} settled, ${h.totals.active} still open.` : history.error ? 'Jobs could not be read just now.' : 'Reading the chain…'}
-        sub="Work customers paid for, from payment to settlement. Open a job to see each step and the transaction behind it."
         meta={<Freshness updatedAt={history.updatedAt} error={history.error} network={networkLabel()} />}
       />
 
@@ -42,6 +42,7 @@ export default function JobsPage() {
 
       <div className="section">
         <div className="tabs" role="tablist" aria-label="Show jobs">
+          <TabIndicator />
           {FILTERS.map((f) => (
             <button key={f.key} role="tab" aria-selected={filter === f.key} className={`tab${filter === f.key ? ' is-on' : ''}`} onClick={() => setFilter(f.key)}>
               {f.label}<span className="tab-n">{counts[f.key]}</span>

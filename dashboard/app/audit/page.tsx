@@ -16,7 +16,6 @@
  * explorer, and the last section is the gaps.
  */
 
-import Link from 'next/link';
 import { contractAddress, deploymentFor, networkLabel } from '@/lib/network';
 import CapitalControls from '@/components/CapitalControls';
 
@@ -119,12 +118,10 @@ export default function AuditPage() {
         <div className="page-header-text">
           <h1>Audit</h1>
           <p className="page-header-sub">
-            Don&rsquo;t take our word for it: every claim here links to the public chain.{' '}
-            <span className="tech">
-            {SETTLEMENT_IS_OTHER_CHAIN
-              ? `Every contract address below links to the public explorer for ${deployment.network.name}; the settlement links to the Arc testnet explorer, where it ran.`
-              : `Every address and hash below links to the public explorer for ${deployment.network.name}.`}
-            </span>
+            Every claim here links to the public chain.
+            {SETTLEMENT_IS_OTHER_CHAIN ? (
+              <span className="tech">The settlement links to the Arc testnet explorer, where it ran.</span>
+            ) : null}
           </p>
         </div>
         <span className="page-header-aside">
@@ -136,10 +133,6 @@ export default function AuditPage() {
         <h2 className="card-title" id="audit-contracts">
           Deployed contracts
         </h2>
-        <p className="audit-lede">
-          Frozen at deployment. The addresses come from the repository’s deployment record, not
-          from a running service, so this section is correct with nothing else switched on.
-        </p>
         <ul className="audit-list">
           {CONTRACTS.map((c) => (
             <li key={c.name} className="audit-row">
@@ -175,10 +168,8 @@ export default function AuditPage() {
           </p>
         )}
         <p className="audit-lede">
-          This is the claim the whole product rests on, and it is checkable in one transaction. In
-          the settlement below, the capital pool is paid at log index {SETTLEMENT.legs[0].logIndex}{' '}
-          and the operator at log index {SETTLEMENT.legs[1].logIndex}. Same transaction, pool
-          lower.
+          One transaction: the pool is paid at log {SETTLEMENT.legs[0].logIndex}, the operator at log{' '}
+          {SETTLEMENT.legs[1].logIndex}.
         </p>
         <ol className="audit-legs">
           {SETTLEMENT.legs.map((leg) => (
@@ -193,33 +184,20 @@ export default function AuditPage() {
           ))}
         </ol>
         <p className="audit-note">
-          The ordering is contract control flow, not a convention:{' '}
-          <code>JobVault.acceptDelivery</code> calls <code>floatPool.repayAdvance(…)</code> before
-          it transfers to the operator. The two events cannot be reordered without redeploying,
-          and the contracts are frozen.
+          <code>JobVault.acceptDelivery</code> calls <code>floatPool.repayAdvance(…)</code> before it
+          pays the operator, so the order is enforced by the contract.
         </p>
         <a className="audit-ref" href={tx(SETTLEMENT.hash)} target="_blank" rel="noreferrer">
           <code>{`${SETTLEMENT.hash.slice(0, 14)}…${SETTLEMENT.hash.slice(-8)}`}</code>
           <span aria-hidden="true"> ↗</span>
         </a>
-        <p className="audit-lede">
-          Block {SETTLEMENT.block}. The same two figures are read live from the contracts on that
-          job’s{' '}
-          <Link className="audit-inline" href="/jobs">
-            detail page
-          </Link>
-          , so the two can be compared.
-        </p>
+        <p className="audit-lede">Block {SETTLEMENT.block}.</p>
       </section>
 
       <section className="card mt" aria-labelledby="audit-gaps">
         <h2 className="card-title" id="audit-gaps">
           Not proven
         </h2>
-        <p className="audit-lede">
-          Recorded because an audit page that listed only its successes would not be one. Each of
-          these is a capability the product does not currently demonstrate.
-        </p>
         <ul className="audit-gaps">
           {NOT_PROVEN.map((g) => (
             <li key={g.claim}>

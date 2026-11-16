@@ -55,7 +55,6 @@ function ActiveTeam() {
       <div className="workforce-panel-head">
         <div>
           <h2 id="active-team-title">Bounded roles</h2>
-          <p className="workforce-panel-sub">How authority is partitioned.</p>
         </div>
         <span className="workforce-safe">{BOUNDED_ROLES.length} roles</span>
       </div>
@@ -67,10 +66,7 @@ function ActiveTeam() {
           </li>
         ))}
       </ul>
-      <p className="workforce-caveat">
-        This is the authority model, not a live roster. Nothing on this page reads which agents are
-        currently running.
-      </p>
+      <p className="workforce-caveat">The authority model, not a live roster.</p>
     </section>
   );
 }
@@ -214,17 +210,17 @@ function BuildMonitorCard({
         <div className="watcher-feedback" aria-live="polite">
           {error ? <p className="is-error">{error}</p> : null}
           {ownerLocked ? (
-            <p>A daemon is connected, but activation acts with the owner’s authority. Sign in above first.</p>
+            <p>Sign in above to activate.</p>
           ) : catalogOnly ? (
             // Same honesty as the missing operator-tool cards: a visitor clicking Activate and
             // getting a 502 reads as "broken", not "quiet". Say why it is disabled instead.
-            <p>Activation needs a connected daemon. This public catalogue shows what Build Monitor is, not a running instance.</p>
+            <p>Activation needs a connected daemon.</p>
           ) : activeResult ? (
             <p className="is-success">
               Build Monitor: {activationLabel(activeResult.state).toLowerCase()}. <code>{activeResult.jobId}</code>
             </p>
           ) : (
-            <p>Activation opens milestone 1 and records the owner-confirmed assignment.</p>
+            <p>Opens milestone 1.</p>
           )}
         </div>
       </div>
@@ -263,8 +259,8 @@ function OperatorToolCard({ manifest, catalogOnly }: { manifest: WorkerManifest;
           say what is actually true there instead of implying something is executing. */}
       <p className="manifest-note">
         {catalogOnly
-          ? 'Catalogue entry — registered with Brain when a daemon runs; nothing is executing on this page.'
-          : 'No customer, quote, or escrow — invoked by Brain, reports evidence, authorizes nothing.'}
+          ? 'Not running here.'
+          : 'Invoked by Brain. Authorizes nothing.'}
       </p>
     </article>
   );
@@ -338,7 +334,7 @@ export default function WorkforcePage() {
         <div className="page-header-text">
           <h1>Workforce</h1>
           <p className="page-header-sub">
-            Your AI agents. Each one has a narrow job, and none can do more than it is allowed to.
+            Your agents, each with one narrow job.
           </p>
         </div>
         <span className="page-header-aside">
@@ -359,8 +355,7 @@ export default function WorkforcePage() {
       <section className="manifest-gallery" aria-labelledby="manifest-gallery-title">
         <div className="workforce-panel-head">
           <div>
-            <h2 id="manifest-gallery-title">Manifest gallery</h2>
-            <p className="workforce-panel-sub">Hire from reviewed manifests. Permissions stay explicit.</p>
+            <h2 id="manifest-gallery-title">Hire</h2>
           </div>
           <span className="gallery-count">
             {manifests.length} available

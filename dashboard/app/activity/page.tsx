@@ -1,5 +1,6 @@
 'use client';
 
+import TabIndicator from '@/components/TabIndicator';
 import { useMemo, useState } from 'react';
 import { useChainHistory } from '@/lib/useChain';
 import { networkLabel } from '@/lib/network';
@@ -26,14 +27,14 @@ export default function ActivityPage() {
     <>
       <Band
         title="Activity"
-        lede={h ? `${h.activity.length} transactions, every one of them checkable.` : history.error ? 'Activity could not be read just now.' : 'Reading the chain…'}
-        sub={`Everything that happened on ${net}, newest first. Each line links to the transaction that proves it.`}
+        lede={h ? `${h.activity.length} transactions on chain.` : history.error ? 'Activity could not be read just now.' : 'Reading the chain…'}
         meta={<Freshness updatedAt={history.updatedAt} error={history.error} network={net} />}
       />
       <div className="wrap content">
       {history.error && !h ? <div className="section"><ErrorNotice message={`Activity could not be read: ${history.error}`} onRetry={history.refresh} /></div> : null}
       <div className="section">
         <div className="tabs" role="tablist" aria-label="Show activity">
+          <TabIndicator />
           {([['all', 'Everything'], ['jobs', 'Job steps'], ['money', 'Money moved']] as const).map(([k, label]) => (
             <button key={k} role="tab" aria-selected={filter === k} className={`tab${filter === k ? ' is-on' : ''}`} onClick={() => setFilter(k)}>
               {label}

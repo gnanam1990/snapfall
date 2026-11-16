@@ -1,11 +1,13 @@
 import './legacy.css';
 import './globals.css';
 import type { Metadata } from 'next';
-import { Fira_Code, Fira_Sans } from 'next/font/google';
+import { JetBrains_Mono, Schibsted_Grotesk } from 'next/font/google';
 import AppShell from '@/components/Sidebar';
 
-const sans = Fira_Sans({ subsets: ['latin'], weight: ['300', '400', '500', '600', '700'], variable: '--font-sans', display: 'swap' });
-const mono = Fira_Code({ subsets: ['latin'], weight: ['400', '500', '600', '700'], variable: '--font-mono', display: 'swap' });
+// One family does the interface, from the 13px label to the 52px sentence; the mono is only for
+// what is genuinely machine text: hashes, addresses, ids.
+const sans = Schibsted_Grotesk({ subsets: ['latin'], weight: ['400', '500', '600', '700', '800'], variable: '--font-sans', display: 'swap' });
+const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['400', '500'], variable: '--font-mono', display: 'swap' });
 
 export const metadata: Metadata = {
   title: 'Snapfall',
@@ -13,10 +15,10 @@ export const metadata: Metadata = {
 };
 
 /**
- * Applies a stored light preference before the first paint, so choosing light never flashes the
- * dark default first. It has to be inline and synchronous in <head> for that reason.
+ * Applies a stored dark preference before the first paint, so choosing dark never flashes the
+ * light default first. It has to be inline and synchronous in <head> for that reason.
  */
-const THEME_BOOT = `try{if(localStorage.getItem('snapfall-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}`;
+const THEME_BOOT = `try{if(localStorage.getItem('snapfall-theme')==='dark'){document.documentElement.dataset.theme='dark'}}catch(e){}`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

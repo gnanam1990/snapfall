@@ -67,7 +67,6 @@ export default function CapitalPoolPage() {
       <Band
         title="Capital pool"
         lede={f ? `The pool fronts ${pct(rate)} of a job the moment it starts.` : float.error ? 'The pool could not be read just now.' : 'Reading the pool…'}
-        sub="Agents borrow from the pool to start a job before the customer has accepted it. When the customer accepts, the pool is repaid first, with a fee."
         figs={f ? [
           { label: 'In the pool', value: usdc(f.totalAssetsUsdc), unit: 'USDC' },
           { label: 'Out with agents', value: usdc(f.totalOutstandingUsdc), unit: 'USDC' },
@@ -84,10 +83,9 @@ export default function CapitalPoolPage() {
           <div className="section-head">
             <div>
               <h2 id="lent-h">How much is lent out</h2>
-              <p>The contract refuses any advance past these limits.</p>
             </div>
           </div>
-          <div className="panel panel-pad">
+          <div className="panel panel-pad panel-col">
           <div className="meter" role="img" aria-label={`${pct(lent, 1)} lent out. Limits: 10% to any one operator, 80% in total.`}>
             <div className="meter-fill" style={{ width: `${Math.min(100, (lent ?? 0) / 100)}%` }} />
             <span className="meter-cap" style={{ left: '10%' }} />
@@ -104,7 +102,7 @@ export default function CapitalPoolPage() {
             <div><dt>Advances repaid</dt><dd>{t ? `${t.advancesRepaid} of ${t.advancesIssued}` : '—'}</dd></div>
           </dl>
           {f ? (
-            <p className="cell-sub" style={{ marginTop: 18 }}>
+            <p className="cell-sub panel-foot">
               Read from FloatPool <a className="addr" href={f.explorerUrl} target="_blank" rel="noreferrer">{shortId(f.poolAddress)}</a> at block {f.blockNumber.toLocaleString('en-US')}.
             </p>
           ) : null}
@@ -115,10 +113,12 @@ export default function CapitalPoolPage() {
           <div className="section-head">
             <div>
               <h2 id="rate-h">Advance rate</h2>
-              <p>Starts at 50%. Each accepted job adds 5 points, each write-off takes 15, between 30% and 85%.</p>
             </div>
           </div>
-          <div className="panel panel-pad">{h ? <RateChart points={h.rateHistory} /> : <div className="empty">Reading the chain…</div>}</div>
+          <div className="panel panel-pad panel-col">
+            {h ? <RateChart points={h.rateHistory} /> : <div className="empty">Reading the chain…</div>}
+            <p className="cell-sub panel-foot">50% start · +5 per settled job · −15 per write-off · 30–85%</p>
+          </div>
         </section>
       </div>
 
@@ -126,7 +126,6 @@ export default function CapitalPoolPage() {
         <div className="section-head">
           <div>
             <h2 id="adv-h">Advances</h2>
-            <p>Every advance the pool has made, most recent first.</p>
           </div>
         </div>
         <div className="panel">
@@ -163,7 +162,6 @@ export default function CapitalPoolPage() {
         <div className="section-head">
           <div>
             <h2 id="lp-h">Deposits and withdrawals</h2>
-            <p>Capital that liquidity providers added to or took out of the pool.</p>
           </div>
         </div>
         <div className="panel">

@@ -82,7 +82,7 @@ export function useNow(ms = 30_000): number {
 export function Freshness({ updatedAt, error, network }: { updatedAt: number | null; error: string | null; network: string }) {
   const now = useNow(10_000);
   if (updatedAt) {
-    return error ? <span>Showing the last read of {network}. The latest refresh failed.</span> : <span>Read from {network} {timeAgo(Math.floor(updatedAt / 1000), now)}</span>;
+    return error ? <span>{network} · last read, refresh failed</span> : <span>{network} · {timeAgo(Math.floor(updatedAt / 1000), now)}</span>;
   }
   return error ? <span className="is-bad">Could not read {network}</span> : <span>Reading {network}…</span>;
 }
@@ -298,8 +298,8 @@ export function Fall({ jobs, limit }: { jobs: ChainJob[]; limit?: number }) {
 export function FallLegend({ band = false }: { band?: boolean }) {
   return (
     <div className="legend" aria-hidden="true">
-      <span><i style={{ background: band ? 'var(--band-pool)' : 'var(--pool)' }} />Repaid to the pool, first</span>
-      <span><i style={{ background: band ? 'var(--band-op)' : 'var(--operator)' }} />Kept by the operator, second</span>
+      <span><i style={{ background: band ? 'var(--band-pool)' : 'var(--pool)' }} />Pool, repaid first</span>
+      <span><i style={{ background: band ? 'var(--band-op)' : 'var(--operator)' }} />Operator</span>
     </div>
   );
 }

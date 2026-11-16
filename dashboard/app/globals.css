@@ -1,81 +1,85 @@
 /* ══ Snapfall ══
  *
- * A snowfall over deep water. Every page opens on a navy band that carries its title, the one
- * sentence that matters and, on the overview, a waterfall chart of where the customers' money
- * fell: back to the pool first, then to the operator. Below the band the page is calm glacier
- * grey (light) or deep navy (dark), and content sits on plain surfaces.
+ * Paper and ink. A white frame, black type and hairlines; colour is reserved for money. Blue is
+ * money going back into the capital pool, amber is what the operator keeps, and nothing else on a
+ * page is coloured unless it is a state (settled, waiting, refused). The one picture is the
+ * cascade on the overview, which follows the theme: daylight on paper, night on ink.
  *
- * Two series colours carry meaning everywhere: aqua is money going back into the pool, sand is
- * what the operator keeps. Both pairs were run through the dataviz validator:
- *   light on #FFFFFF: #0E9C8F / #C9861A  — all checks pass
- *   navy  on #0B1E36: #1A9E90 / #BE8424  — all checks pass (CVD ΔE 12.7)
- *
- * Legacy owner surfaces (approvals, workforce, settings, audit, job detail, portal) keep their
- * markup; their tokens are re-pointed here and their page header becomes the same band.
+ * Series pairs, run through the dataviz validator (all checks pass):
+ *   light on #FFFFFF: pool #2563EB / operator #C2650A  (CVD ΔE 31.3)
+ *   dark  on #17181B: pool #3B82F6 / operator #D97706  (CVD ΔE 30.2)
+ * The design system is written down in dashboard/DESIGN.md.
  */
 
 :root {
-  color-scheme: dark;
-  --page: #020617;
-  --band: #0b1120;
-  --band-ink: #f8fafc;
-  --band-ink-2: #94a3b8;
-  --band-line: #1e293b;
-  --band-pool: #3b82f6;
-  --band-op: #d97706;
-  --surface: #0e1223;
-  --surface-2: #131a2e;
-  --line: #1e293b;
-  --line-2: #334155;
-  --ink: #f8fafc;
-  --ink-2: #cbd5e1;
-  --muted: #94a3b8;
-  --accent: #22c55e;
-  --accent-ink: #052e16;
-  --accent-soft: rgba(34, 197, 94, 0.12);
-  --pool: #3b82f6;
-  --operator: #d97706;
-  --good: #22c55e;
-  --good-soft: rgba(34, 197, 94, 0.12);
-  --wait: #fbbf24;
-  --wait-soft: rgba(251, 191, 36, 0.12);
-  --bad: #f87171;
-  --bad-soft: rgba(248, 113, 113, 0.12);
-  --radius: 20px;
-  --radius-sm: 10px;
-  --focus: 0 0 0 3px rgba(34, 197, 94, 0.45);
+  color-scheme: light;
+  --page: #f4f4f2;
+  --band: #ffffff;
+  --band-ink: #111214;
+  --band-ink-2: #63666c;
+  --band-line: #e4e4e0;
+  --band-pool: #2563eb;
+  --band-op: #c2650a;
+  --surface: #ffffff;
+  --surface-2: #f7f7f5;
+  --line: #e4e4e0;
+  --line-2: #cfcfca;
+  --ink: #111214;
+  --ink-2: #3a3c40;
+  --muted: #63666c;
+  --accent: #111214;
+  --accent-ink: #ffffff;
+  --accent-soft: #ececea;
+  --link: #2563eb;
+  --pool: #2563eb;
+  --operator: #c2650a;
+  --good: #15803d;
+  --good-soft: #e3f1e7;
+  --wait: #a16207;
+  --wait-soft: #f7efd9;
+  --bad: #b91c1c;
+  --bad-soft: #fbe5e3;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --focus: 0 0 0 3px rgba(37, 99, 235, 0.35);
   --font: var(--font-sans), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --display: var(--font-mono), ui-monospace, monospace;
+  --display: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
   --mono: var(--font-mono), ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
-:root[data-theme='light'] {
-  color-scheme: light;
-  --page: #f5f5f7;
-  --band: #0f172a;
-  --surface: #ffffff;
-  --surface-2: #f8fafc;
-  --line: #e2e8f0;
-  --line-2: #cbd5e1;
-  --ink: #0f172a;
-  --ink-2: #334155;
-  --muted: #64748b;
-  --accent: #15803d;
-  --accent-ink: #ffffff;
-  --accent-soft: #dcfce7;
-  --pool: #2563eb;
-  --operator: #b45309;
-  --good: #15803d;
-  --good-soft: #dcfce7;
-  --wait: #a16207;
-  --wait-soft: #fef9c3;
-  --bad: #b91c1c;
-  --bad-soft: #fee2e2;
-  --focus: 0 0 0 3px rgba(21, 128, 61, 0.35);
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --page: #0f1012;
+  --band: #0f1012;
+  --band-ink: #f2f2f0;
+  --band-ink-2: #9a9da4;
+  --band-line: #26282d;
+  --band-pool: #3b82f6;
+  --band-op: #d97706;
+  --surface: #17181b;
+  --surface-2: #1d1f23;
+  --line: #26282d;
+  --line-2: #3a3d44;
+  --ink: #f2f2f0;
+  --ink-2: #c9cacd;
+  --muted: #9a9da4;
+  --accent: #f2f2f0;
+  --accent-ink: #111214;
+  --accent-soft: #26282d;
+  --link: #7aa7f7;
+  --pool: #3b82f6;
+  --operator: #d97706;
+  --good: #4ade80;
+  --good-soft: rgba(74, 222, 128, 0.12);
+  --wait: #f2b84b;
+  --wait-soft: rgba(242, 184, 75, 0.12);
+  --bad: #f87171;
+  --bad-soft: rgba(248, 113, 113, 0.12);
+  --focus: 0 0 0 3px rgba(122, 167, 247, 0.5);
 }
 
 /* Legacy token bridge (legacy.css reads these names). */
-:root, :root[data-theme='light'] {
+:root, :root[data-theme='dark'] {
   --bg: var(--page);
   --bg-2: var(--surface-2);
   --well: var(--surface-2);
@@ -144,7 +148,6 @@ body {
   color: var(--ink);
   background: var(--page);
   -webkit-font-smoothing: antialiased;
-  font-feature-settings: 'tnum' 1;
 }
 a { color: inherit; text-decoration: none; }
 button { font: inherit; color: inherit; }
@@ -442,7 +445,7 @@ button { font: inherit; color: inherit; }
 /* The waterfall also lives in a light card below the band: re-point its band colours. */
 .wf-card { --band-line: var(--line); --band-ink: var(--ink); --band-ink-2: var(--muted); --band-pool: var(--pool); --band-op: var(--operator); justify-content: center; }
 .wf-card .wf-total { fill: var(--line-2); }
-:root[data-theme='light'] .wf-card .wf-total { fill: #b9cbd8; }
+:root:not([data-theme='dark']) .wf-card .wf-total { fill: #c2ccc0; }
 
 /* ══ Bento overview ══
  * A mosaic of tiles in four columns (UI/UX Pro Max "Bento Box Grid": varied 1×1/2×1/2×2 spans,
@@ -602,3 +605,278 @@ a.tile:hover .btn-icon { transform: translateX(3px); border-color: var(--accent)
 .tile-fall .fall { padding-bottom: 8px; }
 .tile-wf .wf { max-width: 520px; margin: 0 auto; }
 .tile-agents .card-x-body { padding-top: 12px; }
+
+/* ══ v6: paper and ink ═══════════════════════════════════════════════════════
+ * Supersedes the earlier tile identities: one card style, one radius scale, no decorative fills.
+ */
+:root {
+  --stage-top: #dbe7f1; --stage-bottom: #f4f4f2; --stage-ink: #111214; --stage-ink-2: #55585e;
+  --chip: rgba(255, 255, 255, 0.82); --chip-line: rgba(17, 18, 20, 0.1); --chip-on: #111214;
+  --stage-pool: #2563eb; --stage-op: #c2650a; --stage-in: #8fb0cf;
+}
+:root[data-theme='dark'] {
+  --stage-top: #101a2b; --stage-bottom: #08090b; --stage-ink: #f2f2f0; --stage-ink-2: #9a9da4;
+  --chip: rgba(15, 16, 18, 0.66); --chip-line: rgba(255, 255, 255, 0.12); --chip-on: #f2f2f0;
+  --stage-pool: #3b82f6; --stage-op: #d97706; --stage-in: #d6e4f2;
+}
+
+/* shell: a white bar with a hairline */
+.top { background: var(--band); color: var(--band-ink); border-bottom: 1px solid var(--band-line); box-shadow: none; }
+.top-brand, .top-brand svg { color: var(--band-ink); }
+.top-name { font-family: var(--display); font-weight: 800; font-size: 18px; letter-spacing: -0.03em; }
+.top-link { border-radius: 6px; font-weight: 500; color: var(--band-ink-2); }
+.top-link:hover { color: var(--band-ink); background: var(--accent-soft); }
+.top-link.is-active { color: var(--band-ink); background: transparent; }
+.top-link.is-active::after { background: var(--band-ink); height: 2px; border-radius: 2px; bottom: -11px; }
+.top-sep { background: var(--band-line); }
+.top .theme-toggle { border-color: var(--band-line); color: var(--band-ink-2); }
+
+/* page bands: paper, not a slab of colour */
+.band, .legacy .page-header { background: var(--page); border-bottom: 0; }
+.band h1, .legacy .page-header h1, .page-title h1 { font-family: var(--display); font-size: 13px; font-weight: 600; letter-spacing: 0; color: var(--muted); }
+.band-lede, .legacy .page-header .page-header-sub:not(.mono) { font-weight: 750; letter-spacing: -0.04em; color: var(--ink); }
+.band-sub, .band-meta, .band-figs dt, .band-figs dd small { color: var(--muted); }
+.band-figs dd { color: var(--ink); }
+.band-meta .is-bad { color: var(--bad); }
+.band .legend { color: var(--muted); }
+.legacy .page-header .status-badge, .legacy .page-header .badge-live, .legacy .page-header .head-meta, .legacy .page-header .page-header-sub.mono { color: var(--muted); }
+.legacy .page-header .page-header-sub .tech { display: block; margin-top: 12px; font-size: 15px; line-height: 1.5; font-weight: 400; letter-spacing: 0; color: var(--muted); }
+
+/* links: blue, because they lead to evidence */
+.link, .section-link, .tile-link, .table td a, .feed-meta a { color: var(--link); }
+.addr:hover { color: var(--link); }
+
+/* one radius scale, one button family */
+.btn, .btn-solid, .tabs, .tab, .live-tag, .btn-outline { border-radius: var(--radius-sm); }
+.btn-solid { height: 40px; padding: 0 18px; font-weight: 700; background: var(--accent); color: var(--accent-ink); transition: transform 0.15s, opacity 0.15s; }
+.btn-solid:hover { transform: translateY(-1px); filter: none; opacity: 0.9; }
+.btn-solid:active { transform: translateY(0); }
+.btn-chip { border-radius: 5px; }
+.tab.is-on { background: var(--accent); color: var(--accent-ink); }
+
+.tile-big, .gauge-value, .hero-figs dd, .figs dd, .band-figs dd { font-weight: 700; letter-spacing: -0.035em; }
+.tile-title, .card-x-head h2, .section-head h2 { font-weight: 700; letter-spacing: -0.02em; }
+
+/* the hero: the sentence beside the cascade */
+.hero {
+  position: relative; display: grid; grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.55fr);
+  min-height: 520px; margin: 24px 0 16px; overflow: hidden; border-radius: 14px; color: var(--stage-ink);
+  background: linear-gradient(180deg, var(--stage-top), var(--stage-bottom) 85%);
+  box-shadow: 0 0 0 1px var(--line);
+  animation: hero-in 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.hero-copy { position: relative; z-index: 2; display: flex; flex-direction: column; padding: 28px 8px 28px 32px; }
+.hero-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+.hero h1 { margin: 0; font-size: 13px; font-weight: 600; color: var(--stage-ink-2); }
+.hero-top > :not(h1) { color: var(--stage-ink-2); font-size: 12.5px; }
+.hero .hero-lede { margin: 22px 0 0; max-width: 14ch; font-size: clamp(30px, 3.4vw, 50px); line-height: 1.02; font-weight: 800; letter-spacing: -0.045em; color: var(--stage-ink); }
+.hero .hero-lede .num { color: var(--stage-op); }
+.hero .hero-figs { margin: auto 0 0; padding-top: 26px; gap: 12px 28px; }
+.hero .hero-figs dt { font-size: 12.5px; color: var(--stage-ink-2); }
+.hero .hero-figs dd { color: var(--stage-ink); font-size: 24px; }
+.hero .hero-figs dd small { color: var(--stage-ink-2); }
+.hero .btn-solid { margin-top: 22px; align-self: flex-start; }
+@keyframes hero-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* the cascade */
+.cascade { position: relative; min-height: 420px; isolation: isolate; }
+.cascade-stage { position: absolute; inset: 0; z-index: 0; }
+.cascade-canvas { display: block; touch-action: pan-y; opacity: 0; transition: opacity 0.9s ease; }
+.cascade.is-ready .cascade-canvas { opacity: 1; }
+.cascade-label {
+  position: absolute; left: 0; top: 0; z-index: 1; pointer-events: none; display: flex; flex-direction: column; align-items: center;
+  margin: -56px 0 0 0; translate: -50% 0; padding: 5px 10px 6px; border-radius: 7px; white-space: nowrap; opacity: 0;
+  background: var(--chip); border: 1px solid var(--chip-line); backdrop-filter: blur(6px); transition: opacity 0.4s, border-color 0.2s;
+}
+.cascade-label-name { font-size: 11.5px; font-weight: 600; color: var(--stage-ink-2); }
+.cascade-label-fig { font-size: 19px; font-weight: 800; letter-spacing: -0.03em; color: var(--stage-ink); line-height: 1.15; }
+.cascade-label.is-pool .cascade-label-fig { color: var(--stage-pool); }
+.cascade-label.is-operator .cascade-label-fig { color: var(--stage-op); }
+.cascade-label.is-on { border-color: var(--chip-on); }
+.cascade-legend { position: absolute; z-index: 2; top: 16px; right: 18px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 72%; }
+.cascade-key {
+  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--chip-line); background: var(--chip); color: var(--stage-ink); font-size: 12.5px; font-weight: 600;
+  backdrop-filter: blur(6px); transition: border-color 0.15s;
+}
+.cascade-key i { width: 9px; height: 9px; border-radius: 2px; background: var(--stage-in); }
+.cascade-key.is-pool i { background: var(--stage-pool); }
+.cascade-key.is-operator i { background: var(--stage-op); }
+.cascade-key:hover:not(:disabled) { border-color: var(--stage-ink-2); }
+.cascade-key[aria-pressed='true'] { border-color: var(--chip-on); box-shadow: inset 0 0 0 1px var(--chip-on); }
+.cascade-key:disabled { cursor: default; opacity: 0.6; }
+.cascade-bar { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; padding: 0 18px 16px; }
+.cascade-replay { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 8px 8px 8px 14px; border-radius: 8px; background: var(--chip); border: 1px solid var(--chip-line); backdrop-filter: blur(6px); }
+.cascade-replay p { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font-size: 13px; color: var(--stage-ink-2); }
+.cascade-replay a { color: var(--stage-ink); text-decoration: underline; text-decoration-color: var(--chip-line); text-underline-offset: 3px; }
+.cascade-replay b { color: var(--stage-ink); font-weight: 700; }
+.cascade-replay .is-pool { color: var(--stage-pool); font-weight: 700; }
+.cascade-replay .is-operator { color: var(--stage-op); font-weight: 700; }
+.cascade-controls { display: flex; gap: 4px; flex: none; }
+.icon-btn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; border: 1px solid var(--chip-line); background: transparent; color: var(--stage-ink); cursor: pointer; transition: border-color 0.15s; }
+.icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn svg path[d$='z'] { fill: currentColor; }
+.icon-btn:hover:not(:disabled) { border-color: var(--stage-ink-2); }
+.icon-btn:disabled { opacity: 0.45; cursor: default; }
+.cascade-empty { position: absolute; z-index: 1; left: 24px; right: 24px; top: 42%; margin: 0; text-align: center; color: var(--stage-ink-2); font-size: 15px; }
+.cascade-fallback { padding: 24px; }
+
+/* the working tiles: one card style */
+.bento { padding-bottom: 80px; gap: 14px; grid-auto-rows: minmax(130px, auto); }
+.tile { border-radius: var(--radius); padding: 20px 22px; animation-duration: 0.45s; box-shadow: none; }
+.tile.flush > .tile-head { padding: 18px 22px 0; }
+a.tile:hover { transform: translateY(-2px); border-color: var(--line-2); }
+.tile-fees, .tile-wf, .tile-hero, .tile-stage { background: var(--surface); }
+.tile-agents { border-style: solid; border-color: var(--line); background: var(--surface); }
+.tile-agents .card-x-head h2::before { display: none; }
+.tile-fall { box-shadow: none; }
+.tile-ticket .ticket { border-radius: 8px; }
+.tile-ticket .ticket::after { display: none; }
+.tile-ticket .ticket::before { background: var(--pool); }
+.count-badge { border-radius: 7px; color: var(--ink); background: var(--accent-soft); }
+.btn-chip { border-color: var(--line-2); color: var(--ink-2); background: transparent; }
+.fall-bar > span:first-child { border-radius: 3px 0 0 3px; }
+.fall-bar > span:last-child { border-radius: 0 3px 3px 0; }
+.fall-bar > span:only-child { border-radius: 3px; }
+.pool-liquid { fill: color-mix(in srgb, var(--pool) 10%, transparent); }
+.pool-surface { stroke: color-mix(in srgb, var(--pool) 45%, transparent); }
+.gauge-fill { stroke: var(--pool); }
+.live-tag { color: var(--good); background: var(--good-soft); }
+.legacy .card, .legacy .card-shell, .legacy .pool, .legacy .pending, .legacy .activity, .panel, .card-x { border-radius: var(--radius); }
+
+/* No tabular figures: this face sets punctuation on the tabular grid too, which spaces out every
+   decimal point. Amounts are right-aligned, so proportional figures still line up. */
+.activity-meta time, .activity-tags strong, .t td, .float-live-meta small, .float-metric strong, .rate-current > strong, .rate-term strong { font-variant-numeric: normal; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hero { animation: none; }
+  .cascade-canvas { transition: none; }
+  .btn-solid { transition: none; }
+}
+@media (max-width: 980px) {
+  .hero { grid-template-columns: 1fr; min-height: 0; }
+  .hero-copy { padding: 24px 22px 4px; }
+  .hero .hero-lede { max-width: 18ch; }
+  .hero .hero-figs { margin-top: 0; }
+  .cascade { min-height: 460px; }
+}
+@media (max-width: 640px) {
+  .hero { margin-top: 14px; border-radius: 12px; }
+  .cascade { min-height: 420px; }
+  .cascade-legend { top: 10px; right: 10px; left: 10px; max-width: none; }
+  .cascade-bar { padding: 0 10px 10px; }
+  .cascade-replay { flex-direction: column; align-items: stretch; }
+  .cascade-controls { justify-content: flex-end; }
+  .cascade-label { padding: 4px 8px 5px; margin-top: -44px; }
+  .cascade-label-fig { font-size: 15px; }
+}
+
+/* Side-by-side sections: equal heads, and each card fills the row so both end on one line. */
+.split > section { display: flex; flex-direction: column; min-width: 0; }
+.split > section > .panel { flex: 1; }
+.panel-col { display: flex; flex-direction: column; }
+.panel-col .panel-foot { margin-top: auto; padding-top: 16px; }
+/* Cards side by side in a grid: no stacked-card margin on the second one, and both fill the row. */
+.grid > .card + .card, .legacy .grid > .card + .card { margin-top: 0; }
+.grid { align-items: stretch; }
+.grid > .card { height: 100%; }
+/* Workforce operator tools: equal cards in each row, the note pinned to the bottom. */
+.operator-tools { align-items: stretch; }
+.operator-tools > .manifest-card { display: flex; flex-direction: column; }
+.operator-tools > .manifest-card .manifest-note { margin-top: auto; }
+
+/* ══ Motion layer ══════════════════════════════════════════════════════════════
+ * Operate surface (Impeccable): motion acknowledges an action or explains a state change, nothing
+ * else. Numbers and patterns adapted from taste-skill's motion layer (assets/motion/motion.css, MIT,
+ * © 2026 Leonxlnx): 150ms in, 120ms out, 90ms press, 240ms for an indicator travelling between
+ * tabs; buttons step 1px on a fine pointer and press to 1px below rest at scale .985; underlines
+ * draw from the left; the selected tab's pill slides. Reduced motion keeps every colour and state
+ * change and drops the movement.
+ */
+:root {
+  --m-in: 150ms; --m-out: 120ms; --m-press: 90ms; --m-slide: 240ms;
+  --m-ease: cubic-bezier(0.2, 0.8, 0.2, 1); --m-ease-io: cubic-bezier(0.65, 0, 0.35, 1); --m-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* every pressable thing: colour follows the pointer, a press sinks it */
+:is(.btn, .btn-solid, .btn-outline, .btn-chip, .btn-accent, .icon-btn, .cascade-key, .tab, .theme-toggle, .owner-signin-submit,
+  .approval-action, .activity-action, .activity-filter, .portal-accept, button) {
+  transition: background-color var(--m-out) var(--m-ease), color var(--m-out) var(--m-ease), border-color var(--m-out) var(--m-ease),
+    box-shadow var(--m-out) var(--m-ease), opacity var(--m-out) var(--m-ease), transform var(--m-press) var(--m-ease);
+}
+:is(.btn, .btn-solid, .btn-outline, .btn-chip, .btn-accent, .icon-btn, .cascade-key, .tab, .theme-toggle, .owner-signin-submit,
+  .approval-action, .activity-action, .activity-filter, .portal-accept, button):hover { transition-duration: var(--m-in), var(--m-in), var(--m-in), var(--m-in), var(--m-in), var(--m-press); }
+:is(.btn, .btn-solid, .btn-outline, .btn-chip, .btn-accent, .icon-btn, .cascade-key, .tab, .theme-toggle, .owner-signin-submit,
+  .approval-action, .activity-action, .activity-filter, .portal-accept, button):not(:disabled):active { transform: translateY(1px) scale(0.985); }
+
+/* filled buttons: the fill steps toward the page on hover (the ink is the fill) */
+.btn-solid:hover, .owner-signin-submit:hover, .btn-accent:hover { opacity: 1; filter: none; background: color-mix(in oklab, var(--accent) 86%, var(--page)) !important; }
+.btn-outline:hover, .btn:hover:not(.btn-accent) { background: var(--accent-soft); border-color: var(--line-2); }
+.icon-btn:hover:not(:disabled) { background: color-mix(in oklab, var(--stage-ink) 7%, transparent); }
+
+/* a fine pointer also gets the 1px step up on the buttons that start an action */
+@media (hover: hover) and (pointer: fine) {
+  :is(.btn-solid, .btn-accent, .owner-signin-submit, .portal-accept, .approval-action, .btn-outline):not(:disabled):hover { transform: translateY(-1px); }
+  :is(.btn-solid, .btn-accent, .owner-signin-submit, .portal-accept, .approval-action, .btn-outline):not(:disabled):active { transform: translateY(1px) scale(0.985); }
+  a.tile { transition: transform 180ms var(--m-ease), border-color 180ms var(--m-ease); }
+}
+@media not ((hover: hover) and (pointer: fine)) { a.tile:hover { transform: none; } }
+
+/* links: a faint hairline at rest, an ink line draws left to right and leaves to the right */
+:is(.link, .section-link, .tile-link, .btn-underline, .table td a, .feed-meta a, .cascade-replay a, .audit-ref) {
+  text-decoration: none;
+  background-image: linear-gradient(currentColor, currentColor), linear-gradient(color-mix(in oklab, currentColor 30%, transparent), color-mix(in oklab, currentColor 30%, transparent));
+  background-repeat: no-repeat; background-size: 0% 1px, 100% 1px; background-position: right 0 bottom 0, 0 100%;
+  padding-bottom: 1px; transition: background-size var(--m-out) var(--m-ease), color var(--m-out) var(--m-ease);
+}
+:is(.link, .section-link, .tile-link, .btn-underline, .table td a, .feed-meta a, .cascade-replay a, .audit-ref):is(:hover, :focus-visible) {
+  background-size: 100% 1px, 100% 1px; background-position: left 0 bottom 0, 0 100%; transition-duration: var(--m-in);
+}
+.btn-underline { text-decoration: none; background-image: linear-gradient(currentColor, currentColor), linear-gradient(var(--pool), var(--pool)); background-size: 0% 2px, 100% 2px; padding-bottom: 3px; }
+.btn-underline:is(:hover, :focus-visible) { background-size: 100% 2px, 100% 2px; color: var(--ink); }
+
+/* the top nav: the word's line draws in on hover; the current page's line stays */
+.top-link::after {
+  content: ''; position: absolute; left: 12px; right: 12px; bottom: -11px; height: 2px; border-radius: 2px; background: var(--band-ink);
+  transform: scaleX(0); transform-origin: right center; transition: transform var(--m-out) var(--m-ease);
+}
+.top-link:hover::after { transform: scaleX(0.6); transform-origin: left center; transition-duration: var(--m-in); background: var(--line-2); }
+.top-link.is-active::after { transform: scaleX(1); transform-origin: left center; background: var(--band-ink); }
+
+/* tabs: the selected tab's pill slides (TabIndicator.tsx); the tab itself goes transparent */
+.tabs { position: relative; isolation: isolate; }
+.m-tab-ind {
+  position: absolute; left: 0; top: 0; z-index: 0; width: var(--w, 0px); height: var(--h, 0px); border-radius: var(--radius-sm);
+  background: var(--accent); pointer-events: none; transform-origin: 0 0;
+  transform: translate(var(--x, 0px), var(--y, 0px)) scale(var(--sx, 1), var(--sy, 1));
+  transition: transform var(--m-slide) var(--m-ease-io);
+}
+.m-tab-ind.is-jump { transition: none; }
+.m-has-ind .tab { position: relative; z-index: 1; }
+.m-has-ind .tab.is-on { background: transparent; color: var(--accent-ink); }
+.m-has-ind .tab { transition: color var(--m-slide) var(--m-ease), transform var(--m-press) var(--m-ease); }
+
+/* the cascade's legend: the swatch grows into the pressed state */
+.cascade-key i { transition: transform var(--m-in) var(--m-ease-enter), box-shadow var(--m-in) var(--m-ease); }
+.cascade-key[aria-pressed='true'] i { transform: scale(1.3); box-shadow: 0 0 0 2px var(--chip); }
+
+/* a swapped icon (theme toggle, play/pause) arrives instead of blinking in */
+@keyframes icon-in { from { opacity: 0; transform: rotate(-35deg) scale(0.7); } to { opacity: 1; transform: none; } }
+.theme-toggle-icon, .icon-btn svg { animation: icon-in 220ms var(--m-ease-enter) both; }
+
+/* the replay line: a new settlement slides in from below */
+@keyframes replay-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.replay-line { animation: replay-in 260ms var(--m-ease-enter) both; }
+
+/* a focus ring arrives with the focus, it does not fade */
+:focus-visible { transition: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.btn, .btn-solid, .btn-outline, .btn-chip, .btn-accent, .icon-btn, .cascade-key, .tab, .theme-toggle, .owner-signin-submit,
+    .approval-action, .activity-action, .activity-filter, .portal-accept, button, a.tile):is(:hover, :active) { transform: none !important; }
+  /* a press still shows, as a deeper tone instead of a move */
+  :is(.btn-solid, .btn-accent, .owner-signin-submit, .portal-accept, .approval-action, .icon-btn, .cascade-key, .tab, button):not(:disabled):active { filter: brightness(0.92); }
+  .m-tab-ind { transition: none; }
+  .top-link::after, .cascade-key i { transition: none; }
+  .theme-toggle-icon, .icon-btn svg, .replay-line { animation: none; }
+}

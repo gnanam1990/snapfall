@@ -250,7 +250,7 @@ function ApprovalsInner() {
         <div className="page-header-text">
           <h1>Approvals</h1>
           <p className="page-header-sub">
-            Purchases an agent may not make alone. Nothing moves until you answer.
+            Purchases waiting for your answer.
           </p>
         </div>
         <span className="page-header-aside">
@@ -322,17 +322,12 @@ function ApprovalsInner() {
         // "0 pending" there is a positive claim about a workforce nobody observed.
         <div className="card">
           <p className="card-title">No daemon connected</p>
-          <p>
-            Approvals come from the owner’s daemon, which does not run on this public site. Nothing
-            can reach this inbox, so it is left empty rather than filled with examples. This is not
-            the same as a quiet queue, and the difference is the point.
-          </p>
+          <p>Approvals come from your daemon, which is not connected here.</p>
         </div>
       ) : list.length === 0 ? (
         <div className="card">
           <p className="stat-sub">
-            Nothing awaiting a decision. Escalations from the workforce appear here within a few
-            seconds of being raised.
+            Nothing waiting.
           </p>
         </div>
       ) : (

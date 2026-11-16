@@ -45,3 +45,6 @@ daemon/snapfalld
 # local editor/preview tooling; the port and port choice are machine-specific
 .claude/launch.json
 .vercel/
+
+# Impeccable motion-capture evidence (local review artefacts)
+dashboard/.impeccable/

@@ -172,11 +172,7 @@ export default async function CapitalControls() {
       <h2 className="card-title" id="audit-controls">
         Capital controls
       </h2>
-      <p className="audit-lede">
-        Read from the contracts on {networkLabel()} at render time. The ceiling bounds open principal
-        plus every loss already taken; raising it, allowing a new borrower, or moving admin waits out
-        an on-chain delay that shows here while it runs.
-      </p>
+      <p className="audit-lede">Read live from the contracts. Raising a cap, adding a borrower or moving admin waits out an on-chain delay.</p>
 
       {outcome.kind === 'not-deployed' && (
         <p className="settings-note">Not deployed on {networkLabel()} yet: no FloatPool and JobVault addresses are configured.</p>
@@ -247,11 +243,8 @@ export default async function CapitalControls() {
         )}
       {outcome.kind === 'read' && outcome.snapshot.status === 'ok' && (
         <p className="settings-note">
-          A queued raise, a queued operator grant, an allowed operator you do not run, or a pending admin you
-          did not start is an incident: lower the caps (which cancels the raise), call{' '}
-          <code>setOperatorAllowed(op, false)</code> (which revokes at once and drops a queued grant), or call{' '}
-          <code>transferAdmin</code> with your own address, then follow docs/MAINNET.md. Machine-readable at{' '}
-          <code>/api/governance</code> for alerting.
+          Anything queued or pending that you did not start is an incident: see docs/MAINNET.md. Alerts read{' '}
+          <code>/api/governance</code>.
         </p>
       )}
     </section>
