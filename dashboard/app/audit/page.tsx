@@ -60,16 +60,18 @@ const CONTRACTS = [
 /**
  * The settlement whose log ordering IS the product's central claim.
  *
- * Transcribed from docs/addresses.md, which records the decoded receipt. The figures are the same
- * ones the job detail page draws in its waterfall, read live from the contracts -- so if this
- * page and that one ever disagree, one of them is wrong and the chain settles it.
+ * Transcribed from docs/spine-runs/2026-11-16-first-pass.md, which records the decoded receipt of
+ * the first PASS spine run on the contracts listed above (the 23 Jul contract set's settlement,
+ * 0x108a8f90…, stays in docs/addresses.md as that set's history). The figures are the same ones
+ * the job detail page draws in its waterfall, read live from the contracts -- so if this page and
+ * that one ever disagree, one of them is wrong and the chain settles it.
  */
 const SETTLEMENT = {
-  hash: '0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b',
-  block: '53,613,272',
+  hash: '0x03b26490f46996487beb5a579db3b3ab2289b6bc87b2e4c57462bdd511e16f44',
+  block: '72,509,744',
   legs: [
-    { logIndex: 12, to: 'FloatPool', amount: '0.561', detail: '0.55 principal + 0.011 fee' },
-    { logIndex: 15, to: 'operator', amount: '0.439', detail: 'what remains of the escrow' },
+    { logIndex: 14, to: 'FloatPool', amount: '0.612', detail: '0.60 principal + 0.012 fee' },
+    { logIndex: 17, to: 'operator', amount: '0.388', detail: 'what remains of the escrow' },
   ],
 };
 
@@ -91,14 +93,14 @@ const NOT_PROVEN = [
       'On Arc testnet one has: on 4 Nov 2026 a 0.04 USDC purchase was signed by the Circle treasury wallet and settled by the Circle relayer wallet (transaction 0x63731fac…5264201). Nothing has been bought on mainnet.',
   },
   {
-    claim: 'No full end-to-end run has passed.',
+    claim: 'The one end-to-end run that passed was at reduced scale, and its agent did not depend on borrowed money.',
     detail:
-      'docs/spine-runs/ logs four automated runs from 7 Aug 2026: two failed at funding, one at the agent spend, and the best (a 0.6 reduced-scale run) is UNVERIFIED because its x402 purchase was never broadcast. The x402 leg settled on its own the next day (8 Aug), but no single run has yet gone from funding to settlement with a PASS verdict.',
+      'On 16 Nov 2026 a run at a 1.00 USDC job price (the product figure is 25.00) passed every step on Arc testnet, each read back from the chain: escrow, a 0.60 advance, two agent purchases settled on chain (0.04 and 0.06), the 4.00 one escalated and refused, settlement with the pool paid first, and the rate rising from 60% to 65%. But the first purchase landed four blocks before the advance, paid from the operator’s own balance. At 25.00 the advance would exceed the pool’s 10.00 cap, so no full-scale run has passed, and nobody watched the dashboard during the run.',
   },
   {
-    claim: 'Only payee addresses are screened, and no live purchase has been screened yet.',
+    claim: 'Only payee addresses are screened, and the screen has never refused a real purchase.',
     detail:
-      'Before every purchase the daemon checks the payee address against the Chainalysis sanctions oracle (a public, read-only contract on Ethereum mainnet) and refuses a listed or unscreenable payee. Screening the company under review is still a labelled stub: the report says "not-screened" with stub: true.',
+      'Before every purchase the daemon checks the payee address against the Chainalysis sanctions oracle (a public, read-only contract on Ethereum mainnet) and refuses a listed or unscreenable payee. It ran on both purchases in the 16 Nov testnet run and passed a clean payee; the refusal path is proven by tests only. Screening the company under review is still a labelled stub: the report says "not-screened" with stub: true.',
   },
   {
     claim: 'Discovery is a local ranker, not the Circle Agent Marketplace.',

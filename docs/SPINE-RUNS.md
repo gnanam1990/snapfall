@@ -267,9 +267,10 @@ the owner, and note what you saw in the log line by hand.
 
 `docs/spine-runs/spine-runs.tsv`, one tab-separated line appended per run, header written once:
 
-The shape of a line, with **invented** values. No spine run has been logged yet, so every row
-below is illustrative; the real file is still empty and nothing here should be read as a record
-of a run that happened.
+The shape of a line, with **invented** values; every row below is illustrative. The real log is
+`docs/spine-runs/spine-runs.tsv`. Its first PASS is the reduced-scale run of 16 Nov 2026
+(`20261116T033545Z`), decoded with what it does and does not show in
+`docs/spine-runs/2026-11-16-first-pass.md`.
 
 ```
 # started_utc	git_sha	verdict	scale	first_bad_beat	vault_job_id	note
