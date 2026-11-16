@@ -1,0 +1,44 @@
+# Snapfall daemon WITH a chain deployment: the same keyless daemon as daemon/Dockerfile, plus the
+# committed deployment records and the indexer ABIs they point at, so `-deployment` resolves.
+#
+# Build context is the REPO ROOT (the records live in deployments/, the ABIs in contracts/abi):
+#   docker build -f daemon/Dockerfile.chain -t snapfall-daemon-chain .
+# SNAPFALL_DEPLOYMENT picks the record at run time: arc-mainnet (default) or arc-testnet.
+#
+# Still no keys: with a deployment but no signer the chain lanes stay unwired and every money
+# flow stops loudly at *.pending_chain. Never put a mainnet key in this host's environment;
+# a mainnet signer comes from Circle developer-controlled wallets, not a raw key.
+#
+# The owner API binds all interfaces, which the daemon refuses unless SNAPFALL_OWNER_TOKEN
+# (>= 32 bytes) is set and SNAPFALL_OWNER_ALLOWED_HOSTS names the host clients connect to.
+# Run it on a private network only (a Render private service), never public. State lives under
+# /var/data, which must be a persistent disk.
+
+# ---- build ----
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY daemon/go.mod daemon/go.sum ./
+RUN go mod download
+COPY daemon/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/snapfall ./cmd/snapfall
+
+# ---- run ----
+FROM alpine:3.22
+RUN addgroup -S snapfall && adduser -S -G snapfall snapfall \
+ && mkdir -p /var/data && chown snapfall:snapfall /var/data
+WORKDIR /app
+COPY --from=build /out/snapfall /app/snapfall
+COPY daemon/manifests /app/manifests
+# A record names its ABIs relative to itself (../contracts/abi/indexer/*.json), so keep that shape.
+COPY deployments/arc-mainnet.json deployments/arc-testnet.json /app/deployments/
+COPY contracts/abi/indexer /app/contracts/abi/indexer
+
+ENV SNAPFALL_DB_PATH=/var/data/snapfall.db \
+    SNAPFALL_MEMORY_DIR=/var/data/memory/jobs \
+    SNAPFALL_MANIFEST_DIR=/app/manifests \
+    SNAPFALL_DEPLOYMENT=arc-mainnet
+
+USER snapfall
+EXPOSE 4010
+# Only the two committed records are accepted; anything else refuses to start.
+CMD ["/bin/sh", "-c", "case \"$SNAPFALL_DEPLOYMENT\" in arc-mainnet|arc-testnet) ;; *) echo \"SNAPFALL_DEPLOYMENT must be arc-mainnet or arc-testnet, got '$SNAPFALL_DEPLOYMENT'\" >&2; exit 64;; esac; exec /app/snapfall -api-addr 0.0.0.0:4010 -deployment \"/app/deployments/$SNAPFALL_DEPLOYMENT.json\""]

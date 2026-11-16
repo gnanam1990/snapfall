@@ -8,6 +8,16 @@ sidecar/
 docs/
 scripts/
 
+# daemon/Dockerfile.chain (the daemon with a chain deployment) builds from this same root
+# context, so it needs the daemon's source and the indexer ABIs back. The dashboard image never
+# COPYs either, so this only widens the context, not the dashboard.
+!daemon/
+daemon/snapfall
+daemon/*.db
+daemon/*.db-*
+daemon/memory/
+!contracts/abi/indexer/
+
 # VCS and OS cruft.
 .git/
 .gitignore
