@@ -33,6 +33,8 @@ sidecar/node_modules/
 daemon/snapfall.db
 daemon/snapfall.db-wal
 daemon/snapfall.db-shm
+# Job memory sits BESIDE the db (main.go: <db-dir>/memory), so a spine run writes it here.
+daemon/memory/
 daemon/snapfalld
 *.redeploy-guard.json
 *.redeploy-guard.json.pending
@@ -43,3 +45,6 @@ daemon/snapfalld
 # local editor/preview tooling; the port and port choice are machine-specific
 .claude/launch.json
 .vercel/
+
+# Impeccable motion-capture evidence (local review artefacts)
+dashboard/.impeccable/

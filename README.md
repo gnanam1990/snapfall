@@ -53,9 +53,13 @@ full spine end to end — funded, advanced, delivered, settled.
 
 | Contract | Address |
 | --- | --- |
-| JobVault | [`0xF3830D7C3B8ca873bB0b277c0e179999e3d52681`](https://testnet.arcscan.app/address/0xF3830D7C3B8ca873bB0b277c0e179999e3d52681) |
-| FloatPool | [`0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5`](https://testnet.arcscan.app/address/0xde9F58A997Cf7A3258D09A797Eb5546877dc86E5) |
-| AuditAnchor | [`0x7CDBF8a6D33d4c4C55fb94447E7E90905b3672c6`](https://testnet.arcscan.app/address/0x7CDBF8a6D33d4c4C55fb94447E7E90905b3672c6) |
+| JobVault | [`0x449A7308A10312b9bb0E21B62064a8080eb10bD1`](https://testnet.arcscan.app/address/0x449A7308A10312b9bb0E21B62064a8080eb10bD1) |
+| FloatPool | [`0x4780C2E47a7eE3f9F88Bd83aace58fb32c4586bE`](https://testnet.arcscan.app/address/0x4780C2E47a7eE3f9F88Bd83aace58fb32c4586bE) |
+| AuditAnchor | [`0x929bA0CFE0EE582949EEB0aA5c512f1EaB421519`](https://testnet.arcscan.app/address/0x929bA0CFE0EE582949EEB0aA5c512f1EaB421519) |
+
+This set was deployed on 15 Nov 2026 with the capital controls and the audit fixes. The jobs
+and the settlement below ran on the original 23 Jul set, whose history stays on chain
+([deployments/README.md](deployments/README.md)).
 
 **The settlement that proves the model** —
 [`0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b`](https://testnet.arcscan.app/tx/0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b).

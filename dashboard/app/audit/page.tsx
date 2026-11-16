@@ -16,7 +16,6 @@
  * explorer, and the last section is the gaps.
  */
 
-import Link from 'next/link';
 import { contractAddress, deploymentFor, networkLabel } from '@/lib/network';
 import CapitalControls from '@/components/CapitalControls';
 
@@ -60,16 +59,18 @@ const CONTRACTS = [
 /**
  * The settlement whose log ordering IS the product's central claim.
  *
- * Transcribed from docs/addresses.md, which records the decoded receipt. The figures are the same
- * ones the job detail page draws in its waterfall, read live from the contracts -- so if this
- * page and that one ever disagree, one of them is wrong and the chain settles it.
+ * Transcribed from docs/spine-runs/2026-11-16-first-pass.md, which records the decoded receipt of
+ * the first PASS spine run on the contracts listed above (the 23 Jul contract set's settlement,
+ * 0x108a8f90…, stays in docs/addresses.md as that set's history). The figures are the same ones
+ * the job detail page draws in its waterfall, read live from the contracts -- so if this page and
+ * that one ever disagree, one of them is wrong and the chain settles it.
  */
 const SETTLEMENT = {
-  hash: '0x108a8f908b368aca286b8011d3dab34fc26c635d32df2689555ffc806ef9de4b',
-  block: '53,613,272',
+  hash: '0x03b26490f46996487beb5a579db3b3ab2289b6bc87b2e4c57462bdd511e16f44',
+  block: '72,509,744',
   legs: [
-    { logIndex: 12, to: 'FloatPool', amount: '0.561', detail: '0.55 principal + 0.011 fee' },
-    { logIndex: 15, to: 'operator', amount: '0.439', detail: 'what remains of the escrow' },
+    { logIndex: 14, to: 'FloatPool', amount: '0.612', detail: '0.60 principal + 0.012 fee' },
+    { logIndex: 17, to: 'operator', amount: '0.388', detail: 'what remains of the escrow' },
   ],
 };
 
@@ -91,14 +92,14 @@ const NOT_PROVEN = [
       'On Arc testnet one has: on 4 Nov 2026 a 0.04 USDC purchase was signed by the Circle treasury wallet and settled by the Circle relayer wallet (transaction 0x63731fac…5264201). Nothing has been bought on mainnet.',
   },
   {
-    claim: 'No end-to-end run has been logged.',
+    claim: 'The one end-to-end run that passed was at reduced scale, and its agent did not depend on borrowed money.',
     detail:
-      'docs/spine-runs/ contains only .gitkeep. Nothing in this product claims a recorded full-spine run.',
+      'On 16 Nov 2026 a run at a 1.00 USDC job price (the product figure is 25.00) passed every step on Arc testnet, each read back from the chain: escrow, a 0.60 advance, two agent purchases settled on chain (0.04 and 0.06), the 4.00 one escalated and refused, settlement with the pool paid first, and the rate rising from 60% to 65%. But the first purchase landed four blocks before the advance, paid from the operator’s own balance. At 25.00 the advance would exceed the pool’s 10.00 cap, so no full-scale run has passed, and nobody watched the dashboard during the run.',
   },
   {
-    claim: 'Compliance screening is a labelled stub.',
+    claim: 'Only payee addresses are screened, and the screen has never refused a real purchase.',
     detail:
-      'The worker returns decision "not-screened" with stub: true and names no provider. It fabricates no screening result.',
+      'Before every purchase the daemon checks the payee address against the Chainalysis sanctions oracle (a public, read-only contract on Ethereum mainnet) and refuses a listed or unscreenable payee. It ran on both purchases in the 16 Nov testnet run and passed a clean payee; the refusal path is proven by tests only. Screening the company under review is still a labelled stub: the report says "not-screened" with stub: true.',
   },
   {
     claim: 'Discovery is a local ranker, not the Circle Agent Marketplace.',
@@ -117,10 +118,10 @@ export default function AuditPage() {
         <div className="page-header-text">
           <h1>Audit</h1>
           <p className="page-header-sub">
-            What can be checked without trusting us, and what cannot.{' '}
-            {SETTLEMENT_IS_OTHER_CHAIN
-              ? `Every contract address below links to the public explorer for ${deployment.network.name}; the settlement links to the Arc testnet explorer, where it ran.`
-              : `Every address and hash below links to the public explorer for ${deployment.network.name}.`}
+            Every claim here links to the public chain.
+            {SETTLEMENT_IS_OTHER_CHAIN ? (
+              <span className="tech">The settlement links to the Arc testnet explorer, where it ran.</span>
+            ) : null}
           </p>
         </div>
         <span className="page-header-aside">
@@ -132,10 +133,6 @@ export default function AuditPage() {
         <h2 className="card-title" id="audit-contracts">
           Deployed contracts
         </h2>
-        <p className="audit-lede">
-          Frozen at deployment. The addresses come from the repository’s deployment record, not
-          from a running service, so this section is correct with nothing else switched on.
-        </p>
         <ul className="audit-list">
           {CONTRACTS.map((c) => (
             <li key={c.name} className="audit-row">
@@ -171,10 +168,8 @@ export default function AuditPage() {
           </p>
         )}
         <p className="audit-lede">
-          This is the claim the whole product rests on, and it is checkable in one transaction. In
-          the settlement below, the capital pool is paid at log index {SETTLEMENT.legs[0].logIndex}{' '}
-          and the operator at log index {SETTLEMENT.legs[1].logIndex}. Same transaction, pool
-          lower.
+          One transaction: the pool is paid at log {SETTLEMENT.legs[0].logIndex}, the operator at log{' '}
+          {SETTLEMENT.legs[1].logIndex}.
         </p>
         <ol className="audit-legs">
           {SETTLEMENT.legs.map((leg) => (
@@ -189,33 +184,20 @@ export default function AuditPage() {
           ))}
         </ol>
         <p className="audit-note">
-          The ordering is contract control flow, not a convention:{' '}
-          <code>JobVault.acceptDelivery</code> calls <code>floatPool.repayAdvance(…)</code> before
-          it transfers to the operator. The two events cannot be reordered without redeploying,
-          and the contracts are frozen.
+          <code>JobVault.acceptDelivery</code> calls <code>floatPool.repayAdvance(…)</code> before it
+          pays the operator, so the order is enforced by the contract.
         </p>
         <a className="audit-ref" href={tx(SETTLEMENT.hash)} target="_blank" rel="noreferrer">
           <code>{`${SETTLEMENT.hash.slice(0, 14)}…${SETTLEMENT.hash.slice(-8)}`}</code>
           <span aria-hidden="true"> ↗</span>
         </a>
-        <p className="audit-lede">
-          Block {SETTLEMENT.block}. The same two figures are read live from the contracts on that
-          job’s{' '}
-          <Link className="audit-inline" href="/jobs">
-            detail page
-          </Link>
-          , so the two can be compared.
-        </p>
+        <p className="audit-lede">Block {SETTLEMENT.block}.</p>
       </section>
 
       <section className="card mt" aria-labelledby="audit-gaps">
         <h2 className="card-title" id="audit-gaps">
           Not proven
         </h2>
-        <p className="audit-lede">
-          Recorded because an audit page that listed only its successes would not be one. Each of
-          these is a capability the product does not currently demonstrate.
-        </p>
         <ul className="audit-gaps">
           {NOT_PROVEN.map((g) => (
             <li key={g.claim}>

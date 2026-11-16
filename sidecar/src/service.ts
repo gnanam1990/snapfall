@@ -13,8 +13,11 @@
  *   - idempotency is a DURABLE record keyed by the intent nonce, written BEFORE signing, so a
  *     crash cannot cause a second execution; the on-chain authNonce is deterministic too.
  *
- * SETTLEMENT: inherited dry run — the seller verifies but does not broadcast, so a successful
- * pay rests at DELIVERED (committed-final here). SETTLED needs a real facilitator (see H3 §8).
+ * SETTLEMENT: with no facilitator the seller verifies but does not broadcast, so a successful pay
+ * rests at DELIVERED (committed-final here). When the seller returns a transaction hash, the
+ * sidecar reads that transaction from its OWN RPC and moves the record to SETTLED only if the chain
+ * shows this payment's authorization consumed and the signed amount moved to the signed payee
+ * (settlement-confirm.ts). The seller's hash alone never makes a payment SETTLED.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -41,6 +44,8 @@ import {
   type ApprovalToken,
 } from './h3.js';
 import { PaymentStore, type PaymentRecord, type PaymentState } from './store.js';
+import { resolveArcNetwork } from './arc-network.js';
+import { confirmWithRetry, isTxHash, rpcSettlementReader, type SettlementReader } from './settlement-confirm.js';
 
 const PORT = Number(process.env.SIDECAR_PORT ?? 4020);
 const AUTH_TOKEN = process.env.SIDECAR_AUTH_TOKEN ?? '';
@@ -74,6 +79,44 @@ const inFlightIds = new Set<string>();
 const PAYMENT_ID_RE = /^pay_[0-9a-f]{16}$/;
 
 const TERMINAL: ReadonlySet<PaymentState> = new Set(['SETTLED', 'FAILED', 'EXPIRED']);
+
+/** Reads the settlement transaction from our own RPC (the network ARC_CHAIN_ID names). */
+const settlementReader: SettlementReader = rpcSettlementReader(resolveArcNetwork(process.env).rpcUrl);
+// The seller already waited for the receipt before answering, so the first read almost always
+// confirms. Three tries 2s apart adds at most ~4s inside the daemon's 30s per-call budget
+// (daemon/internal/h3/client.go DefaultTimeout), which also covers the seller's own settle wait.
+const CONFIRM_TRIES = Number(process.env.SIDECAR_SETTLEMENT_CONFIRM_TRIES ?? 3);
+
+/**
+ * DELIVERED -> SETTLED when, and only when, the chain confirms it (settlement-confirm.ts). Never
+ * throws and never moves a record anywhere but SETTLED: an unconfirmable hash leaves it DELIVERED,
+ * which the daemon already books as spent.
+ */
+async function promoteIfSettled(
+  rec: PaymentRecord,
+  signed: { payer: string; payee: string; usdc: string; authNonce: string },
+): Promise<PaymentRecord> {
+  const hash = (rec.receipt as H3Receipt | null)?.settlement;
+  if (rec.state !== 'DELIVERED' || !isTxHash(hash) || rec.amountPaid === null) return rec;
+  try {
+    const c = await confirmWithRetry(
+      settlementReader,
+      { txHash: hash, amount: rec.amountPaid, ...signed },
+      { tries: Number.isFinite(CONFIRM_TRIES) ? CONFIRM_TRIES : 3 },
+    );
+    if (!c.confirmed) {
+      console.log(`[h3] ${rec.paymentId} stays DELIVERED: ${c.reason}`);
+      return rec;
+    }
+    const settled: PaymentRecord = { ...rec, state: 'SETTLED', updatedAt: new Date().toISOString() };
+    store.upsert(settled);
+    console.log(`[h3] ${rec.paymentId} SETTLED, confirmed on chain in ${hash}`);
+    return settled;
+  } catch (e) {
+    console.log(`[h3] ${rec.paymentId} stays DELIVERED: confirmation threw ${(e as Error).message}`);
+    return rec;
+  }
+}
 
 interface H3Receipt {
   resource: string;
@@ -434,6 +477,14 @@ async function handlePay(body: unknown): Promise<Reply> {
         updatedAt: new Date().toISOString(),
       };
       store.upsert(rec);
+      // The payee and asset are the ones validated against the approved intent and then SIGNED,
+      // never the receipt's echo of them; the authNonce is our own deterministic one.
+      rec = await promoteIfSettled(rec, {
+        payer: signer.address,
+        payee: accept.payTo,
+        usdc: accept.asset,
+        authNonce: computeAuthNonce(intentHash),
+      });
       return { status: 200, json: payResponse(rec, false) };
     } catch (e) {
       // Past the write-ahead. The question is whether the signed authorization may still settle,

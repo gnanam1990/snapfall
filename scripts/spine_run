@@ -1020,29 +1020,39 @@ beat 3 SPEND "the DD worker buys the $(usdc_short $profile_micros) source; polic
 
 # The evidence is the sidecar's DURABLE record, not the worker's own progress note: the
 # worker also reports success for approved-pending-integration, which moves no money.
-# SETTLED only. DELIVERED is NOT settled: sidecar/src/seller.ts:217 returns
-# `settlement: 'NOT_BROADCAST'` because broadcasting transferWithAuthorization is the
-# facilitator's job and needs a funded Arc wallet, and H3 section 8 states plainly that
-# "consumers must not treat SETTLED as reachable yet". So a DELIVERED record proves the x402
-# handshake and the signature, and proves nothing about money reaching the chain. Counting it
-# as settled would print PASS for a payment that never left the process, which is the one
-# thing this runner exists not to do.
-paid_record() { # paid_record <micros> -> prints paymentId when a SETTLED record exists
+# SETTLED only. DELIVERED is NOT settled: with no facilitator the seller returns
+# `settlement: 'NOT_BROADCAST'`, and even with one, DELIVERED means the seller CLAIMED a
+# transaction the sidecar could not confirm. SETTLED is written by the sidecar only after it read
+# the transaction from its own RPC and found this payment's EIP-3009 authorization consumed and
+# the signed amount moved to the signed payee (sidecar/src/settlement-confirm.ts). Counting
+# DELIVERED as settled would print PASS for a payment that may never have left the process, which
+# is the one thing this runner exists not to do.
+#
+# Only records created during THIS run count. The store outlives runs, and once SETTLED is
+# reachable a second run (V12's back-to-back gate) would otherwise PASS beat 3 instantly on the
+# first run's payment of the same amount.
+store_record() { # store_record <micros> <state> -> prints paymentId of this run's record in that state
 	[[ -f "$sidecar_store" ]] || return 1
 	local id
-	id="$(jsonq "((Array.isArray(d)?d:[]).find(r => (r.amountPaid || r.amountReserved) === '$1' && r.state === 'SETTLED') || {}).paymentId" "$sidecar_store" 2>/dev/null || printf '')"
+	id="$(jsonq "((Array.isArray(d)?d:[]).find(r => (r.amountPaid || r.amountReserved) === '$1' && r.state === '$2' && Date.parse(r.createdAt) >= Date.parse('$run_started')) || {}).paymentId" "$sidecar_store" 2>/dev/null || printf '')"
 	[[ -n "$id" ]] || return 1
 	printf '%s' "$id"
 }
+paid_record() { store_record "$1" SETTLED; }
 
 # delivered_record finds the same payment resting at DELIVERED, so the runner can tell
 # "the handshake worked but nothing settled" apart from "no purchase happened at all".
-delivered_record() { # delivered_record <micros> -> prints paymentId when a DELIVERED record exists
-	[[ -f "$sidecar_store" ]] || return 1
-	local id
-	id="$(jsonq "((Array.isArray(d)?d:[]).find(r => (r.amountPaid || r.amountReserved) === '$1' && r.state === 'DELIVERED') || {}).paymentId" "$sidecar_store" 2>/dev/null || printf '')"
-	[[ -n "$id" ]] || return 1
-	printf '%s' "$id"
+delivered_record() { store_record "$1" DELIVERED; }
+
+# why_unsettled names, for a DELIVERED record, which of the two DELIVERED cases it is.
+why_unsettled() { # why_unsettled <paymentId>
+	local s
+	s="$(jsonq "((Array.isArray(d)?d:[]).find(r => r.paymentId === '$1') || {}).receipt?.settlement" "$sidecar_store" 2>/dev/null || printf '')"
+	if [[ "$s" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+		printf 'the seller returned transaction %s but the sidecar could not confirm it on chain (see the sidecar log)' "$s"
+	else
+		printf 'the seller returned settlement %s, so the x402 handshake and signature are real but nothing reached Arc (no facilitator: set SNAPFALL_SELF_FACILITATOR=1, see docs/V3-CIRCLE-SETUP.md)' "${s:-<none>}"
+	fi
 }
 
 # await_paid waits for a settled record, and gives up EARLY when the third argument names an
@@ -1078,10 +1088,8 @@ rm -f "$bail_marker"
 if profile_payment="$(await_paid "$profile_micros" "$wait_purchase" "$premium_micros")"; then
 	pass "sidecar store holds a SETTLED $(usdc_short $profile_micros) USDC payment, id $profile_payment (V1's loop, live on chain)"
 elif profile_payment="$(delivered_record "$profile_micros")"; then
-	# The expected outcome until the facilitator broadcast is wired, and the honest one: the
-	# x402 handshake, the EIP-3009 signature and the resource delivery are all real, but the
-	# authorization was never broadcast, so no USDC moved on Arc.
-	unverified "the $(usdc_short $profile_micros) payment rests at DELIVERED, not SETTLED (id $profile_payment): seller.ts:217 returns settlement NOT_BROADCAST, so the x402 handshake and signature are real but nothing reached Arc. V1's clause stays open until a facilitator broadcast is wired; see docs/V3-CIRCLE-SETUP.md"
+	# The handshake, the EIP-3009 signature and the delivery are real; settlement is not proven.
+	unverified "the $(usdc_short $profile_micros) payment rests at DELIVERED, not SETTLED (id $profile_payment): $(why_unsettled "$profile_payment")"
 elif daemon_log_has 'purchase.pending_settlement'; then
 	unverified "the purchase stopped at purchase.pending_settlement: approval consumed, no money moved, no H3 lane"
 elif daemon_log_has 'approved-pending-integration'; then
@@ -1132,6 +1140,8 @@ fi
 beat 5 ALTERNATIVE "the worker adapts and buys the $(usdc_short $bench_micros) source instead"
 if bench_payment="$(await_paid "$bench_micros" "$wait_purchase")"; then
 	pass "sidecar store holds a settled $(usdc_short $bench_micros) USDC payment, id $bench_payment, so the worker adapted"
+elif bench_payment="$(delivered_record "$bench_micros")"; then
+	unverified "the worker adapted, but the $(usdc_short $bench_micros) payment rests at DELIVERED, not SETTLED (id $bench_payment): $(why_unsettled "$bench_payment")"
 elif daemon_log_has 'source-abandoned'; then
 	unverified "the worker recorded source-abandoned: discovery found nothing under the rejected price, or the reason did not read as cost"
 else
@@ -1287,7 +1297,10 @@ fi
 beat 7 RATE "the flywheel: the org's advance rate ticks up after a clean settlement"
 # Keyless and submits nothing: seed_demo --dry-run --org reads the LIVE rate for the org
 # and prints it. Same source of truth the seed used, so the comparison is apples to apples.
-if "$repo_root/scripts/seed_demo" --dry-run --org "$SNAPFALL_TREASURY_ADDRESS" >"$run_dir/rate-after.txt" 2>&1; then
+# It is sized at THIS run's price: left at seed_demo's 25.00 default, a risen rate pushes the
+# hypothetical advance past FloatPool.maxAdvance and seed_demo refuses before printing the rate
+# (run 20261116T025542Z: rate 5500 -> 6000 on chain, reported UNVERIFIED for a 15.00 > 10.00 cap).
+if "$repo_root/scripts/seed_demo" --dry-run --org "$SNAPFALL_TREASURY_ADDRESS" --price "$price_usdc" --pool-seed 0 >"$run_dir/rate-after.txt" 2>&1; then
 	rate_after="$(sed -n 's/.*live rate *\([0-9]*\) bps.*/\1/p' "$run_dir/rate-after.txt" | tail -n 1)"
 else
 	sed 's/^/     /' "$run_dir/rate-after.txt" || true

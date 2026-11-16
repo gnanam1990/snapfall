@@ -14,12 +14,14 @@
     "next": "^16.4.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "three": "0.186.1",
     "viem": "2.55.11"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/three": "0.186.0",
     "tsx": "^4.23.1",
     "typescript": "^5.5.0"
   },

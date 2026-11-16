@@ -6,16 +6,21 @@ const KEY = 'snapfall-theme';
 
 export type Theme = 'light' | 'dark';
 
-/** Dark is the default, so only an explicit light preference is stored as an attribute. */
+/** Light is the default, so only an explicit dark preference is stored as an attribute. */
 export function readTheme(): Theme {
-  return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
 }
 
-/** Writes a theme to the document. Dark removes the attribute rather than setting it, so the
+/** Writes a theme to the document. Light removes the attribute rather than setting it, so the
  *  default lives in exactly one place (the :root block) instead of two. */
 function applyTheme(t: Theme): void {
-  if (t === 'light') document.documentElement.dataset.theme = 'light';
-  else delete document.documentElement.dataset.theme;
+  // Colour transitions would otherwise start from the old theme's values while the page swaps at
+  // once, flashing a light ring on a dark header (motion review). Hold them for the flip's frames.
+  const root = document.documentElement;
+  root.classList.add('theme-switching');
+  if (t === 'dark') root.dataset.theme = 'dark';
+  else delete root.dataset.theme;
+  requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('theme-switching')));
 }
 
 // ── document-level theme controller ──
@@ -46,7 +51,7 @@ function install(): void {
     if (e.storageArea && e.storageArea !== localStorage) return;
     // key === null means the other tab called clear(), removing the preference entirely.
     if (e.key !== null && e.key !== KEY) return;
-    applyTheme(e.key === null ? 'dark' : e.newValue === 'light' ? 'light' : 'dark');
+    applyTheme(e.key === null ? 'light' : e.newValue === 'dark' ? 'dark' : 'light');
     notify();
   });
 }
@@ -109,14 +114,15 @@ export default function ThemeToggle() {
       {theme === null ? (
         <span className="theme-toggle-icon" aria-hidden="true" />
       ) : isDark ? (
-        <svg className="theme-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+        // keyed so a theme change mounts a new icon and its arrival animation plays
+        <svg key="sun" className="theme-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="12" cy="12" r="4.2" />
           <g strokeLinecap="round">
             <path d="M12 2.6v2.4M12 19v2.4M2.6 12h2.4M19 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7" />
           </g>
         </svg>
       ) : (
-        <svg className="theme-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <svg key="moon" className="theme-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20.2 14.4A8.6 8.6 0 1 1 9.6 3.8a7 7 0 0 0 10.6 10.6z" />
         </svg>
       )}

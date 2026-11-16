@@ -51,49 +51,49 @@ const CONFIG = [
   {
     name: 'SNAPFALL_OWNER_API_URL',
     enables:
-      'The daemon connection. Without it there is no event stream, no approvals inbox, no job list and no workforce activation — those surfaces say so rather than showing zeros.',
+      'The daemon connection: approvals, live events and workforce.',
     secret: false,
   },
   {
     name: 'SNAPFALL_OWNER_TOKEN',
     enables:
-      'Bearer credential for the owner API. Only meaningful when the daemon is configured and requires one.',
+      'Bearer credential for the owner API.',
     secret: true,
   },
   {
     name: 'SNAPFALL_DASHBOARD_OWNER_SECRET',
     enables:
-      'What the owner types to sign in to this dashboard (at least 32 characters, different from the owner token). Required whenever a daemon is configured: without it every owner control refuses rather than acting for an unknown visitor.',
+      'The owner sign-in secret (32+ characters, not the owner token).',
     secret: true,
   },
   {
     name: 'SNAPFALL_DASHBOARD_HOSTS',
     enables:
-      'Optional comma-separated Host allowlist for owner and sign-in requests, e.g. the dashboard’s public hostname.',
+      'Optional host allowlist for owner requests.',
     secret: false,
   },
   {
     name: 'SNAPFALL_DASHBOARD_ORIGIN',
     enables:
-      'The exact public origin(s) owner actions must come from, e.g. https://dash.example.com. Set it behind a reverse proxy that rewrites Host, or every owner action, sign-in included, is refused.',
+      'The public origin owner actions must come from, behind a proxy.',
     secret: false,
   },
   {
     name: 'SNAPFALL_DASHBOARD_TRUST_PROXY',
     enables:
-      'Set to 1 only when a proxy you control overwrites X-Forwarded-Host; the request host is then read from it. Unset, the header is ignored, since any client can send it.',
+      '1 only when your proxy overwrites X-Forwarded-Host.',
     secret: false,
   },
   {
     name: 'SNAPFALL_TREASURY_ADDRESS',
     enables:
-      'The organisation whose advance rate is read from FloatPool, and the operator the Audit page expects on the FloatPool operator allowlist. Unset is why Overview and Float show no advance rate — the eth_call is never issued, rather than issued and failing.',
+      'The operator whose advance rate is shown.',
     secret: false,
   },
   {
     name: 'SNAPFALL_NETWORK',
     enables:
-      'Which deployment this build reads: arc-testnet (unset) or arc-mainnet. Fixed at build time, so the whole build agrees on one chain.',
+      'arc-testnet (unset) or arc-mainnet, fixed at build time.',
     secret: false,
   },
   {
@@ -101,7 +101,7 @@ const CONFIG = [
     // mainnet build never reads the testnet one.
     name: deployment.network.rpcUrlEnv,
     enables:
-      'A private RPC endpoint for this network. Without it the public endpoint is used, which rate-limits historical log scans, so Float shows no rate history.',
+      'A private RPC for this network (the public one rate-limits history).',
     secret: true,
   },
   {
@@ -110,9 +110,9 @@ const CONFIG = [
     secret: false,
   },
   {
-    name: 'SNAPFALL_DEMO_STREAM',
+    name: 'SNAPFALL_EXPLORER_API',
     enables:
-      'Replays a scripted fixture instead of a live daemon. Surfaces label it "demo replay" when on, and it is stripped from the deployed artifact.',
+      'The explorer logs API for job and activity history.',
     secret: false,
   },
   {
@@ -152,8 +152,7 @@ export default function SettingsPage() {
         <div className="page-header-text">
           <h1>Settings</h1>
           <p className="page-header-sub">
-            What this deployment is configured to do, and what it cannot do. Values are never
-            shown — only whether each is set.
+            What is configured. Values are never shown.
           </p>
         </div>
         <span className="page-header-aside">
@@ -187,19 +186,12 @@ export default function SettingsPage() {
             <dd className="settings-mono">{contractAddress('auditAnchor') ?? `not deployed (set ${deployment.contracts.auditAnchor.addressEnv})`}</dd>
           </div>
         </dl>
-        <p className="settings-note">
-          Contracts are frozen. These come from the repository’s deployment record, so they are
-          correct with nothing else configured.
-        </p>
       </section>
 
       <section className="card mt" aria-labelledby="settings-config">
         <h2 className="card-title" id="settings-config">
           Configuration
         </h2>
-        <p className="settings-lede">
-          Presence only. No value is read into this page, because several of these are credentials.
-        </p>
         <ul className="settings-list">
           {rows.map((r) => (
             <li key={r.name} className="settings-row">
@@ -220,11 +212,7 @@ export default function SettingsPage() {
         <h2 className="card-title" id="settings-owner">
           Owner session
         </h2>
-        <p className="settings-body">
-          Owner controls act with the daemon’s owner token, which stays on the server. A visitor
-          reaches them only after signing in with the dashboard owner secret; the session lasts
-          12 hours. Rotating the secret signs every browser out.
-        </p>
+        <p className="settings-body">Sessions last 12 hours. Rotating the secret signs every browser out.</p>
         <OwnerSessionPanel />
       </section>
 
@@ -233,20 +221,8 @@ export default function SettingsPage() {
           The kill switch
         </h2>
         <p className="settings-body">
-          The freeze registry is real and it is enforced: with it engaged, the daemon refuses
-          settlement actions and advance proposals with <code>423 FROZEN</code>, and the approvals
-          lifecycle checks it at intake before a nonce is claimed.
-        </p>
-        <p className="settings-body">
-          <strong>It cannot be operated from this dashboard.</strong> The owner API exposes no
-          freeze route, so there is no button here — one that failed during the incident it exists
-          for would be worse than none. It is driven in the daemon process today;{' '}
-          <code>daemon/cmd/freeze-demo</code> shows the engaged, restart and released paths against
-          the event log.
-        </p>
-        <p className="settings-note">
-          This page previously stated that the global kill switch was included here. It was not,
-          and saying so was the kind of claim this product exists to avoid making.
+          Engaged, the daemon refuses settlements and advances with <code>423 FROZEN</code>.{' '}
+          <strong>It is operated in the daemon, not from this dashboard.</strong>
         </p>
       </section>
     </>

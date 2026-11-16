@@ -13,7 +13,7 @@ upgrading Next. Validate dependency changes with the dashboard tests and product
 Import the migration branch from GitHub, select the Next.js preset, and set Root
 Directory to `dashboard`. Enable inclusion of files outside the root directory so
 `deployments/arc-testnet.json` is available. Node 22 is selected by package.json.
-Do not set owner API credentials or enable demo fixtures on this public project.
+Do not set owner API credentials on this public project.
 
 The disconnected SSE response finishes immediately and asks EventSource to reconnect
 after 60 seconds, avoiding an idle billed function. Current chain reads work normally.
@@ -41,11 +41,28 @@ Check billing/spend settings before deployment; free compute does not remove all
 References: [Blueprint specification](https://render.com/docs/blueprint-spec),
 [free-service limits](https://render.com/docs/free), [pricing](https://render.com/pricing).
 
+### Render: the daemon as a private service (testnet)
+
+`daemon/Dockerfile` (build context `daemon/`) runs the same keyless daemon as a local
+`go run ./cmd/snapfall`: no signer keys, no `-deployment`. Create it as a Render **Private
+Service** (never a public web service), on a paid plan with a persistent disk mounted at
+`/var/data` (the database and job memory live there; without a disk every restart is empty).
+Set `SNAPFALL_OWNER_TOKEN` (Render "Generate", shared with the dashboard through an
+environment group) and `SNAPFALL_OWNER_ALLOWED_HOSTS` to the service's internal hostname.
+The dashboard then needs `SNAPFALL_OWNER_API_URL=http://<internal-host>:4010/api/v1`, the same
+token, and its own `SNAPFALL_DASHBOARD_OWNER_SECRET`; free instances cannot use the private
+network, so the dashboard must be on a paid plan too. Never put a mainnet key on this host.
+
+Before every purchase the daemon screens the quoted payee address against the Chainalysis
+sanctions oracle on Ethereum mainnet (read-only, no key) through a public RPC. A listed payee
+is refused, and so is one that cannot be screened. `SNAPFALL_SANCTIONS_RPC` sets another
+Ethereum RPC; `SNAPFALL_SANCTIONS_RPC=off` disables screening, and the daemon logs a warning.
+
 ## Runtime configuration
 
 No signer keys are required to serve the public dashboard. The committed Arc testnet
-RPC and contract addresses are the defaults. Leave `SNAPFALL_DEMO_STREAM` unset during
-the build so fabricated activity fixtures are excluded.
+RPC and contract addresses are the defaults. Job and activity history is read from the
+network's explorer logs API (`SNAPFALL_EXPLORER_API` overrides it); there is no sample data.
 
 The committed default RPC is `https://rpc.testnet.arc.network`. The
 [official Arc endpoint reference](https://docs.arc.io/arc/references/rpc-endpoints) lists

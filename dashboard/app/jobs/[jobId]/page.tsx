@@ -28,6 +28,8 @@ import OwnerSignIn from '@/components/OwnerSignIn';
 import type { JobSnapshot } from '@/lib/jobChain';
 import { belongsToJob, expenseRows } from '@/lib/jobTimeline';
 import SettlementWaterfall from '@/components/SettlementWaterfall';
+import { useChainHistory } from '@/lib/useChain';
+import { ActivityFeed, useNow } from '@/components/ui';
 
 /** Lifecycle order as JobVault declares it; the alt terminals sit outside the happy path. */
 const HAPPY_PATH = ['Created', 'Funded', 'InProgress', 'Delivered', 'Accepted'] as const;
@@ -220,13 +222,12 @@ function AcceptLink({
         </button>
       </div>
       <p className="stat-sub">
-        Shown once, and minting again rotates any link already issued for this job.
+        Shown once. Minting again replaces the old link.
       </p>
       {error ? <p className="job-link-error">{error}</p> : null}
       {unavailable ? (
         <p className="stat-sub">
-          The live event stream is unavailable, so this page cannot confirm the owner session and
-          keeps the timeline hidden. Minting still works: the mint route checks the session itself.
+          Live updates are unavailable, so the timeline is hidden. Minting still works.
         </p>
       ) : null}
       {/* Minting is off while signed out, so a signed-out owner signs in here rather than through
@@ -247,6 +248,14 @@ function AcceptLink({
 
 export default function JobDetailPage() {
   const jobId = String(useParams().jobId ?? '');
+  // Every on-chain step of this job, decoded from the contracts' events (lib/chainHistory). Public,
+  // so it shows whether or not an owner session or a daemon exists.
+  const chainHistory = useChainHistory();
+  const now = useNow();
+  const chainSteps = useMemo(
+    () => (chainHistory.data?.activity ?? []).filter((a) => a.jobId === jobId.toLowerCase()),
+    [chainHistory.data, jobId],
+  );
   const [job, setJob] = useState<JobSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
@@ -377,17 +386,7 @@ export default function JobDetailPage() {
           <h1>Job detail</h1>
           <p className="page-header-sub mono">{job.jobId}</p>
         </div>
-        {status === 'live' ? (
-          <span className="badge-live">live · chain-read on every event</span>
-        ) : status === 'signed-out' ? (
-          <span className="badge-live badge-reconnecting">chain read · owner signed out</span>
-        ) : status === 'unverified' ? (
-          <span className="badge-live badge-reconnecting">chain read · checking owner session…</span>
-        ) : status === 'unavailable' ? (
-          <span className="badge-live badge-reconnecting">chain read · live stream unavailable</span>
-        ) : (
-          <span className="badge-live badge-reconnecting">reconnecting…</span>
-        )}
+        <span className="head-meta">Read from chain</span>
       </div>
 
       {/* lifecycle */}
@@ -457,10 +456,6 @@ export default function JobDetailPage() {
                   {job.orgRateBps === null ? '—' : formatBps(job.orgRateBps)}
                 </Row>
               </div>
-              <p className="stat-sub">
-                The waterfall repays this in full before the operator receives anything, in the same
-                transaction as acceptance.
-              </p>
             </>
           ) : (
             <>
@@ -573,11 +568,28 @@ export default function JobDetailPage() {
         unavailable={unavailable}
       />
 
+      <section className="section" style={{ marginTop: 32 }}>
+        <div className="section-head">
+          <div>
+            <h2>On-chain steps</h2>
+          </div>
+        </div>
+        <div className="panel">
+          {chainHistory.data ? (
+            <ActivityFeed items={chainSteps} explorer={chainHistory.data.explorerUrl} now={now} />
+          ) : (
+            <div className="empty">{chainHistory.error ? 'Chain history is unavailable right now.' : 'Reading the chain…'}</div>
+          )}
+        </div>
+      </section>
+
       <div className="card mt">
-        <p className="card-title">Timeline</p>
+        <p className="card-title">Agent activity</p>
         {ownerTimeline.length === 0 ? (
           <p className="stat-sub">
-            Waiting for events on this job. The chain figures above are already current.
+            {status === 'live'
+              ? 'No agent events for this job yet. They come from your daemon when one is connected.'
+              : 'Agent events come from your daemon and need an owner session.'}
           </p>
         ) : (
           <ol className="job-timeline">

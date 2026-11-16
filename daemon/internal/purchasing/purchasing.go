@@ -119,6 +119,8 @@ type Purchaser struct {
 	clock  Clock
 	orgID  string
 	window time.Duration // how long a HumanApprovalRequired request stays open
+	// screen is the payee sanctions check. nil = no screening, the pre-screening behaviour.
+	screen PayeeScreen
 	// afterSubmit is a TEST-ONLY hook (nil in production) invoked with the request ID right
 	// after Submit, so a test can drive the owner's decision deterministically instead of
 	// polling for the pending request. Unexported, no setter, inert in production.
@@ -135,6 +137,17 @@ func New(life *approval.Lifecycle, st *store.Store, fund *funding.Agent, led *bu
 	clock Clock, orgID string, window time.Duration) *Purchaser {
 	return &Purchaser{life: life, store: st, fund: fund, led: led, clock: clock, orgID: orgID, window: window}
 }
+
+// PayeeScreen checks the address a quote asks to be paid against a sanctions list. An
+// error means "could not tell", and the purchase is refused for it: money never moves on
+// an unscreened payee once a screen is wired.
+type PayeeScreen interface {
+	Sanctioned(ctx context.Context, address string) (bool, error)
+	Provider() string
+}
+
+// SetPayeeScreen wires the payee sanctions check. Call it before the first Decide.
+func (p *Purchaser) SetPayeeScreen(s PayeeScreen) { p.screen = s }
 
 // Decide runs one purchase through quote + policy + approval + payment and returns the
 // structured outcome. It implements brain.Purchaser. jobID/agentKind on the intent were
@@ -235,6 +248,21 @@ func (p *Purchaser) quoteIntoIntent(ctx context.Context, in approval.Intent) (ap
 		return in, refusedOutcome("quote-unusable", fmt.Sprintf(
 			"the challenge for %s names payee %s but asset %q and network %q: nothing payable can be built from it",
 			resourceURL, q.Accept.PayTo, q.Accept.Asset, q.Accept.Network)), false
+	}
+	// The payee is known from here on and nothing has been committed yet: no approval, no
+	// hold, no signature. Screen it now, and refuse when it is listed or cannot be checked.
+	if p.screen != nil {
+		hit, err := p.screen.Sanctioned(ctx, q.Accept.PayTo)
+		if err != nil {
+			return in, refusedOutcome("payee-screening-unavailable", fmt.Sprintf(
+				"the payee %s for %s could not be screened (%s): refusing to pay an unscreened address: %v",
+				q.Accept.PayTo, resourceURL, p.screen.Provider(), err)), false
+		}
+		if hit {
+			return in, refusedOutcome("payee-sanctioned", fmt.Sprintf(
+				"the payee %s for %s is on the sanctions list (%s): this purchase will not be made",
+				q.Accept.PayTo, resourceURL, p.screen.Provider())), false
+		}
 	}
 	priced, err := h3.ParseAtomicMicros(q.Accept.Amount)
 	if err != nil {

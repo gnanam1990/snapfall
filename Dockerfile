@@ -21,8 +21,7 @@ RUN cd dashboard && npm ci
 COPY dashboard ./dashboard
 COPY deployments ./deployments
 
-# SNAPFALL_DEMO_STREAM is unset here, so next.config's IgnorePlugin strips lib/demoStream
-# and lib/mockData: no fabricated fixtures reach the artifact.
+# The dashboard has no sample data: every figure comes from the chain or the owner's daemon.
 #
 # SNAPFALL_NETWORK picks the deployment record the build reads and is inlined at build time
 # (next.config), so a mainnet image is built with `--build-arg SNAPFALL_NETWORK=arc-mainnet`.
