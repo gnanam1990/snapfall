@@ -2,6 +2,8 @@
 
 **The self-financing AI workforce. Built on Arc.**
 
+**Winner — Ignyte Stablecoins Commerce Stack Challenge.**
+
 > "We gave our AI business zero dollars and one customer. Watch it finance itself."
 
 Snapfall is an autonomous AI workforce that starts with an empty treasury. When a customer
