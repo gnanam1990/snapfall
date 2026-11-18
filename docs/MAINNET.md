@@ -156,7 +156,7 @@ until the numbers are set.
 | `maxAdvance` | FloatPool | absolute ceiling on one advance; reverts `AdvanceTooLarge()` |
 | `maxJobPayment` | JobVault | absolute ceiling on one job's escrow; reverts `JobTooLarge()` |
 | `depositAllowlistEnabled` + `allowedDepositor` | FloatPool | who may supply capital; reverts `DepositorNotAllowed()` |
-| `allowedOperator`, `setOperatorAllowed`, `OPERATOR_GRANT_DELAY` (2 days) | FloatPool | who may **borrow**; `requestAdvance` from any other job operator reverts `OperatorNotAllowed()`. Starts empty. A grant before the first `setCaps` is immediate (that is how `Deploy.s.sol` allows `SNAPFALL_OPERATOR`); after it a grant is queued (`OperatorGrantQueued`) and applied by `executeOperatorGrant` after the delay, or dropped by `cancelOperatorGrant`. Revoking (`setOperatorAllowed(op, false)`) is immediate and also drops a queued grant. Added Nov 2026 after a security audit: without it any address could name itself operator in `createJob`, borrow, refund the escrow to itself and leave the LPs the write-off |
+| `allowedOperator`, `setOperatorAllowed`, `OPERATOR_GRANT_DELAY` (2 days) | FloatPool | who may **borrow**; `requestAdvance` from any other job operator reverts `OperatorNotAllowed()`. Starts empty. A grant before the first `setCaps` is immediate (that is how `Deploy.s.sol` allows `SNAPFALL_OPERATOR`); after it a grant is queued (`OperatorGrantQueued`) and applied by `executeOperatorGrant` after the delay, or dropped by `cancelOperatorGrant`. Revoking (`setOperatorAllowed(op, false)`) is immediate and also drops a queued grant. Added Nov 2026 after an internal security review: without it any address could name itself operator in `createJob`, borrow, refund the escrow to itself and leave the LPs the write-off |
 | `paused` | both | emergency stop; reverts `EnforcedPause()` |
 | `CAP_RAISE_DELAY` (2 days) | FloatPool | raising either cap is queued (`CapsRaiseQueued`) and applied by `executeCapsRaise` only after the delay; the first configuration and any lowering are immediate, lowering cancels a queued raise (`CapsRaiseCancelled`), and a call that raises one cap while lowering the other reverts `MixedCapChange()` |
 | `transferAdmin` / `acceptAdmin`, `ADMIN_TRANSFER_DELAY` (2 days) | both | the admin role moves in two steps, and the new admin can accept only after the delay; until then the current admin cancels with `transferAdmin(currentAdmin)` |
@@ -488,8 +488,11 @@ unwired — but do not fund a hand-deployed vault.
 
 ## What a mainnet deployment does not claim
 
-- **Unaudited.** One pass by the author over the settlement waterfall, reviewed by nobody else.
-  The caps on this page bound the loss precisely because the code has not earned trust.
+- **Unaudited.** No independent audit. The code has had an internal security review only
+  ([#126](https://github.com/gnanam1990/snapfall/pull/126),
+  [#127](https://github.com/gnanam1990/snapfall/pull/127)), and an external audit comes before
+  any third-party capital. The caps on this page bound the loss precisely because the code has
+  not earned trust.
 - **Not a lending product.** The allowlist is on and the operator is the only depositor. Taking
   third-party capital is a separate decision with separate obligations, not a config flag.
 - **No track record.** Four accepted jobs on testnet and zero write-offs — `acceptedJobs` reads
