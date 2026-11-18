@@ -400,7 +400,8 @@ contract JobVault is ReentrancyGuard {
     /// Callable by the operator at any time while the job is live (a voluntary refund). The
     /// customer, or the admin on their behalf, can call it once the deadline has passed, but only
     /// for work that was never delivered (FR-JOB-007's timeout path). A delivered job ends through
-    /// acceptDelivery, finalizeDelivery or, after a dispute, resolveDispute.
+    /// acceptDelivery, finalizeDelivery, an operator refund (disputed or not) or, after a
+    /// dispute, resolveDispute.
     ///
     /// Restitution is the FULL customerPayment. `onchainExpenses` does not reduce it because
     /// recordExpense never moves escrow (SPEC-02) — deducting it would strand those funds in
