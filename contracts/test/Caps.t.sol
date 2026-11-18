@@ -272,7 +272,7 @@ contract CapsTest is Test {
         vm.stopPrank();
 
         uint256 before = usdc.balanceOf(CUSTOMER);
-        vm.prank(ADMIN);
+        vm.prank(OPERATOR); // a voluntary operator refund; the admin may refund only after the deadline
         vault.refund(job);
 
         assertEq(usdc.balanceOf(CUSTOMER) - before, PAYMENT, "customer must be made whole while paused");
@@ -296,7 +296,7 @@ contract CapsTest is Test {
         vm.stopPrank();
 
         uint256 before = usdc.balanceOf(CUSTOMER);
-        vm.prank(ADMIN);
+        vm.prank(OPERATOR);
         vault.refund(job);
 
         assertEq(usdc.balanceOf(CUSTOMER) - before, PAYMENT, "customer must be made whole while paused");
@@ -591,7 +591,7 @@ contract CapsTest is Test {
         _createAndFund(first, PAYMENT);
         vm.prank(OPERATOR);
         pool.requestAdvance(first);
-        vm.prank(ADMIN);
+        vm.prank(OPERATOR);
         vault.refund(first);
 
         bytes32 second = keccak256("budget-2");

@@ -43,6 +43,18 @@ contract JobVault is ReentrancyGuard {
     address public pendingAdmin;
     uint64 public adminTransferAcceptableAt; // 0 = no transfer pending
 
+    // ── Added Nov 2026 (internal review, F1/F2): delivery review window and disputes ──
+    //
+    // Before this, refund() accepted a Delivered job from the customer once the deadline had
+    // passed, so a customer holding the deliverable could wait out the deadline and take the
+    // whole escrow back, leaving the LPs the write-off. A delivery now opens a REVIEW_PERIOD in
+    // which the customer either accepts or disputes. A dispute goes to the admin; silence lets
+    // the operator settle. The admin can no longer refund a live job on its own say-so either:
+    // only an undelivered job past its deadline, or a job the customer has disputed.
+    uint256 public constant REVIEW_PERIOD = 3 days;
+    mapping(bytes32 => uint64) public deliveredAt; // 0 = not delivered
+    mapping(bytes32 => bool) public disputed;
+
     mapping(bytes32 => Job) public jobs;
 
     // ── Events (ABI FREEZE Fri Jul 24 — additions ok, changes need all-three sign-off) ──
@@ -74,6 +86,11 @@ contract JobVault is ReentrancyGuard {
     // ── Added Oct 2026: admin hardening ──
     error NotPendingAdmin();
     error AdminTransferTimelocked();
+    // ── Added Nov 2026 (internal review): review window and disputes ──
+    error ReviewPeriodOpen();
+    error ReviewPeriodOver();
+    error AlreadyDisputed();
+    error NotDisputed();
 
     /// SPEC-04 — emitted once, when the FloatPool address is bound.
     event Wired(address indexed floatPool);
@@ -84,6 +101,9 @@ contract JobVault is ReentrancyGuard {
     event AdminTransferStarted(address indexed currentAdmin, address indexed pendingAdmin, uint64 acceptableAt);
     event AdminTransferCancelled();
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+    // ── Added Nov 2026 (internal review): review window and disputes ──
+    event DeliveryDisputed(bytes32 indexed jobId);
+    event DisputeResolved(bytes32 indexed jobId, bool refunded);
 
     constructor(IERC20 _usdc) { usdc = _usdc; admin = msg.sender; }
 
@@ -270,6 +290,7 @@ contract JobVault is ReentrancyGuard {
 
         j.deliveryHash = deliveryHash;
         j.status = JobStatus.Delivered;
+        deliveredAt[jobId] = uint64(block.timestamp);                   // opens the review window
         emit DeliverySubmitted(jobId, deliveryHash);
     }
 
@@ -292,7 +313,59 @@ contract JobVault is ReentrancyGuard {
         if (msg.sender != j.customer) revert NotAuthorized();        // SC-JV-005
         if (j.status != JobStatus.Delivered) revert InvalidStatus(); // SC-JV-004: hash exists by construction
         if (address(floatPool) == address(0)) revert NotWired();
+        // The customer may accept at any time after delivery, disputed or not: accepting is
+        // how a customer withdraws a dispute.
+        _settle(jobId, j);
+    }
 
+    /// @notice Settle a delivery the customer neither accepted nor disputed within
+    ///         REVIEW_PERIOD. Operator only. Runs the same waterfall as acceptDelivery.
+    /// @dev Without this, a customer could hold a delivered job's escrow hostage forever by
+    ///      staying silent, since refund() no longer accepts a Delivered job from them.
+    function finalizeDelivery(bytes32 jobId) external nonReentrant {
+        Job storage j = jobs[jobId];
+        if (j.customer == address(0)) revert UnknownJob();
+        if (msg.sender != j.operator) revert NotAuthorized();
+        if (j.status != JobStatus.Delivered) revert InvalidStatus();
+        if (address(floatPool) == address(0)) revert NotWired();
+        if (disputed[jobId]) revert AlreadyDisputed();
+        // forge-lint: disable-next-line(block-timestamp)
+        if (block.timestamp < uint256(deliveredAt[jobId]) + REVIEW_PERIOD) revert ReviewPeriodOpen();
+        _settle(jobId, j);
+    }
+
+    /// @notice Customer rejects a delivery within REVIEW_PERIOD. The job then waits for the
+    ///         admin's resolveDispute, the customer's own acceptDelivery, or an operator refund.
+    function dispute(bytes32 jobId) external {
+        Job storage j = jobs[jobId];
+        if (j.customer == address(0)) revert UnknownJob();
+        if (msg.sender != j.customer) revert NotAuthorized();
+        if (j.status != JobStatus.Delivered) revert InvalidStatus();
+        if (disputed[jobId]) revert AlreadyDisputed();
+        // forge-lint: disable-next-line(block-timestamp)
+        if (block.timestamp >= uint256(deliveredAt[jobId]) + REVIEW_PERIOD) revert ReviewPeriodOver();
+        disputed[jobId] = true;
+        emit DeliveryDisputed(jobId);
+    }
+
+    /// @notice Admin rules on a disputed delivery: refund the customer (and write off any
+    ///         advance), or settle through the normal waterfall.
+    /// @dev This is the only way the admin can end a delivered job, and it needs the customer to
+    ///      have disputed first, so a leaked admin key cannot write off the open book at will.
+    function resolveDispute(bytes32 jobId, bool refundCustomer) external nonReentrant onlyAdmin {
+        Job storage j = jobs[jobId];
+        if (j.customer == address(0)) revert UnknownJob();
+        if (j.status != JobStatus.Delivered || !disputed[jobId]) revert NotDisputed();
+        if (address(floatPool) == address(0)) revert NotWired();
+        emit DisputeResolved(jobId, refundCustomer);
+        if (refundCustomer) {
+            _refund(jobId, j);
+        } else {
+            _settle(jobId, j);
+        }
+    }
+
+    function _settle(bytes32 jobId, Job storage j) private {
         uint256 payment = j.customerPayment;
         address operator = j.operator;
 
@@ -324,8 +397,10 @@ contract JobVault is ReentrancyGuard {
     /// absorb the loss through its own waterfall (SC-FP-008). The customer's restitution is
     /// never reduced by the pool's loss: the receivable was the pool's risk, not theirs.
     ///
-    /// Callable by the operator or admin at any time (a voluntary refund), or by the customer
-    /// once the deadline has passed (FR-JOB-007's timeout path).
+    /// Callable by the operator at any time while the job is live (a voluntary refund). The
+    /// customer, or the admin on their behalf, can call it once the deadline has passed, but only
+    /// for work that was never delivered (FR-JOB-007's timeout path). A delivered job ends through
+    /// acceptDelivery, finalizeDelivery or, after a dispute, resolveDispute.
     ///
     /// Restitution is the FULL customerPayment. `onchainExpenses` does not reduce it because
     /// recordExpense never moves escrow (SPEC-02) — deducting it would strand those funds in
@@ -335,14 +410,14 @@ contract JobVault is ReentrancyGuard {
         if (j.customer == address(0)) revert UnknownJob();
         if (address(floatPool) == address(0)) revert NotWired();
 
-        bool privileged = msg.sender == j.operator || msg.sender == admin;
+        bool byOperator = msg.sender == j.operator;
         // A deadline IS a wall-clock comparison; there is no timestamp-free formulation.
         // Validator drift is seconds against a multi-day deadline, and Arc's timestamps are
         // non-decreasing with 1s granularity (docs.arc.io evm-differences), so `>=` is correct
         // and the manipulation window is economically meaningless here.
         // forge-lint: disable-next-line(block-timestamp)
-        bool customerAfterDeadline = msg.sender == j.customer && block.timestamp >= j.deadline;
-        if (!privileged && !customerAfterDeadline) revert NotAuthorized();
+        bool timedOut = (msg.sender == j.customer || msg.sender == admin) && block.timestamp >= j.deadline;
+        if (!byOperator && !timedOut) revert NotAuthorized();
 
         // Funded through Delivered can be unwound; Accepted has already settled and the
         // terminal states are immutable.
@@ -350,7 +425,14 @@ contract JobVault is ReentrancyGuard {
             j.status != JobStatus.Funded && j.status != JobStatus.InProgress
                 && j.status != JobStatus.Delivered
         ) revert InvalidStatus();
+        // The timeout is for work that never arrived. Once delivered, the customer's recourse is
+        // dispute() within REVIEW_PERIOD, and the admin's is resolveDispute (internal review F1/F2).
+        if (!byOperator && j.status == JobStatus.Delivered) revert InvalidStatus();
 
+        _refund(jobId, j);
+    }
+
+    function _refund(bytes32 jobId, Job storage j) private {
         uint256 restitution = j.customerPayment;
         address customer = j.customer;
 

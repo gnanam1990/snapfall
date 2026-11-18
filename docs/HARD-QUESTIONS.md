@@ -38,9 +38,13 @@ Three facts, all in frozen contracts:
    as deployed. If asked whether the spec permits a releasing variant: yes, and it is logged as an
    open question rather than settled quietly.
 
-2. **The customer can still get their money back.** Until `acceptDelivery`, refund is live. On
-   refund the escrow returns to the customer in full, and only *then* does the pool absorb the
-   loss (`JobVault.sol:274-278` — "only after restitution does the pool absorb the loss").
+2. **The customer can still get their money back.** If the work never arrives, the customer
+   refunds once the deadline passes. If it arrives and is bad, they `dispute` within the 3-day
+   review window and the admin rules on it. In the source since the Nov 2026 internal review
+   ([INTERNAL-REVIEW-2026-11.md](INTERNAL-REVIEW-2026-11.md), F1), a customer can no longer refund
+   a delivered job just by waiting out the deadline. The deployed sets still allow it. On refund the
+   escrow returns to the customer in full, and only *then* does the pool absorb the loss
+   (`JobVault._refund`: "only after restitution does the pool absorb the loss").
 
 3. **So the pool's principal is genuinely at risk.** `FloatPool.writeOff` is not a formality:
 
