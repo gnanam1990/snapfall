@@ -32,7 +32,7 @@ Contradictions and gaps found while implementing against PRD v4.1 FINAL (Jul 202
 | --- | --- | --- | --- |
 | [SPEC-01](#spec-01) | **Blocker** | FloatPool advance sizing | ✅ **RESOLVED 19 Jul** — budget term removed; `advance = rate × customerPayment` |
 | [SPEC-02](#spec-02) | Medium | JobVault.recordExpense semantics | Implemented conservatively, needs ruling |
-| [SPEC-03](#spec-03) | ~~Low~~ **High** (security audit, Nov 2026) | createJob authorization | ⏳ Fixed in source by the FloatPool operator allowlist; **open on every live pool** until it is replaced; createJob itself still needs a ruling |
+| [SPEC-03](#spec-03) | ~~Low~~ **High** (internal security review, Nov 2026) | createJob authorization | ⏳ Fixed in source by the FloatPool operator allowlist; **open on every live pool** until it is replaced; createJob itself still needs a ruling |
 | [SPEC-04](#spec-04) | Medium — **ABI-AFFECTING** | JobVault↔FloatPool wiring | ✅ **RESOLVED 19 Jul** — one-shot `wireFloatPool` / `wireJobVault` |
 | [SPEC-05](#spec-05) | Low | Manifest schema: PRD §8.2 vs. the files on disk | Implemented against the files |
 | [SPEC-06](#spec-06) | Blocker (orig.) | Demo pool seed breaks the exposure cap | ✅ **RESOLVED (V12)** — pool depth computed, not hardcoded |
@@ -138,7 +138,7 @@ the PRD does not give. Locked in by `test_recordExpense_movesNoEscrow`; flag if 
 
 ## SPEC-03
 
-> ### ⚠️ CORRECTED — Nov 2026 (security audit)
+> ### ⚠️ CORRECTED — Nov 2026 (internal security review)
 > **The blast-radius claim below was wrong, and the gap was HIGH severity.** `createJob` lets
 > any address name *itself* as operator, and nothing stops it naming itself (or an address it
 > controls) as customer too. `FloatPool.requestAdvance` authorised the borrower only as "the

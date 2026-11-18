@@ -42,8 +42,11 @@ their owners.
 ## Current mainnet state
 
 The mainnet contracts listed in the README are a small, capped set that is kept paused outside
-deliberate self-tests. They were deployed before the audit fixes in
+deliberate self-tests. They were deployed before the internal security-review fixes in
 [#126](https://github.com/gnanam1990/snapfall/pull/126) and
 [#127](https://github.com/gnanam1990/snapfall/pull/127); those findings are public. The plan in
 [`docs/MAINNET.md`](docs/MAINNET.md) retires this set and redeploys from the fixed source before
 any liquidity is accepted. Until then, please do not deposit into the mainnet pool.
+
+The contracts have not had an independent audit. The review above was internal; an external
+audit comes before the mainnet pool accepts any outside liquidity.

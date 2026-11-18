@@ -64,7 +64,7 @@ JobVault was unpaused for the run and paused again afterwards. Job
 [`0x57cd0e9c…5033`](https://explorer.arc.io/tx/0x57cd0e9caf16a915aa4f20dad89d21a064e714a11277ede43a57c51265155033);
 every step is listed in [`docs/END-TO-END.md`](docs/END-TO-END.md).
 
-**Not operating yet:** no capital in the pool and no advance. This set predates the audit fixes
+**Not operating yet:** no capital in the pool and no advance. This set predates the security-review fixes
 in [#126](https://github.com/gnanam1990/snapfall/pull/126) and
 [#127](https://github.com/gnanam1990/snapfall/pull/127); [`docs/MAINNET.md`](docs/MAINNET.md)
 retires it and redeploys from the fixed source before any liquidity is accepted. Paying from a
@@ -82,7 +82,7 @@ full spine end to end — funded, advanced, delivered, settled.
 | FloatPool | [`0x4780C2E47a7eE3f9F88Bd83aace58fb32c4586bE`](https://testnet.arcscan.app/address/0x4780C2E47a7eE3f9F88Bd83aace58fb32c4586bE) |
 | AuditAnchor | [`0x929bA0CFE0EE582949EEB0aA5c512f1EaB421519`](https://testnet.arcscan.app/address/0x929bA0CFE0EE582949EEB0aA5c512f1EaB421519) |
 
-This set was deployed on 15 Nov 2026 with the capital controls and the audit fixes. The jobs
+This set was deployed on 15 Nov 2026 with the capital controls and the security-review fixes. The jobs
 and the settlement below ran on the original 23 Jul set, whose history stays on chain
 ([deployments/README.md](deployments/README.md)).
 
@@ -162,6 +162,12 @@ differences worth knowing before a deploy.
 
 ## Honest limits
 
+- **The contracts have not had an independent audit.** They have had an internal security
+  review, whose findings and fixes are public in
+  [#126](https://github.com/gnanam1990/snapfall/pull/126) and
+  [#127](https://github.com/gnanam1990/snapfall/pull/127), and a Foundry test suite covering the
+  waterfall, caps, operator allowlist and admin hardening. An external audit comes before the
+  mainnet pool accepts any outside liquidity.
 - **The local agent activity feed is not demonstrable from a clean checkout.** The
   daemon-side records for both settled jobs were lost, and Snapfall does not fabricate local
   state to stand in for them. What *is* verifiable is the **money spine** — the advance, the

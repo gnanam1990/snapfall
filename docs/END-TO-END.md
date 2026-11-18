@@ -54,7 +54,7 @@ Contracts are listed in [`deployments/`](../deployments) and [`addresses.md`](ad
 | | JobVault | FloatPool | AuditAnchor |
 |---|---|---|---|
 | testnet (redeployed 16 Nov, capital controls) | `0x449A7308A10312b9bb0E21B62064a8080eb10bD1` | `0x4780C2E47a7eE3f9F88Bd83aace58fb32c4586bE` | `0x929bA0CFE0EE582949EEB0aA5c512f1EaB421519` |
-| mainnet (deployed 12 Nov, **paused**, the set from before the audit) | `0x67FeD7B5eaA966c4cc2738d1530f230B31B6f372` | `0xD2FaB9CD08a73B476e8DC81Afb7b57564dEef08f` | `0xe8886A39158C7CC504F31789513b926704CCaB4D` |
+| mainnet (deployed 12 Nov, **paused**, the set from before the security-review fixes) | `0x67FeD7B5eaA966c4cc2738d1530f230B31B6f372` | `0xD2FaB9CD08a73B476e8DC81Afb7b57564dEef08f` | `0xe8886A39158C7CC504F31789513b926704CCaB4D` |
 
 USDC is `0x3600…0000` on both networks. It is also the gas token.
 

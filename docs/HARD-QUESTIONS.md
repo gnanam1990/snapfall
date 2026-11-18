@@ -75,7 +75,7 @@ Nothing, today, for an operator the admin has allowed. Say so.
 Until Nov 2026 it was worse than that: *any* address could be an operator. `createJob` accepts a
 self-named operator, and `requestAdvance` trusted it, so a stranger could fund its own job, draw
 an advance, refund the escrow to itself and leave the LPs the write-off, with a fresh address
-each time. A security audit found it. In the source, borrowing is now an admin grant in
+each time. An internal security review found it. In the source, borrowing is now an admin grant in
 FloatPool (`allowedOperator`, `OperatorNotAllowed()`), delayed by `OPERATOR_GRANT_DELAY` on a
 configured pool, so for a pool deployed from that source the question below is about a *known*
 operator, not an anonymous one. **Every pool deployed before the allowlist (mainnet and both
