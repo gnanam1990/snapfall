@@ -23,8 +23,9 @@ preparation for an external audit. No transactions were sent on any network.
 
   CI runs it at 64 × 100 calls. A local run at 512 × 150 (76,800 calls, with advances, settlements
   and write-offs all exercised) also passed.
-- Every finding below was reproduced as a failing scenario before it was fixed. The scenarios are
-  now regression tests in [`contracts/test/ReviewAndDisputes.t.sol`](../contracts/test/ReviewAndDisputes.t.sol).
+- F1, F2 and F4 were each reproduced as a scenario before they were fixed, and are now regression
+  tests in [`contracts/test/ReviewAndDisputes.t.sol`](../contracts/test/ReviewAndDisputes.t.sol).
+  F3 was reproduced the same way but is not fixed, so it has no regression test.
 - Static analysers (Slither, Aderyn) were **not** run.
 
 ## Findings
@@ -51,7 +52,9 @@ preparation for an external audit. No transactions were sent on any network.
   - The operator can still refund a live job at any time.
   - The customer, or the admin, can refund only once the deadline has passed, and only for work
     that was never delivered.
-  - A leaked admin key can therefore end a delivered job only if its customer has disputed it.
+  - The admin role alone can therefore end a delivered job only if its customer has disputed it.
+    On a job where the admin address is also the operator, it can still refund through its
+    operator authority.
 - Pausing still blocks none of these exits.
 
 ## Informational
@@ -60,8 +63,9 @@ preparation for an external audit. No transactions were sent on any network.
   The cost is a `JobExists` revert; retrying with a fresh id recovers.
 - **The job-size cap only applies at creation.** `maxJobPayment` is checked in `createJob`, not
   in `fund`. Lowering it does not stop jobs that already exist; pausing does.
-- **`deadline` is not validated** at creation. A deadline in the past only gives the customer an
-  earlier timeout refund, and the operator is the one who chose it.
+- **`deadline` is not validated** at creation. Whoever creates the job (the operator, or the
+  admin) chooses it. Once a job with a past deadline is funded, the customer and the admin can
+  both refund it at once while it stays undelivered.
 - **AuditAnchor's authority is fixed.** `operatorAuthority` is set to the deployer and cannot be
   rotated.
 - **Dust goes to the next depositor.** When the last shares leave, any rounding dust left in

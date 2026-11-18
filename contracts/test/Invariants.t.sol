@@ -148,7 +148,10 @@ contract Handler is Test {
         vm.prank(cu);
         try vault.dispute(id) {} catch {}
         vm.prank(ADMIN);
-        try vault.resolveDispute(id, refundCustomer) { nRef++; } catch {}
+        try vault.resolveDispute(id, refundCustomer) {
+            if (refundCustomer) nRef++;
+            else nAcc++;
+        } catch {}
     }
 
     function warp(uint256 s) external { vm.warp(block.timestamp + bound(s, 1, 3 days)); }
