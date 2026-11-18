@@ -169,6 +169,8 @@ contract FloatPool is ReentrancyGuard {
     error OperatorNotAllowed();
     error NoOperatorGrantQueued();
     error OperatorGrantTimelocked();
+    // ── Added Nov 2026 (internal review, F4) ──
+    error PoolWipedOut();
 
     constructor(IERC20 _usdc) {
         usdc = _usdc;
@@ -405,6 +407,11 @@ contract FloatPool is ReentrancyGuard {
         if (assets == 0) revert ZeroAmount();
         if (receiver == address(0)) revert ZeroAddress();
 
+        // Shares exist but back nothing: every LP-owned dollar was lost to write-offs. Any share
+        // price for new money would hand it to the old holders, so the pool takes no more
+        // deposits and must be replaced. Before this check the division below panicked (F4).
+        if (totalShares != 0 && totalAssets == 0) revert PoolWipedOut();
+
         // First depositor sets the 1:1 exchange rate; afterwards shares track LP capital.
         shares = totalShares == 0 ? assets : (assets * totalShares) / totalAssets;
         if (shares == 0) revert ZeroAmount();
@@ -424,13 +431,14 @@ contract FloatPool is ReentrancyGuard {
         // No allowance system in the MVP: an LP withdraws their own position only.
         if (owner != msg.sender) revert NotAuthorized();
 
+        // Outstanding principal is deployed and cannot be redeemed until it is repaid. Checked
+        // first, so a pool with no LP assets reverts here instead of dividing by zero below.
+        uint256 idle = totalAssets - totalOutstanding;
+        if (assets > idle) revert InsufficientLiquidity();
+
         // Round up, so rounding dust is charged to the withdrawer rather than the pool.
         shares = (assets * totalShares + totalAssets - 1) / totalAssets;
         if (shares > sharesOf[owner]) revert InsufficientLiquidity();
-
-        // Outstanding principal is deployed and cannot be redeemed until it is repaid.
-        uint256 idle = totalAssets - totalOutstanding;
-        if (assets > idle) revert InsufficientLiquidity();
 
         totalShares -= shares;                                      // effects
         sharesOf[owner] -= shares;

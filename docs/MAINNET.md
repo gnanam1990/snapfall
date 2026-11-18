@@ -296,7 +296,9 @@ view of operator grants. Until it does, the logs are the only place to see them.
 
 The testnet operator key lives in cleartext in a shell file on the development machine, which
 was fine for a network where the worst case costs nothing. It must never become a mainnet
-admin: that key can pause, set caps, refund jobs, and manage the deposit allowlist. Generate a
+admin: that key can pause, set caps, refund jobs (in a set from current source: only undelivered
+jobs past their deadline, plus `resolveDispute` on disputed ones), and manage the deposit
+allowlist. Generate a
 fresh key for mainnet, keep it in an encrypted keystore or on a hardware wallet, and let it
 touch nothing else.
 
